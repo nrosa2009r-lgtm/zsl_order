@@ -2,13 +2,13 @@ use axum::{
     Json, Router,
     extract::State,
     http::StatusCode,
+    response::Html,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-// Struktura reprezentująca pozycję w menu
 #[derive(Clone, Serialize)]
 struct MenuItem {
     id: u32,
@@ -16,23 +16,20 @@ struct MenuItem {
     price_pln: f64,
 }
 
-// Dane wejściowe od klienta podczas składania zamówienia
 #[derive(Deserialize)]
 struct CreateOrderDto {
     customer_name: String,
     items_ids: Vec<u32>,
 }
 
-// Struktura zamówienia zapisywana w pamięci
 #[derive(Clone, Serialize)]
 struct Order {
     id: Uuid,
     customer_name: String,
     items: Vec<MenuItem>,
-    status: String, // np. "Oczekiwanie na odbiór"
+    status: String,
 }
 
-// Baza danych w pamięci RAM (Thread-safe dla celów demonstracyjnych)
 struct AppState {
     menu: Vec<MenuItem>,
     orders: Mutex<Vec<Order>>,
@@ -40,57 +37,70 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    // Inicjalizacja przykładowego menu restauracji
     let shared_state = Arc::new(AppState {
         menu: vec![
             MenuItem {
                 id: 1,
-                name: "Pizza Margherita".to_string(),
-                price_pln: 32.0,
+                name: "Zupa Pomidorowa z Makaronem".to_string(),
+                price_pln: 8.5,
             },
             MenuItem {
                 id: 2,
-                name: "Burger Wołowy".to_string(),
-                price_pln: 38.5,
+                name: "Kotlet Schabowy z Ziemniakami".to_string(),
+                price_pln: 18.0,
             },
             MenuItem {
                 id: 3,
-                name: "Sałatka Cezar".to_string(),
-                price_pln: 29.0,
+                name: "Naleśniki z Serem i Dżemem".to_string(),
+                price_pln: 14.0,
+            },
+            MenuItem {
+                id: 4,
+                name: "Kompot Owocowy".to_string(),
+                price_pln: 3.0,
             },
         ],
         orders: Mutex::new(Vec::new()),
     });
 
-    // Definicja routingu API
+    // Definicja routingu z obsługą strony głównej (/)
     let app = Router::new()
+        .route("/", get(serve_index)) // Wysyła plik HTML
         .route("/menu", get(get_menu))
         .route("/order", post(create_order))
         .route("/orders", get(get_all_orders))
         .with_state(shared_state);
 
-    // Uruchomienie serwera HTTP
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
-        .await
-        .unwrap();
+    // Nasłuchiwanie na porcie 80 (standardowy port HTTP) lub 3000
+    let addr = "0.0.0.0:80"; 
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(_) => {
+            println!("Brak uprawnień do portu 80. Uruchamiam na port 3000...");
+            tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap()
+        }
+    };
+
     println!(
-        "Serwer gastronomiczny działa na http://{}",
+        "Serwer stołówki działa pod adresem: http://{}",
         listener.local_addr().unwrap()
     );
     axum::serve(listener, app).await.unwrap();
 }
 
-// Endpoint: Pobieranie menu restauracji
+// Endpoint serwujący interfejs HTML
+async fn serve_index() -> Html<&'static str> {
+    Html(include_str!("index.html"))
+}
+
 async fn get_menu(State(state): State<Arc<AppState>>) -> Json<Vec<MenuItem>> {
     Json(state.menu.clone())
 }
 
-// Endpoint: Składanie zamówienia (Odbiór własny - płatność na miejscu)
 async fn create_order(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateOrderDto>,
 ) -> (StatusCode, Json<Order>) {
-    // Filtrowanie i dopasowanie wybranych ID do pozycji z menu
     let ordered_items: Vec<MenuItem> = state
         .menu
         .iter()
@@ -98,22 +108,19 @@ async fn create_order(
         .cloned()
         .collect();
 
-    // Nowe zamówienie z domyślnym statusem
     let new_order = Order {
         id: Uuid::new_v4(),
         customer_name: payload.customer_name,
         items: ordered_items,
-        status: "Przyjęte do realizacji (Odbiór własny)".to_string(),
+        status: "Przyjęte do realizacji (Płatność na miejscu)".to_string(),
     };
 
-    // Zapis zamówienia do naszej pamięci
     let mut orders = state.orders.lock().unwrap();
     orders.push(new_order.clone());
 
     (StatusCode::CREATED, Json(new_order))
 }
 
-// Endpoint: Podgląd wszystkich złożonych zamówień (np. dla panelu kucharza)
 async fn get_all_orders(State(state): State<Arc<AppState>>) -> Json<Vec<Order>> {
     let orders = state.orders.lock().unwrap();
     Json(orders.clone())
