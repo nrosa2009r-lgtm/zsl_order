@@ -72,7 +72,7 @@ async fn main() {
         .with_state(shared_state);
 
     // Nasłuchiwanie na porcie 80 (standardowy port HTTP) lub 3000
-    let addr = "0.0.0.0:80"; 
+    let addr = "0.0.0.0:80";
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(_) => {
