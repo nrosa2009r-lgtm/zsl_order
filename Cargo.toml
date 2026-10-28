@@ -9,3 +9,10 @@ tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 serde_json = "1.0.154"
+
+
+[profile.release]
+opt-level = 3       # Maksymalna optymalizacja pod kątem szybkości kodu
+lto = "fat"         # Głęboka, globalna optymalizacja między skrzynkami (LTO)
+codegen-units = 1   # Pozwala na lepszą optymalizację całego kodu jako całości
+panic = "abort"     # Usuwa narzut związany z obsługą odwijania stosu barier bezpieczeństwa
