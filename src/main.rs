@@ -7,13 +7,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs::{self};
+use std::fs::File;
+use std::sync::{Arc, Mutex};
 use std::{
-    sync::{Arc, Mutex},
+    fs::{self},
+    io,
 };
 use uuid::Uuid;
-
-
 
 #[derive(Clone, Serialize)]
 struct MenuItem {
@@ -134,11 +134,14 @@ async fn get_all_orders(State(state): State<Arc<AppState>>) -> Json<Vec<Order>> 
     Json(orders.clone())
 }
 
-fn write_config_parm(path: &str,parm:&str,value:&str) -> Result<(), Box<dyn std::error::Error>> {
-    
-let data = fs::read_to_string(path)?;
+fn write_config_parm(
+    path: &str,
+    parm: &str,
+    value: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let data = fs::read_to_string(path)?;
 
-let mut json_value: Value = serde_json::from_str(&data)?;
+    let mut json_value: Value = serde_json::from_str(&data)?;
 
     if let Some(obj) = json_value.as_object_mut() {
         obj.insert(parm.to_string(), Value::from(value.to_string()));
@@ -146,7 +149,33 @@ let mut json_value: Value = serde_json::from_str(&data)?;
 
     let updated_json = serde_json::to_string_pretty(&json_value)?;
 
-    fs::write(path,updated_json)?;
+    fs::write(path, updated_json)?;
 
     Ok(())
+}
+
+fn get_config_data(path: &str, key: &str) -> Result<String, io::Error> {
+    let file = File::open(path)?;
+
+    let v: Value =
+        serde_json::from_reader(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    if let Some(value) = v.get(key) {
+        // Jeśli wartość to string w formacie JSON (np. "wartość"), as_str() wyciągnie czysty tekst bez cudzysłowów.
+        // W przeciwnym wypadku to_string() zamieni dowolny typ (np. tablicę, obiekt) na reprezentację tekstową.
+        let result = value
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| value.to_string());
+
+        Ok(result)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "Klucz '{}' nie został znaleziony w pliku konfiguracyjnym",
+                key
+            ),
+        ))
+    }
 }
