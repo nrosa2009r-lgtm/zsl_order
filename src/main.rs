@@ -6,8 +6,19 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::fs::File;
+use std::io::BufWriter;
+use std::{
+    io::Write,
+    sync::{Arc, Mutex},
+};
 use uuid::Uuid;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ConfigParms {
+    ip: String,
+    port: u32,
+}
 
 #[derive(Clone, Serialize)]
 struct MenuItem {
@@ -37,6 +48,8 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    write_config("config.json").unwrap();
+
     let shared_state = Arc::new(AppState {
         menu: vec![
             MenuItem {
@@ -124,4 +137,21 @@ async fn create_order(
 async fn get_all_orders(State(state): State<Arc<AppState>>) -> Json<Vec<Order>> {
     let orders = state.orders.lock().unwrap();
     Json(orders.clone())
+}
+
+fn write_config(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let my_conf = ConfigParms {
+        ip: String::from("192.168.0.124"),
+        port: 3000,
+    };
+    let save_file = File::create(path)?;
+    let mut write_buffor = BufWriter::new(save_file);
+
+    serde_json::to_writer_pretty(&mut write_buffor, &my_conf)?;
+
+    write_buffor.flush()?;
+
+    println!("Zapisano do pliku konfigurację: {:?}", my_conf);
+
+    Ok(())
 }
