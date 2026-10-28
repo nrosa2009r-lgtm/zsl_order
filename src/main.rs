@@ -103,7 +103,7 @@ async fn main() {
 
 // Endpoint serwujący interfejs HTML
 async fn serve_index() -> Html<&'static str> {
-    Html(include_str!("index.html"))
+    Html(include_str!("../frontend/index.html"))
 }
 
 async fn get_menu(State(state): State<Arc<AppState>>) -> Json<Vec<MenuItem>> {
