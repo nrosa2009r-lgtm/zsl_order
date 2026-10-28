@@ -6,19 +6,14 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::BufWriter;
+use serde_json::Value;
+use std::fs::{self};
 use std::{
-    io::Write,
     sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ConfigParms {
-    ip: String,
-    port: u32,
-}
+
 
 #[derive(Clone, Serialize)]
 struct MenuItem {
@@ -48,7 +43,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    write_config("config.json").unwrap();
+    write_config_parm("config.json", "status", "working").unwrap();
 
     let shared_state = Arc::new(AppState {
         menu: vec![
@@ -139,19 +134,19 @@ async fn get_all_orders(State(state): State<Arc<AppState>>) -> Json<Vec<Order>> 
     Json(orders.clone())
 }
 
-fn write_config(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let my_conf = ConfigParms {
-        ip: String::from("192.168.0.124"),
-        port: 3000,
-    };
-    let save_file = File::create(path)?;
-    let mut write_buffor = BufWriter::new(save_file);
+fn write_config_parm(path: &str,parm:&str,value:&str) -> Result<(), Box<dyn std::error::Error>> {
+    
+let data = fs::read_to_string(path)?;
 
-    serde_json::to_writer_pretty(&mut write_buffor, &my_conf)?;
+let mut json_value: Value = serde_json::from_str(&data)?;
 
-    write_buffor.flush()?;
+    if let Some(obj) = json_value.as_object_mut() {
+        obj.insert(parm.to_string(), Value::from(value.to_string()));
+    }
 
-    println!("Zapisano do pliku konfigurację: {:?}", my_conf);
+    let updated_json = serde_json::to_string_pretty(&json_value)?;
+
+    fs::write(path,updated_json)?;
 
     Ok(())
 }
