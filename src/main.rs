@@ -2,17 +2,15 @@ use axum::{
     Json, Router,
     extract::State,
     http::StatusCode,
-    response::Html,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs::File;
-use std::sync::{Arc, Mutex};
 use std::{
-    fs::{self},
-    io,
+    fs, io,
+    sync::{Arc, Mutex},
 };
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
@@ -43,7 +41,9 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    write_config_parm("config.json", "status", "working").unwrap();
+    if let Err(e) = write_config_parm("config.json", "status", "working") {
+        eprintln!("Nie udało się zapisać config.json: {e}");
+    }
 
     let shared_state = Arc::new(AppState {
         menu: vec![
@@ -71,15 +71,15 @@ async fn main() {
         orders: Mutex::new(Vec::new()),
     });
 
-    // Definicja routingu z obsługą strony głównej (/)
+    // API ma pierwszeństwo, wszystko inne (html, css, js) leci z ./frontend
     let app = Router::new()
-        .route("/", get(serve_index)) // Wysyła plik HTML
+        .route_service("/login", ServeFile::new("frontend/login.html"))
         .route("/menu", get(get_menu))
         .route("/order", post(create_order))
         .route("/orders", get(get_all_orders))
+        .fallback_service(ServeDir::new("frontend").append_index_html_on_directories(true))
         .with_state(shared_state);
 
-    // Nasłuchiwanie na porcie 80 (standardowy port HTTP) lub 3000
     let addr = match (
         get_config_data("config.json", "ip"),
         get_config_data("config.json", "port"),
@@ -87,10 +87,11 @@ async fn main() {
         (Ok(ip), Ok(port)) => format!("{}:{}", ip, port),
         _ => "0.0.0.0:3000".to_string(),
     };
-    let listener = match tokio::net::TcpListener::bind(addr).await {
+
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
-        Err(_) => {
-            println!("Brak uprawnień do portu 80. Uruchamiam na port 3000...");
+        Err(e) => {
+            println!("Nie można użyć {addr} ({e}). Uruchamiam na 0.0.0.0:3000...");
             tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap()
         }
     };
@@ -100,11 +101,6 @@ async fn main() {
         listener.local_addr().unwrap()
     );
     axum::serve(listener, app).await.unwrap();
-}
-
-// Endpoint serwujący interfejs HTML
-async fn serve_index() -> Html<&'static str> {
-    Html(include_str!("../frontend/index.html"))
 }
 
 async fn get_menu(State(state): State<Arc<AppState>>) -> Json<Vec<MenuItem>> {
@@ -129,15 +125,13 @@ async fn create_order(
         status: "Przyjęte do realizacji (Płatność na miejscu)".to_string(),
     };
 
-    let mut orders = state.orders.lock().unwrap();
-    orders.push(new_order.clone());
+    state.orders.lock().unwrap().push(new_order.clone());
 
     (StatusCode::CREATED, Json(new_order))
 }
 
 async fn get_all_orders(State(state): State<Arc<AppState>>) -> Json<Vec<Order>> {
-    let orders = state.orders.lock().unwrap();
-    Json(orders.clone())
+    Json(state.orders.lock().unwrap().clone())
 }
 
 fn write_config_parm(
@@ -145,43 +139,33 @@ fn write_config_parm(
     parm: &str,
     value: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let data = fs::read_to_string(path)?;
-
-    let mut json_value: Value = serde_json::from_str(&data)?;
+    let mut json_value: Value = match fs::read_to_string(path) {
+        Ok(data) => serde_json::from_str(&data)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Object(Default::default()),
+        Err(e) => return Err(e.into()),
+    };
 
     if let Some(obj) = json_value.as_object_mut() {
-        obj.insert(parm.to_string(), Value::from(value.to_string()));
+        obj.insert(parm.to_string(), Value::from(value));
     }
 
-    let updated_json = serde_json::to_string_pretty(&json_value)?;
-
-    fs::write(path, updated_json)?;
-
+    fs::write(path, serde_json::to_string_pretty(&json_value)?)?;
     Ok(())
 }
 
 fn get_config_data(path: &str, key: &str) -> Result<String, io::Error> {
-    let file = File::open(path)?;
-
+    let file = fs::File::open(path)?;
     let v: Value =
         serde_json::from_reader(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    if let Some(value) = v.get(key) {
-        // Jeśli wartość to string w formacie JSON (np. "wartość"), as_str() wyciągnie czysty tekst bez cudzysłowów.
-        // W przeciwnym wypadku to_string() zamieni dowolny typ (np. tablicę, obiekt) na reprezentację tekstową.
-        let result = value
+    match v.get(key) {
+        Some(value) => Ok(value
             .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| value.to_string());
-
-        Ok(result)
-    } else {
-        Err(io::Error::new(
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string())),
+        None => Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!(
-                "Klucz '{}' nie został znaleziony w pliku konfiguracyjnym",
-                key
-            ),
-        ))
+            format!("Klucz '{key}' nie został znaleziony w pliku konfiguracyjnym"),
+        )),
     }
 }
