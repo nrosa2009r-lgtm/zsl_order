@@ -7,19 +7,21 @@
     <link rel ="stylesheet" href="style.css">
 </head>
 <body>
+    <div id="Main">
     <h1 id ="MainTitle">Logowanie</h1>
     <p id="MiniText">Zaloguj się do zsł_order:</p>
     <form>
        <p><label class="Label">Login:</label></p>
-        <input class="Input" type="email" name="Login" placeholder="xyz@zsl.pl">
+        <input class="Input" type="email" name="Login" placeholder="xyz@zsl.pl" required>
 
         <p><label class="Label">Hasło:</label></p>
 
-        <input class="Input" type="password" name="Password" placeholder="Hasło123!">
+        <input class="Input" type="password" name="Password" placeholder="Hasło123!"required>
     
         <p><button class="Button" type="submit">Zaloguj</button></p>
     
     </form>
+    </div>
     <br>
     <button class="MiniButton" type="button">Resetuj Hasło</button>
     <button class="MiniButton" type="button">Rejestracja</button>
