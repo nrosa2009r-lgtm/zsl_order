@@ -13,6 +13,8 @@ use std::{
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
+use crate::security::{hash_password, veryfy_password};
+
 mod security;
 
 #[derive(Clone, Serialize)]
@@ -43,6 +45,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+
     if let Err(e) = write_config_parm("config.json", "status", "working") {
         eprintln!("Nie udało się zapisać config.json: {e}");
     }

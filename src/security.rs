@@ -11,7 +11,7 @@ pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Er
 }
 
 pub fn veryfy_password(password: &str, hash: &str) -> bool {
-    PasswordHash::new(hash)
+    PasswordHash::new(&hash)
         .map(|prased| {
             Argon2::default()
                 .verify_password(password.as_bytes(), &prased)
