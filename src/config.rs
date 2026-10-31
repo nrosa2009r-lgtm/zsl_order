@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::{fs, io,};
+use std::{fs, io};
 
 pub fn write_config_parm(
     path: &str,

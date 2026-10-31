@@ -1,5 +1,7 @@
 {
   "ip": "192.168.0.124",
   "port": 3000,
-  "status": "working"
+  "status": "working",
+  "max_connections": "120",
+  "db_url": "baza.db"
 }

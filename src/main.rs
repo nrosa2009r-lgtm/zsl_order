@@ -6,17 +6,18 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use std::{
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
-use crate::{config::{get_config_data, write_config_parm}, security::{hash_password, veryfy_password}};
+use crate::{
+    config::{get_config_data, write_config_parm},
+    security::{hash_password, veryfy_password},
+};
 
-mod security;
-mod database;
 mod config;
+mod database;
+mod security;
 #[derive(Clone, Serialize)]
 struct MenuItem {
     id: u32,
@@ -45,7 +46,6 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-
     if let Err(e) = write_config_parm("config.json", "status", "working") {
         eprintln!("Nie udało się zapisać config.json: {e}");
     }
@@ -138,5 +138,3 @@ async fn create_order(
 async fn get_all_orders(State(state): State<Arc<AppState>>) -> Json<Vec<Order>> {
     Json(state.orders.lock().unwrap().clone())
 }
-
-
