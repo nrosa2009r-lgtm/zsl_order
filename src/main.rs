@@ -13,6 +13,8 @@ use std::{
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
+mod security;
+
 #[derive(Clone, Serialize)]
 struct MenuItem {
     id: u32,
