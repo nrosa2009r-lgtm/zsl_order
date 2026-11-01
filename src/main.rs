@@ -7,9 +7,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use std::fs;
 
 use crate::{
-    config::{get_config_data, create_config_file},
-    database::{create_order, get_all_orders, get_menu},
-    security::{hash_password, veryfy_password},
+    config::{create_config_file, get_config_data}, database::{create_db, create_order, get_all_orders, get_menu}, security::{hash_password, veryfy_password},
 };
 
 mod config;
@@ -25,6 +23,10 @@ async fn main() {
         Ok(false) => {create_config_file().expect("Nie udało się stworzyć pliku konfiguracyjnego")},
         Err(e) => println!("Błąd {}", e),
     }
+
+    create_db().await;
+
+
 
     let shared_state = std::sync::Arc::new(database::AppState::new_empty());
 
