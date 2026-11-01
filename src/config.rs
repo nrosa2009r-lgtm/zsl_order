@@ -1,22 +1,27 @@
-use serde_json::Value;
+use serde_json::{Value,};
+use std::error::Error;
 use std::{fs, io};
 
-pub fn write_config_parm(
-    path: &str,
-    parm: &str,
-    value: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut json_value: Value = match fs::read_to_string(path) {
-        Ok(data) => serde_json::from_str(&data)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Object(Default::default()),
-        Err(e) => return Err(e.into()),
-    };
+use serde_json::json;
+use std::fs::File;
+use std::io::Write;
 
-    if let Some(obj) = json_value.as_object_mut() {
-        obj.insert(parm.to_string(), Value::from(value));
-    }
+use crate::CONF_PATH;
+pub fn create_config_file() -> Result<(), Box<dyn Error>> {
+    let config_parms = json!({
+    "ip": "192.168.0.124",
+    "port": 3000,
+    "status": "working",
+    "max_connections": "120",
+    "db_url": "baza.db"
+      });
 
-    fs::write(path, serde_json::to_string_pretty(&json_value)?)?;
+    let steralised_data = serde_json::to_string_pretty(&config_parms)?;
+
+    let mut cof_file = File::create(CONF_PATH)?;
+
+    cof_file.write_all(steralised_data.as_bytes())?;
+
     Ok(())
 }
 

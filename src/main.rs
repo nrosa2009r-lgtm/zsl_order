@@ -4,11 +4,10 @@ use axum::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
-use std::fs::exists;
-use std::path::Path;
+use std::fs;
 
 use crate::{
-    config::{get_config_data, write_config_parm},
+    config::{get_config_data, create_config_file},
     database::{create_order, get_all_orders, get_menu},
     security::{hash_password, veryfy_password},
 };
@@ -17,9 +16,15 @@ mod config;
 mod database;
 mod security;
 
+pub const CONF_PATH: &str = "config.json";
+
 #[tokio::main]
 async fn main() {
-    
+    match fs::exists(CONF_PATH) {
+        Ok(true) => println!("Plik konfiguracyjny istneje"),
+        Ok(false) => {create_config_file().expect("Nie udało się stworzyć pliku konfiguracyjnego")},
+        Err(e) => println!("Błąd {}", e),
+    }
 
     let shared_state = std::sync::Arc::new(database::AppState::new_empty());
 
