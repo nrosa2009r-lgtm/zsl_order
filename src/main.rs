@@ -7,7 +7,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use std::fs;
 
 use crate::{
-    config::{create_config_file, get_config_data}, database::{create_db, create_order, get_all_orders, get_menu}, security::{hash_password, veryfy_password},
+    config::{create_config_file, get_config_data}, database::create_db, security::{hash_password, veryfy_password},
 };
 
 mod config;
@@ -18,13 +18,28 @@ pub const CONF_PATH: &str = "config.json";
 
 #[tokio::main]
 async fn main() {
-    match fs::exists(CONF_PATH) {
-        Ok(true) => println!("Plik konfiguracyjny istneje"),
-        Ok(false) => {create_config_file().expect("Nie udało się stworzyć pliku konfiguracyjnego")},
-        Err(e) => println!("Błąd {}", e),
+       match fs::exists(CONF_PATH) {
+        Ok(true) => println!("Plik konfiguracyjny istnieje"),
+        Ok(false) => { create_config_file().expect("Nie udało się stworzyć pliku konfiguracyjnego") },
+        Err(e) => println!("Błąd konfiguracji: {}", e),
     }
 
+    
+    println!("Inicjalizacja bazy danych...");
+    let _pool = match create_db().await {
+        Ok(p) => {
+            println!("Połączono z bazą danych (jeśli nie istniała, została utworzona).");
+            p
+        },
+        Err(e) => {
+            eprintln!("Krytyczny błąd bazy danych: {}", e);
+            std::process::exit(1); 
+        }
+    };
+
+    
     let shared_state = std::sync::Arc::new(database::AppState::new_empty());
+
 
 
 
@@ -32,9 +47,6 @@ async fn main() {
     
     let app = Router::new()
         .route_service("/login", ServeFile::new("frontend/login.html"))
-        .route("/menu", get(get_menu))
-        .route("/order", post(create_order))
-        .route("/orders", get(get_all_orders))
         .with_state(shared_state)
         .fallback_service(ServeDir::new("frontend").append_index_html_on_directories(true));
 
