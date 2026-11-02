@@ -24,12 +24,12 @@ async fn main() {
         Err(e) => println!("Błąd {}", e),
     }
 
-    create_db().await;
-
-
-
     let shared_state = std::sync::Arc::new(database::AppState::new_empty());
 
+
+
+
+    
     let app = Router::new()
         .route_service("/login", ServeFile::new("frontend/login.html"))
         .route("/menu", get(get_menu))
