@@ -1,0 +1,8 @@
+{
+  "ip": "127.0.0.1",
+  "port": 3000,
+  "max_connections": 16,
+  "db_url": "sqlite://baza.db",
+  "session_hours": 12,
+  "secure_cookies": false
+}

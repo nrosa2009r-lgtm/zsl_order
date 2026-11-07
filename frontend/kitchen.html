@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>ZSL Order — kuchnia</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body class="app-page">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark small" aria-hidden="true">👩‍🍳</span>
+            <div>
+                <h1 id="cafeteriaName">Stołówka ZSŁ</h1>
+                <p id="userInfo" class="muted tiny"></p>
+            </div>
+        </div>
+        <nav class="tabs" aria-label="Nawigacja">
+            <button class="tab is-active" type="button" data-tab="orders">Zamówienia</button>
+            <button class="tab" type="button" data-tab="pickup">Odbiór QR</button>
+            <button class="tab" type="button" data-tab="menu">Menu</button>
+        </nav>
+        <div class="topbar-actions">
+            <button id="changePasswordButton" class="btn btn-ghost btn-small" type="button">Zmień hasło</button>
+            <button id="logoutButton" class="btn btn-ghost btn-small" type="button">Wyloguj</button>
+        </div>
+    </header>
+
+    <main class="page">
+        <section id="tab-orders" class="tab-panel is-active" aria-labelledby="ordersHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="ordersHeading">Zamówienia</h2>
+                    <p id="ordersUpdated" class="muted small">Ładowanie…</p>
+                </div>
+                <div class="toolbar">
+                    <div class="segmented" role="group" aria-label="Filtr zamówień">
+                        <button class="seg is-active" type="button" data-scope="open">Otwarte</button>
+                        <button class="seg" type="button" data-scope="today">Dzisiaj</button>
+                        <button class="seg" type="button" data-scope="all">Wszystkie</button>
+                    </div>
+                    <button id="refreshOrdersButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+                </div>
+            </div>
+            <div id="ordersList" class="orders-list" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-pickup" class="tab-panel" aria-labelledby="pickupHeading">
+            <h2 id="pickupHeading">Odbiór zamówienia</h2>
+            <div class="panel">
+                <form id="pickupForm" class="row-form">
+                    <div class="field grow">
+                        <label for="pickupCode">Kod odbioru lub zawartość kodu QR</label>
+                        <input id="pickupCode" type="text" maxlength="128" autocomplete="off"
+                               spellcheck="false" placeholder="np. K7M2QP">
+                    </div>
+                    <button class="btn btn-primary" type="submit">Sprawdź</button>
+                </form>
+                <p class="muted small">
+                    Możesz wpisać 6-znakowy kod z ekranu ucznia, zeskanować kod QR
+                    czytnikiem USB (wpisze się automatycznie) albo użyć kamery.
+                </p>
+                <div class="scanner">
+                    <button id="scanButton" class="btn btn-secondary" type="button" hidden>
+                        Skanuj kamerą
+                    </button>
+                    <button id="stopScanButton" class="btn btn-ghost" type="button" hidden>
+                        Zatrzymaj kamerę
+                    </button>
+                    <video id="scannerVideo" class="scanner-video" playsinline muted hidden></video>
+                    <p id="scannerStatus" class="muted small"></p>
+                </div>
+            </div>
+            <div id="pickupResult" class="orders-list" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-menu" class="tab-panel" aria-labelledby="menuManageHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="menuManageHeading">Menu stołówki</h2>
+                    <p class="muted small">Pozycje niewidoczne dla uczniów mają oznaczenie „wycofana”.</p>
+                </div>
+                <button id="addMenuItemButton" class="btn btn-primary" type="button">Dodaj pozycję</button>
+            </div>
+            <div id="staffMenuList" class="menu-manage-list" aria-live="polite"></div>
+        </section>
+    </main>
+
+    <dialog id="menuDialog" class="dialog">
+        <form id="menuForm" class="stack" method="dialog">
+            <h2 id="menuDialogTitle">Dodaj pozycję</h2>
+            <input id="menuItemId" type="hidden">
+            <div class="field">
+                <label for="menuName">Nazwa</label>
+                <input id="menuName" type="text" maxlength="80" required>
+            </div>
+            <div class="field">
+                <label for="menuDescription">Opis</label>
+                <textarea id="menuDescription" rows="3" maxlength="240"></textarea>
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="menuPrice">Cena (zł)</label>
+                    <input id="menuPrice" type="number" min="0" max="1000" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="menuCategory">Kategoria</label>
+                    <input id="menuCategory" type="text" maxlength="40" value="Dania" required>
+                </div>
+            </div>
+            <div class="field">
+                <label for="menuAllergens">Alergeny</label>
+                <input id="menuAllergens" type="text" maxlength="160"
+                       placeholder="np. gluten, mleko">
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="menuSortOrder">Kolejność</label>
+                    <input id="menuSortOrder" type="number" min="-10000" max="10000" value="0">
+                </div>
+                <label class="checkbox-row">
+                    <input id="menuAvailable" type="checkbox" checked>
+                    <span>Dostępna dla uczniów</span>
+                </label>
+            </div>
+            <p id="menuFormError" class="form-error" role="alert" hidden></p>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" type="button" data-close-dialog>Anuluj</button>
+                <button id="menuSaveButton" class="btn btn-primary" type="submit">Zapisz</button>
+            </div>
+        </form>
+    </dialog>
+
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <script src="/common.js" defer></script>
+    <script src="/staff-common.js" defer></script>
+    <script src="/kitchen.js" defer></script>
+</body>
+</html>

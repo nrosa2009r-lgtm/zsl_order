@@ -2,29 +2,47 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>ZSŁ Order</title>
-
-    <link rel ="stylesheet" href="style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>ZSL Order — logowanie</title>
+    <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-    <div id="Main">
-    <h1 id ="MainTitle">Logowanie</h1>
-    <p id="MiniText">Zaloguj się do zsł_order:</p>
-    <form>
-       <p><label class="Label">Login:</label></p>
-        <input class="Input" type="email" name="Login" placeholder="xyz@zsl.pl" required>
+<body class="login-page">
+    <main class="login-card">
+        <div class="brand-mark" aria-hidden="true">🍽</div>
+        <h1 id="cafeteriaName">Stołówka ZSŁ</h1>
+        <p class="muted">System zamawiania posiłków</p>
 
-        <p><label class="Label">Hasło:</label></p>
+        <form id="loginForm" class="stack" novalidate>
+            <div class="field">
+                <label for="loginInput">Login</label>
+                <input id="loginInput" name="login" type="text" autocomplete="username"
+                       inputmode="text" spellcheck="false" maxlength="64" required
+                       placeholder="np. s-a7k2m9p4qx">
+            </div>
+            <div class="field">
+                <label for="passwordInput">Hasło</label>
+                <input id="passwordInput" name="password" type="password"
+                       autocomplete="current-password" maxlength="256" required
+                       placeholder="Twoje hasło">
+            </div>
+            <p id="loginError" class="form-error" role="alert" hidden></p>
+            <button id="loginButton" class="btn btn-primary btn-block" type="submit">
+                Zaloguj się
+            </button>
+        </form>
 
-        <input class="Input" type="password" name="Password" placeholder="Hasło123!"required>
-    
-        <p><button class="Button" type="submit">Zaloguj</button></p>
-    
-    </form>
-    </div>
-    <br>
-    <button class="MiniButton" type="button">Resetuj Hasło</button>
-    <button class="MiniButton" type="button">Rejestracja</button>
+        <p id="publicInfo" class="muted small"></p>
+        <p class="privacy-note">
+            System nie przechowuje imion, nazwisk ani adresów e-mail.
+            Loginy i hasła są losowe. Płatność odbywa się przy ladzie.
+        </p>
+        <noscript>
+            <p class="form-error">Do działania aplikacji potrzebna jest obsługa JavaScript.</p>
+        </noscript>
+    </main>
 
+    <script src="/common.js" defer></script>
+    <script src="/login.js" defer></script>
 </body>
 </html>

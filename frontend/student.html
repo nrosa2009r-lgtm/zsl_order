@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>ZSL Order — uczeń</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body class="app-page">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark small" aria-hidden="true">🍽</span>
+            <div>
+                <h1 id="cafeteriaName">Stołówka ZSŁ</h1>
+                <p id="userInfo" class="muted tiny"></p>
+            </div>
+        </div>
+        <nav class="tabs" aria-label="Nawigacja">
+            <button class="tab is-active" type="button" data-tab="menu">Menu</button>
+            <button class="tab" type="button" data-tab="orders">Moje zamówienia</button>
+            <button class="tab" type="button" data-tab="account">Konto</button>
+        </nav>
+        <button id="logoutButton" class="btn btn-ghost btn-small" type="button">Wyloguj</button>
+    </header>
+
+    <main class="page">
+        <section id="tab-menu" class="tab-panel is-active" aria-labelledby="menuHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="menuHeading">Menu dnia</h2>
+                    <p id="orderingStatus" class="muted small"></p>
+                </div>
+                <button id="refreshMenuButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+            </div>
+            <div id="orderingBanner" class="banner banner-warning" hidden></div>
+
+            <div class="menu-layout">
+                <div id="menuList" class="menu-grid" aria-live="polite"></div>
+
+                <aside class="cart" aria-label="Koszyk">
+                    <div class="cart-head">
+                        <h3>Twoje zamówienie</h3>
+                        <span id="cartCount" class="pill">0</span>
+                    </div>
+                    <div id="cartItems" class="cart-items">
+                        <p class="muted small">Koszyk jest pusty. Dodaj pozycje z menu.</p>
+                    </div>
+                    <div class="cart-total">
+                        <span>Razem</span>
+                        <strong id="cartTotal">0,00 zł</strong>
+                    </div>
+
+                    <form id="checkoutForm" class="stack">
+                        <fieldset class="field">
+                            <legend>Sposób płatności przy ladzie</legend>
+                            <label class="radio-row">
+                                <input type="radio" name="payment_method" value="cash" checked>
+                                <span>Gotówka</span>
+                            </label>
+                            <label class="radio-row">
+                                <input type="radio" name="payment_method" value="card">
+                                <span>Karta</span>
+                            </label>
+                        </fieldset>
+                        <div class="field">
+                            <label for="pickupTime">Godzina odbioru (opcjonalnie)</label>
+                            <input id="pickupTime" name="pickup_time" type="time" step="60">
+                        </div>
+                        <p id="cartError" class="form-error" role="alert" hidden></p>
+                        <button id="checkoutButton" class="btn btn-primary btn-block" type="submit">
+                            Złóż zamówienie
+                        </button>
+                    </form>
+                    <p class="muted tiny">Płatność następuje przy odbiorze. Kod QR okażesz przy ladzie.</p>
+                </aside>
+            </div>
+        </section>
+
+        <section id="tab-orders" class="tab-panel" aria-labelledby="ordersHeading">
+            <div class="section-head">
+                <h2 id="ordersHeading">Moje zamówienia</h2>
+                <button id="refreshOrdersButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+            </div>
+            <div id="ordersList" class="orders-list" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-account" class="tab-panel" aria-labelledby="accountHeading">
+            <h2 id="accountHeading">Moje konto</h2>
+            <div class="panel">
+                <dl class="details">
+                    <div><dt>Login</dt><dd id="accountLogin">—</dd></div>
+                    <div><dt>Kod ucznia</dt><dd id="accountCode">—</dd></div>
+                    <div><dt>Rola</dt><dd>Uczeń</dd></div>
+                </dl>
+                <button id="changePasswordButton" class="btn btn-secondary" type="button">
+                    Zmień hasło
+                </button>
+            </div>
+            <div class="panel privacy-note">
+                <h3>Prywatność (RODO)</h3>
+                <p>
+                    System nie zbiera imion, nazwisk, adresów e-mail, numerów telefonów
+                    ani danych klas. Konto ucznia to wyłącznie losowy login, losowe hasło
+                    i pseudonimowy kod. Zamówienie zapisuje jedynie wybrane posiłki,
+                    sposób płatności (gotówka/karta) i techniczny czas złożenia.
+                    Nie przechowujemy danych płatniczych.
+                </p>
+            </div>
+        </section>
+    </main>
+
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <script src="/common.js" defer></script>
+    <script src="/student.js" defer></script>
+</body>
+</html>

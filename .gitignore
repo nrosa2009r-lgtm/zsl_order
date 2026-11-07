@@ -1,5 +1,23 @@
 /target
 
+# Lokalna konfiguracja (nie zawiera sekretów, ale jest specyficzna dla maszyny)
 config.json
 
+# Baza SQLite i pliki tymczasowe WAL
 baza.db
+*.db
+*.db-shm
+*.db-wal
+
+# Jednorazowe dane startowego administratora
+admin_start.txt
+
+# Sekret HMAC do podpisywania tokenów JWT (tworzony automatycznie, 0600)
+jwt.key
+
+# Logi techniczne aplikacji
+logs/
+
+# Lokalne backupy i artefakty testowe
+backups/
+*.backup

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>ZSL Order — administrator</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body class="app-page">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark small" aria-hidden="true">⚙️</span>
+            <div>
+                <h1 id="cafeteriaName">Stołówka ZSŁ</h1>
+                <p id="userInfo" class="muted tiny"></p>
+            </div>
+        </div>
+        <nav class="tabs" aria-label="Nawigacja">
+            <button class="tab is-active" type="button" data-tab="dashboard">Pulpit</button>
+            <button class="tab" type="button" data-tab="users">Użytkownicy</button>
+            <button class="tab" type="button" data-tab="menu">Menu</button>
+            <button class="tab" type="button" data-tab="orders">Zamówienia</button>
+            <button class="tab" type="button" data-tab="settings">Ustawienia</button>
+            <button class="tab" type="button" data-tab="audit">Dziennik</button>
+        </nav>
+        <div class="topbar-actions">
+            <button id="changePasswordButton" class="btn btn-ghost btn-small" type="button">Zmień hasło</button>
+            <button id="logoutButton" class="btn btn-ghost btn-small" type="button">Wyloguj</button>
+        </div>
+    </header>
+
+    <main class="page">
+        <section id="tab-dashboard" class="tab-panel is-active" aria-labelledby="dashboardHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="dashboardHeading">Pulpit</h2>
+                    <p id="dashboardUpdated" class="muted small">Ładowanie…</p>
+                </div>
+                <button id="refreshStatsButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+            </div>
+            <div id="statsGrid" class="stats-grid"></div>
+
+            <div class="panel charts-panel">
+                <div class="section-head compact">
+                    <div>
+                        <h3>Aktywność</h3>
+                        <p id="activitySummary" class="muted small">Ładowanie wykresów…</p>
+                    </div>
+                    <div class="toolbar">
+                        <div class="field inline">
+                            <label for="activityDays" class="sr-only">Okres</label>
+                            <select id="activityDays">
+                                <option value="7">Ostatnie 7 dni</option>
+                                <option value="14" selected>Ostatnie 14 dni</option>
+                                <option value="30">Ostatnie 30 dni</option>
+                                <option value="90">Ostatnie 90 dni</option>
+                            </select>
+                        </div>
+                        <button id="refreshActivityButton" class="btn btn-ghost btn-small" type="button">Odśwież wykresy</button>
+                    </div>
+                </div>
+                <div class="charts-grid">
+                    <figure class="chart-card">
+                        <figcaption>Zamówienia dziennie</figcaption>
+                        <canvas id="chartDailyOrders" height="240" aria-label="Wykres liczby zamówień w kolejnych dniach" role="img"></canvas>
+                    </figure>
+                    <figure class="chart-card">
+                        <figcaption>Utarg dzienny (opłacone)</figcaption>
+                        <canvas id="chartDailyRevenue" height="240" aria-label="Wykres dziennego utargu z opłaconych zamówień" role="img"></canvas>
+                    </figure>
+                    <figure class="chart-card">
+                        <figcaption>Zamówienia według godziny (dziś)</figcaption>
+                        <canvas id="chartHourly" height="240" aria-label="Wykres zamówień według godzin w dniu dzisiejszym" role="img"></canvas>
+                    </figure>
+                    <figure class="chart-card">
+                        <figcaption>Statusy zamówień w okresie</figcaption>
+                        <canvas id="chartStatus" height="240" aria-label="Wykres statusów zamówień w wybranym okresie" role="img"></canvas>
+                    </figure>
+                    <figure class="chart-card chart-card-wide">
+                        <figcaption>Najczęściej zamawiane pozycje</figcaption>
+                        <canvas id="chartTopItems" height="240" aria-label="Wykres najczęściej zamawianych pozycji menu" role="img"></canvas>
+                    </figure>
+                </div>
+                <p class="muted tiny">
+                    Wykresy pokazują wyłącznie dane techniczne: liczbę zamówień, kwoty,
+                    statusy i nazwy pozycji menu. Nie zawierają danych osobowych uczniów.
+                </p>
+            </div>
+
+            <div class="panel">
+                <h3>Szybkie informacje</h3>
+                <p class="muted small">
+                    System przechowuje wyłącznie losowe loginy, pseudonimowe kody,
+                    zamówienia i ustawienia stołówki. Nie ma tu danych osobowych
+                    uczniów ani danych kart płatniczych.
+                </p>
+                <p class="muted small">
+                    Po dezaktywacji konta ucznia jego historia zamówień pozostaje
+                    w systemie jako rekord techniczny, bez danych osobowych.
+                </p>
+            </div>
+        </section>
+
+        <section id="tab-users" class="tab-panel" aria-labelledby="usersHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="usersHeading">Użytkownicy</h2>
+                    <p class="muted small">Generuj konta zbiorczo i przekazuj hasła tylko raz.</p>
+                </div>
+                <button id="exportUsersButton" class="btn btn-secondary btn-small" type="button">Eksport CSV (bez haseł)</button>
+            </div>
+
+            <div class="panel">
+                <h3>Wygeneruj nowe konta</h3>
+                <form id="generateForm" class="row-form">
+                    <div class="field">
+                        <label for="generateRole">Rola</label>
+                        <select id="generateRole">
+                            <option value="student">Uczeń</option>
+                            <option value="kitchen">Kuchnia</option>
+                            <option value="admin">Administrator</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="generateCount">Liczba kont (1–100)</label>
+                        <input id="generateCount" type="number" min="1" max="100" value="30" required>
+                    </div>
+                    <button id="generateButton" class="btn btn-primary" type="submit">Generuj</button>
+                </form>
+                <p id="generateNote" class="muted small">
+                    Loginy i hasła są losowe. Hasła są pokazywane wyłącznie po wygenerowaniu
+                    i nie są przechowywane w formie jawnej. Późniejszy eksport CSV zawiera
+                    tylko metadane kont (bez haseł) — hasła można zapisać wyłącznie teraz
+                    albo bezpośrednio po resecie hasła.
+                </p>
+                <div id="generatedAccounts" class="generated" hidden></div>
+            </div>
+
+            <div class="panel">
+                <div class="section-head compact">
+                    <h3>Lista kont</h3>
+                    <div class="toolbar">
+                        <div class="field inline">
+                            <label for="userSearch" class="sr-only">Szukaj</label>
+                            <input id="userSearch" type="search" placeholder="Szukaj loginu/kodu">
+                        </div>
+                        <div class="field inline">
+                            <label for="userRoleFilter" class="sr-only">Rola</label>
+                            <select id="userRoleFilter">
+                                <option value="">Wszystkie role</option>
+                                <option value="student">Uczniowie</option>
+                                <option value="kitchen">Kuchnia</option>
+                                <option value="admin">Administratorzy</option>
+                            </select>
+                        </div>
+                        <div class="field inline">
+                            <label for="userActiveFilter" class="sr-only">Status</label>
+                            <select id="userActiveFilter">
+                                <option value="">Wszystkie</option>
+                                <option value="true">Aktywne</option>
+                                <option value="false">Nieaktywne</option>
+                            </select>
+                        </div>
+                        <button id="filterUsersButton" class="btn btn-secondary btn-small" type="button">Filtruj</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="table" id="usersTable">
+                        <thead>
+                            <tr>
+                                <th>Login</th>
+                                <th>Kod</th>
+                                <th>Rola</th>
+                                <th>Status</th>
+                                <th>Utworzono</th>
+                                <th>Akcje</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="tab-menu" class="tab-panel" aria-labelledby="menuManageHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="menuManageHeading">Menu stołówki</h2>
+                    <p class="muted small">Te same pozycje widzi kuchnia i uczniowie.</p>
+                </div>
+                <button id="addMenuItemButton" class="btn btn-primary" type="button">Dodaj pozycję</button>
+            </div>
+            <div id="staffMenuList" class="menu-manage-list" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-orders" class="tab-panel" aria-labelledby="ordersHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="ordersHeading">Wszystkie zamówienia</h2>
+                    <p class="muted small">Administrator może korygować status i anulować zamówienie.</p>
+                </div>
+                <div class="toolbar">
+                    <div class="segmented" role="group" aria-label="Filtr zamówień">
+                        <button class="seg is-active" type="button" data-scope="open">Otwarte</button>
+                        <button class="seg" type="button" data-scope="today">Dzisiaj</button>
+                        <button class="seg" type="button" data-scope="all">Wszystkie</button>
+                    </div>
+                    <button id="refreshOrdersButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+                </div>
+            </div>
+            <div id="ordersList" class="orders-list" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-settings" class="tab-panel" aria-labelledby="settingsHeading">
+            <h2 id="settingsHeading">Ustawienia</h2>
+            <div class="panel">
+                <form id="settingsForm" class="stack">
+                    <div class="field">
+                        <label for="settingCafeteriaName">Nazwa stołówki</label>
+                        <input id="settingCafeteriaName" type="text" maxlength="80" required>
+                    </div>
+                    <label class="checkbox-row">
+                        <input id="settingOrderingEnabled" type="checkbox">
+                        <span>Zamawianie włączone</span>
+                    </label>
+                    <div class="field">
+                        <label for="settingPaymentInfo">Informacja o płatności</label>
+                        <textarea id="settingPaymentInfo" rows="3" maxlength="300"></textarea>
+                    </div>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label for="settingMaxOpenOrders">Limit oczekujących zamówień na ucznia</label>
+                            <input id="settingMaxOpenOrders" type="number" min="1" max="10" required>
+                        </div>
+                        <div class="field">
+                            <label for="settingMaxOrderItems">Limit pozycji w jednym zamówieniu</label>
+                            <input id="settingMaxOrderItems" type="number" min="1" max="50" required>
+                        </div>
+                    </div>
+                    <p id="settingsError" class="form-error" role="alert" hidden></p>
+                    <button id="saveSettingsButton" class="btn btn-primary" type="submit">Zapisz ustawienia</button>
+                </form>
+            </div>
+            <div class="panel privacy-note">
+                <h3>Zasady prywatności</h3>
+                <p>
+                    Aplikacja została zaprojektowana zgodnie z zasadą minimalizacji danych.
+                    Nie przechowuje danych osobowych: imion, nazwisk, e-maili, telefonów,
+                    adresów, numerów klas ani identyfikatorów płatności. Konta są losowe,
+                    a uczniowie identyfikowani są pseudonimowym kodem. Kody QR służą
+                    wyłącznie do odbioru zamówienia i nie zawierają danych osobowych.
+                </p>
+            </div>
+        </section>
+
+        <section id="tab-audit" class="tab-panel" aria-labelledby="auditHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="auditHeading">Dziennik zdarzeń</h2>
+                    <p class="muted small">Ostatnie 200 zdarzeń technicznych (bez danych osobowych).</p>
+                </div>
+                <button id="refreshAuditButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+            </div>
+            <div class="table-wrap panel">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>Konto</th>
+                            <th>Zdarzenie</th>
+                            <th>Szczegóły</th>
+                        </tr>
+                    </thead>
+                    <tbody id="auditTableBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <dialog id="menuDialog" class="dialog">
+        <form id="menuForm" class="stack" method="dialog">
+            <h2 id="menuDialogTitle">Dodaj pozycję</h2>
+            <input id="menuItemId" type="hidden">
+            <div class="field">
+                <label for="menuName">Nazwa</label>
+                <input id="menuName" type="text" maxlength="80" required>
+            </div>
+            <div class="field">
+                <label for="menuDescription">Opis</label>
+                <textarea id="menuDescription" rows="3" maxlength="240"></textarea>
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="menuPrice">Cena (zł)</label>
+                    <input id="menuPrice" type="number" min="0" max="1000" step="0.01" required>
+                </div>
+                <div class="field">
+                    <label for="menuCategory">Kategoria</label>
+                    <input id="menuCategory" type="text" maxlength="40" value="Dania" required>
+                </div>
+            </div>
+            <div class="field">
+                <label for="menuAllergens">Alergeny</label>
+                <input id="menuAllergens" type="text" maxlength="160"
+                       placeholder="np. gluten, mleko">
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="menuSortOrder">Kolejność</label>
+                    <input id="menuSortOrder" type="number" min="-10000" max="10000" value="0">
+                </div>
+                <label class="checkbox-row">
+                    <input id="menuAvailable" type="checkbox" checked>
+                    <span>Dostępna dla uczniów</span>
+                </label>
+            </div>
+            <p id="menuFormError" class="form-error" role="alert" hidden></p>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" type="button" data-close-dialog>Anuluj</button>
+                <button id="menuSaveButton" class="btn btn-primary" type="submit">Zapisz</button>
+            </div>
+        </form>
+    </dialog>
+
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <script src="/common.js" defer></script>
+    <script src="/staff-common.js" defer></script>
+    <script src="/charts.js" defer></script>
+    <script src="/admin.js" defer></script>
+</body>
+</html>

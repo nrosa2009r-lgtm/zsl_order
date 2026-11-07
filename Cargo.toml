@@ -1,22 +1,31 @@
 [package]
 name = "zsl_order"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "System zamawiania posiłków dla stołówki szkolnej ZSŁ (bez danych osobowych)"
 
 [dependencies]
-axum = "0.7.0"
-tokio = { version = "1.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.0", features = ["v4", "serde"] }
-serde_json = "1.0.154"
-tower-http = { version = "0.5", features = ["fs"] }
-argon2 ="0.5"
-rand_core = {version="0.6", features =["getrandom"] }
-sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "macros" ] }
+axum = "0.7.9"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "macros"] }
+argon2 = "0.5.3"
+rand_core = { version = "0.6", features = ["getrandom"] }
 rand = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+jsonwebtoken = "9"
+tower-http = { version = "0.5", features = ["fs", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+tracing-appender = "0.2"
 
 [profile.release]
 opt-level = 3       # Maksymalna optymalizacja pod kątem szybkości kodu
 lto = "fat"         # Głęboka, globalna optymalizacja między skrzynkami (LTO)
-codegen-units = 1   # Pozwala na lepszą optymalizację całego kodu jako całości
-panic = "abort"     # Usuwa narzut związany z obsługą odwijania stosu barier bezpieczeństwa
+codegen-units = 1   # Pozwała na lepszą optymalizację całego kodu jako całości
+panic = "abort"     # Usuwa narzut związany z obsługą odwijania stosu
+strip = true        # Mniejszy i szybszy do wczytania plik binarny
