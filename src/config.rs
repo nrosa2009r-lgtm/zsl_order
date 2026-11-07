@@ -109,7 +109,10 @@ fn get_u64(value: &Value, key: &str) -> Option<u64> {
 fn get_bool(value: &Value, key: &str, default: bool) -> bool {
     match value.get(key) {
         Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "tak" | "yes"),
+        Some(Value::String(s)) => matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "tak" | "yes"
+        ),
         Some(Value::Number(n)) => n.as_u64().unwrap_or(0) != 0,
         _ => default,
     }

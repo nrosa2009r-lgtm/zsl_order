@@ -62,9 +62,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let dummy_hash = security::hash_password("timing-equalization-dummy-password")
         .map_err(|error| format!("Nie udało się przygotować zabezpieczenia logowania: {error}"))?;
-    let jwt_secret = security::load_or_create_jwt_secret(std::path::Path::new(
-        security::JWT_SECRET_FILE,
-    ))?;
+    let jwt_secret =
+        security::load_or_create_jwt_secret(std::path::Path::new(security::JWT_SECRET_FILE))?;
     tracing::info!(
         file = security::JWT_SECRET_FILE,
         "Sekret JWT wczytany (pliki 0600)"
@@ -84,9 +83,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok(listener) => listener,
         Err(error) => {
             tracing::warn!(address = %configured_address, error = %error, "Nie można użyć skonfigurowanego adresu; fallback 0.0.0.0:3000");
-            eprintln!(
-                "Nie można użyć {configured_address} ({error}). Próbuję 0.0.0.0:3000..."
-            );
+            eprintln!("Nie można użyć {configured_address} ({error}). Próbuję 0.0.0.0:3000...");
             TcpListener::bind("0.0.0.0:3000").await?
         }
     };
@@ -115,10 +112,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/orders",
             get(handlers::orders::student_orders).post(handlers::orders::create_order),
         )
-        .route(
-            "/orders/:id/cancel",
-            post(handlers::orders::cancel_order),
-        )
+        .route("/orders/:id/cancel", post(handlers::orders::cancel_order))
         .route("/orders/:id/qr.svg", get(handlers::orders::order_qr))
         .route_layer(middleware::from_fn(auth::require_student));
 
@@ -132,10 +126,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             put(handlers::menu::update_menu_item).delete(handlers::menu::hide_menu_item),
         )
         .route("/orders", get(handlers::orders::staff_orders))
-        .route(
-            "/orders/:id",
-            patch(handlers::orders::staff_update_order),
-        )
+        .route("/orders/:id", patch(handlers::orders::staff_update_order))
         .route("/pickup", post(handlers::orders::staff_pickup))
         .route_layer(middleware::from_fn(auth::require_staff));
 

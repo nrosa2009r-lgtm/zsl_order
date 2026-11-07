@@ -2,8 +2,8 @@ use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
-use rand_core::OsRng;
 use rand::Rng;
+use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -13,8 +13,7 @@ use std::path::Path;
 pub const JWT_SECRET_FILE: &str = "jwt.key";
 
 /// Alfabet bez znaków mylonych (0/O, 1/l/I).
-pub const SAFE_ALPHABET: &[u8] =
-    b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+pub const SAFE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 const DIGITS: &[u8] = b"23456789";
 const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -213,10 +212,7 @@ mod tests {
 
     #[test]
     fn jwt_secret_is_created_and_reused() {
-        let path = std::env::temp_dir().join(format!(
-            "zsl-order-jwt-test-{}.key",
-            random_hex(8)
-        ));
+        let path = std::env::temp_dir().join(format!("zsl-order-jwt-test-{}.key", random_hex(8)));
         let first = load_or_create_jwt_secret(&path).expect("tworzenie sekretu");
         let second = load_or_create_jwt_secret(&path).expect("odczyt sekretu");
         assert_eq!(first, second);

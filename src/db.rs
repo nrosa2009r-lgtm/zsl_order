@@ -1,9 +1,7 @@
 use crate::config::Config;
 use crate::security;
 use crate::util;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
 use std::error::Error;
 use std::fs;
@@ -119,10 +117,7 @@ async fn seed_settings(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let defaults = [
         ("cafeteria_name", "Stołówka ZSŁ"),
         ("ordering_enabled", "1"),
-        (
-            "payment_info",
-            "Płatność przy odbiorze: gotówka lub karta.",
-        ),
+        ("payment_info", "Płatność przy odbiorze: gotówka lub karta."),
         ("max_open_orders", "3"),
         ("max_order_items", "20"),
     ];

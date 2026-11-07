@@ -180,13 +180,11 @@ pub async fn hide_menu_item(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let result = sqlx::query(
-        "UPDATE menu_items SET available = 0, updated_at = ? WHERE id = ?",
-    )
-    .bind(util::now())
-    .bind(id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("UPDATE menu_items SET available = 0, updated_at = ? WHERE id = ?")
+        .bind(util::now())
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::not_found("Nie znaleziono pozycji menu."));
@@ -234,9 +232,7 @@ struct ValidatedMenuInput {
 fn validate_input(body: MenuItemInput) -> Result<ValidatedMenuInput, AppError> {
     let name = body.name.trim().to_string();
     if name.is_empty() || name.chars().count() > 80 {
-        return Err(AppError::bad(
-            "Nazwa pozycji musi mieć od 1 do 80 znaków.",
-        ));
+        return Err(AppError::bad("Nazwa pozycji musi mieć od 1 do 80 znaków."));
     }
     let description = body.description.trim().to_string();
     if description.chars().count() > 240 {
@@ -249,9 +245,7 @@ fn validate_input(body: MenuItemInput) -> Result<ValidatedMenuInput, AppError> {
     }
     let category = body.category.trim().to_string();
     if category.is_empty() || category.chars().count() > 40 {
-        return Err(AppError::bad(
-            "Kategoria musi mieć od 1 do 40 znaków.",
-        ));
+        return Err(AppError::bad("Kategoria musi mieć od 1 do 40 znaków."));
     }
     let allergens = body.allergens.trim().to_string();
     if allergens.chars().count() > 160 {

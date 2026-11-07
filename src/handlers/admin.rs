@@ -180,12 +180,10 @@ pub async fn stats(
         sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1")
             .fetch_one(&state.db)
             .await?;
-    let orders_today: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM orders WHERE created_at >= ?",
-    )
-    .bind(util::start_of_today())
-    .fetch_one(&state.db)
-    .await?;
+    let orders_today: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE created_at >= ?")
+        .bind(util::start_of_today())
+        .fetch_one(&state.db)
+        .await?;
     let revenue_today: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(total_cents), 0) FROM orders
          WHERE created_at >= ? AND payment_status = 'paid' AND status <> 'cancelled'",
@@ -266,10 +264,11 @@ pub async fn activity(
     let mut hourly: Vec<HourlyActivity> = (0..24)
         .map(|hour| HourlyActivity { hour, orders: 0 })
         .collect();
-    let mut status_counts: BTreeMap<String, i64> = ["new", "preparing", "ready", "completed", "cancelled"]
-        .into_iter()
-        .map(|status| (status.to_string(), 0))
-        .collect();
+    let mut status_counts: BTreeMap<String, i64> =
+        ["new", "preparing", "ready", "completed", "cancelled"]
+            .into_iter()
+            .map(|status| (status.to_string(), 0))
+            .collect();
     let mut payment_counts: BTreeMap<String, i64> = ["unpaid", "paid"]
         .into_iter()
         .map(|status| (status.to_string(), 0))
@@ -285,9 +284,7 @@ pub async fn activity(
         let total_cents: i64 = row.try_get("total_cents").map_err(AppError::from)?;
 
         *status_counts.entry(status.clone()).or_insert(0) += 1;
-        *payment_counts
-            .entry(payment_status.clone())
-            .or_insert(0) += 1;
+        *payment_counts.entry(payment_status.clone()).or_insert(0) += 1;
 
         if status != "cancelled" {
             non_cancelled_orders += 1;
@@ -539,12 +536,14 @@ pub async fn update_user(
             .as_deref()
             .is_some_and(|role| role != current_role);
 
-    sqlx::query("UPDATE users SET active = COALESCE(?, active), role = COALESCE(?, role) WHERE id = ?")
-        .bind(body.active)
-        .bind(body.role.as_deref())
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE users SET active = COALESCE(?, active), role = COALESCE(?, role) WHERE id = ?",
+    )
+    .bind(body.active)
+    .bind(body.role.as_deref())
+    .bind(id)
+    .execute(&state.db)
+    .await?;
 
     if sessions_to_revoke {
         sqlx::query("DELETE FROM sessions WHERE user_id = ?")
@@ -565,11 +564,7 @@ pub async fn update_user(
         ),
     )
     .await;
-    tracing::info!(
-        actor_id = actor.id,
-        target_id = id,
-        "Zaktualizowano konto"
-    );
+    tracing::info!(actor_id = actor.id, target_id = id, "Zaktualizowano konto");
 
     sqlx::query_as::<_, AdminUserView>(
         "SELECT id, login, role, display_code, active, must_change_password, created_at, last_login_at
@@ -705,16 +700,17 @@ pub async fn export_users_csv(
             csv_cell(&row.role),
             csv_cell(&row.display_code),
             if row.active { "tak" } else { "nie" },
-            if row.must_change_password { "tak" } else { "nie" },
+            if row.must_change_password {
+                "tak"
+            } else {
+                "nie"
+            },
             csv_cell(&created),
             csv_cell(&last_login),
         ));
     }
 
-    let filename = format!(
-        "konta-zsl-order-{}.csv",
-        Local::now().format("%Y-%m-%d")
-    );
+    let filename = format!("konta-zsl-order-{}.csv", Local::now().format("%Y-%m-%d"));
 
     db::audit(
         &state.db,
@@ -735,9 +731,9 @@ pub async fn export_users_csv(
         header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("text/csv; charset=utf-8"),
     );
-    if let Ok(value) = axum::http::HeaderValue::from_str(&format!(
-        "attachment; filename=\"{filename}\""
-    )) {
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+    {
         headers.insert(header::CONTENT_DISPOSITION, value);
     }
     headers.insert(
@@ -777,9 +773,7 @@ pub async fn reset_password(
     Json(_body): Json<ResetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if id == actor.id {
-        return Err(AppError::bad(
-            "Własne hasło zmień w sekcji „Moje konto”.",
-        ));
+        return Err(AppError::bad("Własne hasło zmień w sekcji „Moje konto”."));
     }
 
     let login: Option<String> = sqlx::query_scalar("SELECT login FROM users WHERE id = ?")
@@ -791,13 +785,11 @@ pub async fn reset_password(
     let password = security::random_password(14);
     let hash = hash_password_async(password.clone()).await?;
 
-    sqlx::query(
-        "UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?",
-    )
-    .bind(hash)
-    .bind(id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?")
+        .bind(hash)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     sqlx::query("DELETE FROM sessions WHERE user_id = ?")
         .bind(id)
@@ -851,9 +843,7 @@ pub async fn update_settings(
     if let Some(name) = body.cafeteria_name {
         let name = name.trim().to_string();
         if name.is_empty() || name.chars().count() > 80 {
-            return Err(AppError::bad(
-                "Nazwa stołówki musi mieć od 1 do 80 znaków.",
-            ));
+            return Err(AppError::bad("Nazwa stołówki musi mieć od 1 do 80 znaków."));
         }
         updates.push(("cafeteria_name".to_string(), name));
     }

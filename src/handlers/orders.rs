@@ -189,8 +189,9 @@ pub async fn create_order(
     }
 
     let ids: Vec<i64> = quantities.keys().copied().collect();
-    let mut builder =
-        QueryBuilder::<Sqlite>::new("SELECT id, name, price_cents, available FROM menu_items WHERE id IN (");
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT id, name, price_cents, available FROM menu_items WHERE id IN (",
+    );
     {
         let mut separated = builder.separated(", ");
         for id in &ids {
@@ -249,7 +250,9 @@ pub async fn create_order(
         }
     }
     if code.is_empty() {
-        return Err(AppError::internal("Nie udało się wygenerować kodu odbioru."));
+        return Err(AppError::internal(
+            "Nie udało się wygenerować kodu odbioru.",
+        ));
     }
 
     let mut qr_token = String::new();
@@ -360,13 +363,12 @@ pub async fn order_qr(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT qr_token, status FROM orders WHERE id = ? AND user_id = ?",
-    )
-    .bind(id)
-    .bind(user.id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT qr_token, status FROM orders WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(user.id)
+            .fetch_optional(&state.db)
+            .await?;
 
     let (token, status) = row.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
     if status == "cancelled" {
@@ -385,10 +387,7 @@ pub async fn order_qr(
 
     Ok((
         [
-            (
-                header::CONTENT_TYPE,
-                "image/svg+xml; charset=utf-8",
-            ),
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
         svg,
@@ -401,9 +400,9 @@ pub async fn staff_orders(
 ) -> Result<Json<Vec<OrderView>>, AppError> {
     let scope = query.scope.as_deref().unwrap_or("open");
     let sql = match scope {
-        "all" => format!(
-            "{ORDER_SELECT} ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
-        ),
+        "all" => {
+            format!("{ORDER_SELECT} ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300")
+        }
         "today" => format!(
             "{ORDER_SELECT} WHERE o.created_at >= ? ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
         ),
@@ -440,13 +439,12 @@ pub async fn staff_pickup(
     let token = raw.strip_prefix("ZSL:").unwrap_or(raw).trim();
     let normalized_code = token.to_uppercase();
 
-    let id: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM orders WHERE qr_token = ? OR code = ? LIMIT 1",
-    )
-    .bind(token)
-    .bind(&normalized_code)
-    .fetch_optional(&state.db)
-    .await?;
+    let id: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM orders WHERE qr_token = ? OR code = ? LIMIT 1")
+            .bind(token)
+            .bind(&normalized_code)
+            .fetch_optional(&state.db)
+            .await?;
 
     let id = id.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia o tym kodzie."))?;
     let order = load_order(&state, id).await?;
@@ -493,12 +491,11 @@ pub async fn staff_update_order(
         }
     }
 
-    let current: Option<(String, String)> = sqlx::query_as(
-        "SELECT status, payment_status FROM orders WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let current: Option<(String, String)> =
+        sqlx::query_as("SELECT status, payment_status FROM orders WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
     let (old_status, old_payment) =
         current.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
 
@@ -560,9 +557,7 @@ pub async fn staff_update_order(
 }
 
 async fn load_order(state: &Arc<AppState>, id: i64) -> Result<OrderView, AppError> {
-    let sql = format!(
-        "{ORDER_SELECT} WHERE o.id = ? ORDER BY oi.id ASC"
-    );
+    let sql = format!("{ORDER_SELECT} WHERE o.id = ? ORDER BY oi.id ASC");
     let rows = sqlx::query_as::<_, OrderRow>(&sql)
         .bind(id)
         .fetch_all(&state.db)

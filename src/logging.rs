@@ -38,9 +38,7 @@ pub fn init() -> Result<LogGuard, Box<dyn std::error::Error>> {
         )
         .init();
 
-    Ok(LogGuard {
-        _file_guard: guard,
-    })
+    Ok(LogGuard { _file_guard: guard })
 }
 
 /// Loguje żądania HTTP. Zapisywany jest wyłącznie czas, metoda, ścieżka bez

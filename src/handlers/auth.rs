@@ -162,7 +162,13 @@ pub async fn login(
         .execute(&state.db)
         .await?;
 
-    db::audit(&state.db, Some(row.id), "login", "Logowanie zakończone sukcesem").await;
+    db::audit(
+        &state.db,
+        Some(row.id),
+        "login",
+        "Logowanie zakończone sukcesem",
+    )
+    .await;
     tracing::info!(user_id = row.id, role = %row.role, "Logowanie zakończone sukcesem");
 
     let mut headers = HeaderMap::new();
@@ -337,7 +343,13 @@ pub async fn change_password(
         db::remove_admin_start_file();
     }
 
-    db::audit(&state.db, Some(user.id), "password_changed", "Hasło zostało zmienione").await;
+    db::audit(
+        &state.db,
+        Some(user.id),
+        "password_changed",
+        "Hasło zostało zmienione",
+    )
+    .await;
     tracing::info!(user_id = user.id, role = %user.role, "Hasło zostało zmienione");
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -346,9 +358,7 @@ pub async fn change_password(
 fn validate_new_password(new_password: &str, current_password: &str) -> Result<(), AppError> {
     let length = new_password.chars().count();
     if !(10..=128).contains(&length) {
-        return Err(AppError::bad(
-            "Nowe hasło musi mieć od 10 do 128 znaków.",
-        ));
+        return Err(AppError::bad("Nowe hasło musi mieć od 10 do 128 znaków."));
     }
     if !new_password.chars().any(|c| c.is_ascii_alphabetic())
         || !new_password.chars().any(|c| c.is_ascii_digit())

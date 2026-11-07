@@ -75,18 +75,17 @@ pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 
 pub fn session_cookie(token: &str, hours: i64, secure: bool) -> Result<HeaderValue, AppError> {
     let max_age = hours.max(1) * 3600;
-    let mut value = format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}"
-    );
+    let mut value =
+        format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}");
     if secure {
         value.push_str("; Secure");
     }
-    HeaderValue::from_str(&value).map_err(|_| AppError::internal("Nie udało się ustawić ciasteczka"))
+    HeaderValue::from_str(&value)
+        .map_err(|_| AppError::internal("Nie udało się ustawić ciasteczka"))
 }
 
 pub fn clear_session_cookie(secure: bool) -> Result<HeaderValue, AppError> {
-    let mut value =
-        format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    let mut value = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
     if secure {
         value.push_str("; Secure");
     }
@@ -205,8 +204,7 @@ fn check_password_change_window(path: &str, must_change_password: bool) -> Resul
     }
 
     let path = normalized_api_path(path);
-    let allowed =
-        path == "/auth/change-password" || path == "/auth/me" || path == "/auth/logout";
+    let allowed = path == "/auth/change-password" || path == "/auth/me" || path == "/auth/logout";
     if allowed {
         Ok(())
     } else {
@@ -313,7 +311,9 @@ pub async fn auth_middleware(
     let now = util::now();
 
     let Some(row) = load_session_row(&state, &token_hash).await? else {
-        return Err(AppError::unauthorized("Sesja wygasła. Zaloguj się ponownie."));
+        return Err(AppError::unauthorized(
+            "Sesja wygasła. Zaloguj się ponownie.",
+        ));
     };
 
     if row.expires_at <= now || !row.active {
@@ -354,11 +354,7 @@ fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-async fn role_guard(
-    request: Request,
-    next: Next,
-    allowed: &[&str],
-) -> Result<Response, AppError> {
+async fn role_guard(request: Request, next: Next, allowed: &[&str]) -> Result<Response, AppError> {
     let user = request
         .extensions()
         .get::<AuthUser>()
@@ -422,7 +418,10 @@ impl LoginLimiter {
 
     pub fn check(&self, ip: IpAddr, login: &str) -> Result<(), u64> {
         let now = Instant::now();
-        let mut map = self.inner.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut map = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
 
         if map.len() > 10_000 {
             map.retain(|_, attempt| {
@@ -436,8 +435,8 @@ impl LoginLimiter {
             if let Some(attempt) = map.get(&key) {
                 if let Some(until) = attempt.locked_until {
                     if until > now {
-                        retry_after = retry_after
-                            .max(until.saturating_duration_since(now).as_secs().max(1));
+                        retry_after =
+                            retry_after.max(until.saturating_duration_since(now).as_secs().max(1));
                         continue;
                     }
                 }
@@ -461,7 +460,10 @@ impl LoginLimiter {
 
     fn failure_for_key(&self, key: String, max_failures: u32) {
         let now = Instant::now();
-        let mut map = self.inner.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut map = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let attempt = map.entry(key).or_insert(Attempt {
             failures: 0,
             window_start: now,
@@ -481,7 +483,10 @@ impl LoginLimiter {
     }
 
     pub fn success(&self, ip: IpAddr, login: &str) {
-        let mut map = self.inner.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut map = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         map.remove(&Self::ip_key(ip));
         map.remove(&Self::login_key(login));
     }
@@ -543,7 +548,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         assert_eq!(bearer_token(&headers), None);
 
-        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer abc.def"));
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer abc.def"),
+        );
         assert_eq!(bearer_token(&headers).as_deref(), Some("abc.def"));
 
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic abc"));
