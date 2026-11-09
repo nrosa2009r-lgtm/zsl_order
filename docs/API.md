@@ -45,27 +45,60 @@ Set-Cookie: zsl_session=<64 znaki hex>; Path=/; HttpOnly; SameSite=Strict; Max-A
   cross-site.
 - Czas życia: `session_hours` (domyślnie 12 h).
 
+### Token dostępowy JWT (`Authorization: Bearer`)
+
+Oprócz sesji ciasteczkowej aplikacja wydaje krótkotrwałe tokeny **JWT**
+dla klientów API (skrypty, integracje, aplikacje mobilne). Token uzyskuje
+się przez `POST /api/auth/token` z tym samym loginem i hasłem co przy
+logowaniu.
+
+```http
+Authorization: Bearer <access_token>
+```
+
+- Algorytm: **HS256**, sekret HMAC w pliku `jwt.key` (0600, generowany
+  przy pierwszym starcie, poza repozytorium).
+- Czas życia: **15 minut** (`expires_in: 900`). Odświeżanie odbywa się
+  przez ponowne wywołanie `POST /api/auth/token`.
+- Claims: `sub` (ID konta), `login`, `role`, `code`, `jti`, `iss`
+  (`zsl-order`), `aud` (`zsl-order-api`), `iat`, `exp`. Brak danych
+  osobowych.
+- Każdy token ma odpowiadający rekord w tabeli `sessions`
+  (`token_hash = SHA-256("jwt:" + jti)`), więc wylogowanie, zmiana hasła,
+  zmiana roli, dezaktywacja konta i twarde usunięcie konta unieważniają
+  token **natychmiast**, bez czekania na `exp`.
+- `POST /api/auth/logout` z nagłówkiem Bearer usuwa wyłącznie tę sesję
+  tokenu; nie usuwa sesji ciasteczkowej przeglądarki.
+- Dla żądań Bearer **nie trzeba** wysyłać `X-CSRF-Token` — przeglądarka
+  nie dołącza nagłówka `Authorization` automatycznie, więc klasyczny CSRF
+  nie ma zastosowania. `origin_guard` nadal obowiązuje dla metod
+  zmieniających stan (np. obcy `Origin` → `403`).
+- Token należy przesyłać wyłącznie po HTTPS i trzymać poza logami,
+  URL-ami i repozytoriami. Nie ma mechanizmu refresh tokenów.
+
 ### Token CSRF
 
 Odpowiedź logowania oraz `GET /api/auth/me` zawierają `csrf_token`
 (64 znaki hex). Token jest przypisany do sesji.
 
 Dla każdej metody zmieniającej stan (`POST`, `PUT`, `PATCH`, `DELETE`)
-należy dodać nagłówek:
+w trybie **ciasteczkowym** należy dodać nagłówek:
 
 ```http
 X-CSRF-Token: <csrf_token>
 ```
 
 Brak lub niezgodność → `403 forbidden`. Token jest porównywany w czasie
-stałym. Dodatkowo działa `origin_guard`:
+stałym. W trybie Bearer CSRF nie jest wymagany (patrz wyżej). Dodatkowo
+działa `origin_guard` dla obu trybów:
 
 - `Sec-Fetch-Site: cross-site` → `403`,
 - jeśli nagłówek `Origin` jest obecny, jego host musi być zgodny z `Host`
   (`null`, pusty lub inny host → `403`).
 
-Żądania bez `Origin` (np. `curl`, klient API) są dozwolone, ale nadal
-wymagają CSRF dla metod zmieniających stan.
+Żądania bez `Origin` (np. `curl`, klient API) są dozwolone, ale w trybie
+ciasteczkowym nadal wymagają CSRF dla metod zmieniających stan. Klient
+Bearer nie wysyła CSRF.
 
 ### Wymuszona zmiana hasła
 
@@ -84,17 +117,24 @@ HTTP/1.1 403 Forbidden
 
 ### Wylogowanie i unieważnianie sesji
 
-- `POST /api/auth/logout` usuwa bieżącą sesję.
-- Zmiana hasła usuwa wszystkie pozostałe sesje użytkownika.
-- Dezaktywacja konta lub zmiana roli usuwa wszystkie sesje konta.
-- Wygasłe sesje są usuwane przy logowaniu i starcie aplikacji.
+- `POST /api/auth/logout` usuwa bieżącą sesję (ciasteczkową albo Bearer).
+- Zmiana hasła usuwa wszystkie pozostałe sesje użytkownika, w tym sesje
+  powiązane z tokenami JWT.
+- Dezaktywacja konta, zmiana roli lub twarde usunięcie konta usuwa
+  wszystkie sesje konta i unieważnia wydane tokeny JWT.
+- Wygasłe sesje (także wpisy JWT) są usuwane przy logowaniu, wydaniu
+  tokenu i starcie aplikacji.
+- Usunięcie pliku `jwt.key` unieważnia **wszystkie** tokeny JWT, ale nie
+  wpływa na sesje ciasteczkowe.
 
 ## Role i macierz endpointów
 
 | Metoda | Ścieżka | Wymagana rola | CSRF |
 | --- | --- | --- | --- |
 | `GET` | `/api/public/info` | — | nie |
+| `GET` | `/api/healthz` | — | nie |
 | `POST` | `/api/auth/login` | — | nie (chroni origin guard) |
+| `POST` | `/api/auth/token` | — | nie (Bearer; chroni origin guard) |
 | `GET` | `/api/auth/me` | zalogowany | nie |
 | `POST` | `/api/auth/logout` | zalogowany | tak |
 | `POST` | `/api/auth/change-password` | zalogowany | tak |
@@ -115,12 +155,17 @@ HTTP/1.1 403 Forbidden
 | `GET` | `/api/admin/users` | `admin` | nie |
 | `GET` | `/api/admin/users/export.csv` | `admin` | nie |
 | `POST` | `/api/admin/users/generate` | `admin` | tak |
+| `POST` | `/api/admin/users/import` | `admin` | tak |
 | `PATCH` | `/api/admin/users/:id` | `admin` | tak |
 | `DELETE` | `/api/admin/users/:id` | `admin` | tak |
 | `POST` | `/api/admin/users/:id/reset-password` | `admin` | tak |
+| `DELETE` | `/api/admin/users/:id/sessions` | `admin` | tak |
 | `GET` | `/api/admin/settings` | `admin` | nie |
 | `PUT` | `/api/admin/settings` | `admin` | tak |
 | `GET` | `/api/admin/audit` | `admin` | nie |
+
+Uwaga: kolumna **CSRF** dotyczy trybu ciasteczkowego. Żądania z
+`Authorization: Bearer` nie wymagają `X-CSRF-Token`.
 
 Uwaga: endpointy `/api/staff/*` są wspólne dla kuchni i administratora.
 Administrator używa ich do zarządzania menu i zamówieniami; kuchnia ma
@@ -140,6 +185,18 @@ Bez uwierzytelnienia. Informacje potrzebne na stronie logowania.
   "ordering_enabled": true,
   "payment_info": "Płatność przy odbiorze: gotówka lub karta."
 }
+```
+
+### `GET /api/healthz`
+
+Publiczny test żywotności dla monitoringu. Sprawdza, czy aplikacja i baza
+SQLite odpowiadają. Nie wymaga logowania i nie zwraca wersji ani
+konfiguracji.
+
+**Odpowiedź 200**
+
+```json
+{"status": "ok"}
 ```
 
 ### `POST /api/auth/login`
@@ -177,6 +234,53 @@ Nagłówek `Set-Cookie` ustawia sesję.
 Limity wejścia: login ≤ 64 znaki, hasło ≤ 256 znaków. Login jest
 przycinany z białych znaków.
 
+### `POST /api/auth/token`
+
+Wydaje krótkotrwały token JWT do uwierzytelniania API przez
+`Authorization: Bearer`. Nie ustawia ciasteczka. Wymagane są te same
+dane logowania i te same limity co przy `POST /api/auth/login`
+(wspólny limiter prób).
+
+```json
+{
+  "login": "s-a7k2m9p4qx",
+  "password": "TwojeHaslo123"
+}
+```
+
+**Odpowiedź 200**
+
+```json
+{
+  "access_token": "<JWT HS256>",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "user": {
+    "login": "s-a7k2m9p4qx",
+    "role": "student",
+    "display_code": "UCZ-AB12C",
+    "must_change_password": false
+  }
+}
+```
+
+- `expires_in` to liczba sekund (15 minut).
+- Token jest podpisany HS256 i zawiera `iss=zsl-order`,
+  `aud=zsl-order-api`, `jti`, `iat`, `exp`; nie zawiera danych osobowych.
+- Wydanie tokenu tworzy wpis w `sessions`; jego usunięcie (logout,
+  zmiana hasła, dezaktywacja konta) natychmiast unieważnia token.
+- Konto z `must_change_password = true` otrzyma token, ale będzie mogło
+  wywołać wyłącznie `me`, `logout` i `change-password` — tak samo jak
+  w trybie ciasteczkowym.
+- Każde wydanie tokenu jest audytowane jako `token_issued`.
+
+**Błędy**
+
+| Status | `code` | Opis |
+| --- | --- | --- |
+| 401 | `unauthorized` | nieprawidłowy login/hasło lub konto nieaktywne |
+| 429 | `too_many_requests` | rate limit; nagłówek `Retry-After` w sekundach |
+
 ## Sesja i hasło
 
 ### `GET /api/auth/me`
@@ -197,7 +301,12 @@ Zwraca bieżącego użytkownika i token CSRF (przydatne po odświeżeniu strony)
 
 ### `POST /api/auth/logout`
 
-Puste ciało `{}` lub brak ciała. Zwraca `{"ok": true}` i czyści ciasteczko.
+Puste ciało `{}` lub brak ciała. Zwraca `{"ok": true}`.
+
+- W trybie ciasteczkowym czyści ciasteczko i usuwa sesję.
+- W trybie Bearer usuwa rekord sesji powiązany z tokenem JWT; token
+  natychmiast przestaje działać. Nagłówek `Authorization` jest wymagany,
+  CSRF nie.
 
 ### `POST /api/auth/change-password`
 
@@ -597,6 +706,46 @@ Eksport jest zapisywany w audycie jako `users_exported`.
 **Hasła są zwracane wyłącznie w tej odpowiedzi** — nie są przechowywane
 w postaci jawnej. Nowe konta mają `must_change_password = true`.
 
+### `POST /api/admin/users/import`
+
+Import uczniów z CSV. Treść żądania to czysty tekst CSV
+(`Content-Type: text/csv`), jedna grupa w wierszu:
+
+```text
+klasa;liczba
+1A;30
+2B;25
+```
+
+- format `klasa;liczba` (akceptowany też przecinek), np. `1A;30`,
+- bez imion i nazwisk,
+- nazwa klasy/grupy: 1–16 znaków (litery ASCII, cyfry, `-`, `_`),
+- 1–100 kont na grupę, maks. 200 na jedno żądanie,
+- wiersze zaczynające się od `#` są komentarzami, nagłówek jest pomijany.
+
+Klasa trafia do loginu (`s-1a-...`) i kodu konta (`UCZ-1A-...`), więc można
+ją odfiltrować w wyszukiwaniu kont. Odpowiedź zawiera konta z hasłami
+**tylko ten jeden raz** (jak przy generowaniu) oraz podsumowanie grup.
+Audyt zapisuje `users_imported`.
+
+**Odpowiedź 200**
+
+```json
+{
+  "accounts": [
+    {
+      "login": "s-1a-a7k2m9p4qx",
+      "password": "Xk7...",
+      "role": "student",
+      "display_code": "UCZ-1A-AB12C",
+      "group": "1A"
+    }
+  ],
+  "groups": [{"group": "1A", "count": 30}],
+  "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
+}
+```
+
 ### `PATCH /api/admin/users/:id`
 
 ```json
@@ -656,6 +805,20 @@ Puste ciało `{}`. Zwraca nowe hasło **tylko raz**:
 Reset ustawia `must_change_password = true` i usuwa wszystkie sesje konta.
 Nie można resetować własnego hasła (`400`); własne hasło zmienia się przez
 `/api/auth/change-password`. Brak konta → `404`.
+
+### `DELETE /api/admin/users/:id/sessions`
+
+Unieważnia wszystkie sesje wybranego konta (ciasteczka i tokeny JWT).
+Przydatne po zgubieniu urządzenia lub podejrzeniu kradzieży sesji. Nie
+można użyć wobec własnego konta (`400`) — do tego służy
+`POST /api/auth/logout`. Brak konta → `404`. Audyt zapisuje
+`sessions_revoked`.
+
+**Odpowiedź 200**
+
+```json
+{"ok": true, "revoked": 2}
+```
 
 ### `GET /api/admin/settings`
 
@@ -724,6 +887,17 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   "role": "student",
   "display_code": "UCZ-AB12C",
   "must_change_password": false
+}
+```
+
+### `TokenResponse`
+
+```json
+{
+  "access_token": "<JWT>",
+  "token_type": "Bearer",
+  "expires_in": 900,
+  "user": { "login": "...", "role": "...", "display_code": "...", "must_change_password": false }
 }
 ```
 
@@ -854,8 +1028,9 @@ budowane przez `QueryBuilder` z bindowaniem wartości.
 ## Limity i rate limiting
 
 - Ciało żądania: **64 KiB** (wszystkie ścieżki).
-- Logowanie: 10 nieudanych prób na login i 80 na IP w oknie 10 minut →
-  blokada 15 minut. Limiter działa w pamięci procesu.
+- Logowanie i wydanie tokenu JWT: 10 nieudanych prób na login i 80 na IP
+  w oknie 10 minut → blokada 15 minut. Limiter działa w pamięci procesu
+  i jest wspólny dla `/api/auth/login` oraz `/api/auth/token`.
 - Zamówienia: maks. `max_open_orders` (1–10, domyślnie 3) otwartych na
   użytkownika; maks. `max_order_items` pozycji w zamówieniu (1–50,
   domyślnie 20).
@@ -894,7 +1069,21 @@ curl -s -b /tmp/student.cookies -H 'Content-Type: application/json' \
   -H "X-CSRF-Token: $STUDENT_CSRF" \
   -d '{"items":[{"menu_item_id":2,"quantity":1}],"payment_method":"cash","pickup_time":"12:30"}' \
   "$BASE/api/student/orders" | jq .
+
+# 5. Wariant API: token JWT i żądanie Bearer (bez CSRF)
+TOKEN_JSON=$(curl -s -H 'Content-Type: application/json' \
+  -d '{"login":"s-a7k2m9p4qx","password":"TwojeHaslo123"}' \
+  "$BASE/api/auth/token")
+TOKEN=$(printf '%s' "$TOKEN_JSON" | jq -r '.access_token')
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/student/orders" | jq .
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/auth/logout"
+# od tej chwili token zwraca 401 (sesja JWT usunięta)
 ```
 
 Po restarcie serwera limiter logowania jest pusty, a sesje pozostają ważne
-do czasu wygaśnięcia (są w bazie).
+do czasu wygaśnięcia (są w bazie). Tokeny JWT pozostają ważne do `exp`
+lub do unieważnienia; usunięcie `jwt.key` unieważnia wszystkie tokeny.

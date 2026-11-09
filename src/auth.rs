@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::error::AppError;
 use crate::security;
 use crate::state::AppState;
@@ -386,37 +387,34 @@ struct Attempt {
     locked_until: Option<Instant>,
 }
 
-/// Limiter prób logowania. Działa w pamięci (bez zapisu w bazie) i ogranicza
-/// zarówno próby z jednego adresu IP, jak i próby na jedno konto. Klucz
-/// loginu jest pseudonimowy — nie zapisujemy go nigdzie trwale.
-pub struct LoginLimiter {
+/// Ogólny limiter nieudanych prób. `primary` to zwykle konto (niższy limit),
+/// a `secondary` adres IP (wyższy limit, bo sieć szkolna współdzieli jeden
+/// publiczny adres). Wpisy są pseudonimowe i trzymane wyłącznie w pamięci.
+pub struct AttemptLimiter {
     inner: Mutex<HashMap<String, Attempt>>,
-    max_login_failures: u32,
-    max_ip_failures: u32,
+    primary_max_failures: u32,
+    secondary_max_failures: u32,
     window: Duration,
     lockout: Duration,
 }
 
-impl LoginLimiter {
-    pub fn new() -> Self {
+impl AttemptLimiter {
+    pub fn new(
+        primary_max_failures: u32,
+        secondary_max_failures: u32,
+        window_minutes: i64,
+        lockout_minutes: i64,
+    ) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
-            max_login_failures: 10,
-            max_ip_failures: 80,
-            window: Duration::from_secs(10 * 60),
-            lockout: Duration::from_secs(15 * 60),
+            primary_max_failures: primary_max_failures.max(1),
+            secondary_max_failures: secondary_max_failures.max(1),
+            window: Duration::from_secs(window_minutes.max(1) as u64 * 60),
+            lockout: Duration::from_secs(lockout_minutes.max(1) as u64 * 60),
         }
     }
 
-    fn ip_key(ip: IpAddr) -> String {
-        format!("ip:{ip}")
-    }
-
-    fn login_key(login: &str) -> String {
-        format!("login:{}", login.to_ascii_lowercase())
-    }
-
-    pub fn check(&self, ip: IpAddr, login: &str) -> Result<(), u64> {
+    pub fn check(&self, primary: &str, secondary: &str) -> Result<(), u64> {
         let now = Instant::now();
         let mut map = self
             .inner
@@ -431,17 +429,17 @@ impl LoginLimiter {
         }
 
         let mut retry_after = 0u64;
-        for key in [Self::ip_key(ip), Self::login_key(login)] {
-            if let Some(attempt) = map.get(&key) {
-                if let Some(until) = attempt.locked_until {
-                    if until > now {
-                        retry_after =
-                            retry_after.max(until.saturating_duration_since(now).as_secs().max(1));
-                        continue;
-                    }
+        for key in [primary, secondary] {
+            if let Some(attempt) = map.get(key) {
+                if let Some(until) = attempt.locked_until
+                    && until > now
+                {
+                    retry_after =
+                        retry_after.max(until.saturating_duration_since(now).as_secs().max(1));
+                    continue;
                 }
                 if now.saturating_duration_since(attempt.window_start) >= self.window {
-                    map.remove(&key);
+                    map.remove(key);
                 }
             }
         }
@@ -453,18 +451,18 @@ impl LoginLimiter {
         }
     }
 
-    pub fn failure(&self, ip: IpAddr, login: &str) {
-        self.failure_for_key(Self::ip_key(ip), self.max_ip_failures);
-        self.failure_for_key(Self::login_key(login), self.max_login_failures);
+    pub fn failure(&self, primary: &str, secondary: &str) {
+        self.failure_for_key(primary, self.primary_max_failures);
+        self.failure_for_key(secondary, self.secondary_max_failures);
     }
 
-    fn failure_for_key(&self, key: String, max_failures: u32) {
+    fn failure_for_key(&self, key: &str, max_failures: u32) {
         let now = Instant::now();
         let mut map = self
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let attempt = map.entry(key).or_insert(Attempt {
+        let attempt = map.entry(key.to_string()).or_insert(Attempt {
             failures: 0,
             window_start: now,
             locked_until: None,
@@ -482,19 +480,104 @@ impl LoginLimiter {
         }
     }
 
-    pub fn success(&self, ip: IpAddr, login: &str) {
+    pub fn success(&self, primary: &str, secondary: &str) {
         let mut map = self
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        map.remove(&Self::ip_key(ip));
-        map.remove(&Self::login_key(login));
+        map.remove(primary);
+        map.remove(secondary);
+    }
+}
+
+/// Limiter logowania: główny limit per konto, wysoki limit per IP.
+pub struct LoginLimiter {
+    limiter: AttemptLimiter,
+}
+
+impl LoginLimiter {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            limiter: AttemptLimiter::new(
+                config.login_max_failures,
+                config.login_ip_max_failures,
+                config.login_window_minutes,
+                config.login_lockout_minutes,
+            ),
+        }
+    }
+
+    fn ip_key(ip: IpAddr) -> String {
+        format!("ip:{ip}")
+    }
+
+    fn login_key(login: &str) -> String {
+        format!("login:{}", login.to_ascii_lowercase())
+    }
+
+    pub fn check(&self, ip: IpAddr, login: &str) -> Result<(), u64> {
+        self.limiter
+            .check(&Self::login_key(login), &Self::ip_key(ip))
+    }
+
+    pub fn failure(&self, ip: IpAddr, login: &str) {
+        self.limiter
+            .failure(&Self::login_key(login), &Self::ip_key(ip));
+    }
+
+    pub fn success(&self, ip: IpAddr, login: &str) {
+        self.limiter
+            .success(&Self::login_key(login), &Self::ip_key(ip));
     }
 }
 
 impl Default for LoginLimiter {
     fn default() -> Self {
-        Self::new()
+        Self {
+            limiter: AttemptLimiter::new(10, 300, 10, 15),
+        }
+    }
+}
+
+/// Limiter odczytu kodu odbioru: główny limit per konto personelu,
+/// wysoki limit per IP.
+pub struct PickupLimiter {
+    limiter: AttemptLimiter,
+}
+
+impl PickupLimiter {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            limiter: AttemptLimiter::new(
+                config.pickup_max_failures,
+                config.pickup_ip_max_failures,
+                config.pickup_window_minutes,
+                config.pickup_lockout_minutes,
+            ),
+        }
+    }
+
+    fn user_key(user_id: i64) -> String {
+        format!("pickup-user:{user_id}")
+    }
+
+    fn ip_key(ip: IpAddr) -> String {
+        format!("pickup-ip:{ip}")
+    }
+
+    pub fn check(&self, user_id: i64, ip: IpAddr) -> Result<(), u64> {
+        self.limiter
+            .check(&Self::user_key(user_id), &Self::ip_key(ip))
+    }
+
+    pub fn failure(&self, user_id: i64, ip: IpAddr) {
+        self.limiter
+            .failure(&Self::user_key(user_id), &Self::ip_key(ip));
+    }
+
+    pub fn success(&self, user_id: i64, ip: IpAddr) {
+        self.limiter
+            .success(&Self::user_key(user_id), &Self::ip_key(ip));
     }
 }
 
@@ -556,5 +639,51 @@ mod tests {
 
         headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic abc"));
         assert_eq!(bearer_token(&headers), None);
+    }
+
+    #[test]
+    fn login_limiter_locks_account_before_shared_ip() {
+        let limiter = LoginLimiter {
+            limiter: AttemptLimiter::new(3, 100, 10, 15),
+        };
+        let ip: IpAddr = "198.51.100.10".parse().unwrap();
+
+        limiter.failure(ip, "s-uczen");
+        limiter.failure(ip, "s-uczen");
+        assert!(limiter.check(ip, "s-uczen").is_ok());
+        limiter.failure(ip, "s-uczen");
+
+        assert!(limiter.check(ip, "s-uczen").is_err());
+        // Inny uczeń z tego samego (szkolnego) adresu IP nadal może się logować.
+        assert!(limiter.check(ip, "s-inny").is_ok());
+
+        limiter.success(ip, "s-uczen");
+        assert!(limiter.check(ip, "s-uczen").is_ok());
+    }
+
+    #[test]
+    fn login_limiter_has_high_but_finite_ip_limit() {
+        let limiter = LoginLimiter {
+            limiter: AttemptLimiter::new(10, 3, 10, 15),
+        };
+        let ip: IpAddr = "198.51.100.20".parse().unwrap();
+
+        for index in 0..3 {
+            limiter.failure(ip, &format!("s-{index}"));
+        }
+        assert!(limiter.check(ip, "s-nowy").is_err());
+    }
+
+    #[test]
+    fn pickup_limiter_is_independent_per_staff_account() {
+        let limiter = PickupLimiter {
+            limiter: AttemptLimiter::new(2, 100, 10, 15),
+        };
+        let ip: IpAddr = "198.51.100.30".parse().unwrap();
+
+        limiter.failure(7, ip);
+        limiter.failure(7, ip);
+        assert!(limiter.check(7, ip).is_err());
+        assert!(limiter.check(8, ip).is_ok());
     }
 }

@@ -1,5 +1,13 @@
 {
   "max_connections": 16,
   "db_url": "sqlite://baza.db",
-  "session_hours": 12
+  "session_hours": 12,
+  "login_max_failures": 10,
+  "login_ip_max_failures": 300,
+  "login_window_minutes": 10,
+  "login_lockout_minutes": 15,
+  "pickup_max_failures": 8,
+  "pickup_ip_max_failures": 100,
+  "pickup_window_minutes": 10,
+  "pickup_lockout_minutes": 15
 }

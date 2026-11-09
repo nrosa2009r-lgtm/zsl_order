@@ -29,7 +29,7 @@ API znajdują się w [API.md](API.md), a mechanizmy ochrony w
 │ Axum Router (src/main.rs)                                    │
 │  client_ip → headers → origin_guard → routes                 │
 │                                                              │
-│  publiczne:  /api/auth/login, /api/public/info               │
+│  publiczne:  /api/auth/login, /api/public/info, /api/healthz │
 │  chronione:  auth_middleware (sesja + CSRF + forced change)  │
 │              ├─ /api/auth/*                                  │
 │              ├─ /api/student/*  + require_student            │
@@ -65,7 +65,7 @@ rozdzielanie usług.
 | `src/util.rs` | czas UTC, początek dnia lokalnego, data/godzina lokalna, walidacja `HH:MM` |
 | `src/error.rs` | `AppError`, spójne odpowiedzi JSON, mapowanie błędów SQL/Argon2/IO, logowanie błędów wewnętrznych |
 | `src/handlers/auth.rs` | login, wydanie tokenu JWT, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
-| `src/handlers/public.rs` | publiczne informacje o stołówce |
+| `src/handlers/public.rs` | publiczne informacje o stołówce i `/api/healthz` |
 | `src/handlers/menu.rs` | menu ucznia i personelu, CRUD pozycji |
 | `src/handlers/orders.rs` | składanie/anulowanie zamówień, QR, kolejka kuchni, pickup, zmiana statusów |
 | `src/handlers/admin.rs` | statystyki, aktywność, konta, generowanie, reset haseł, usuwanie kont, eksport CSV, ustawienia, audyt |

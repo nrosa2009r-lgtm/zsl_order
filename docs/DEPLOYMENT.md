@@ -467,7 +467,7 @@ sudo rsync -a --delete frontend/ /opt/zsl_order/frontend/
 # 4. Start i weryfikacja
 sudo systemctl start zsl_order
 sudo systemctl status zsl_order
-curl -fsS https://zsl.example.edu/api/public/info >/dev/null && echo OK
+curl -fsS https://zsl.example.edu/api/healthz >/dev/null && echo OK
 ```
 
 Schemat jest idempotentny (`CREATE TABLE/INDEX IF NOT EXISTS`), więc
@@ -485,7 +485,7 @@ minutach).
 Minimum:
 
 - proces i port: `systemctl status zsl_order`, `ss -ltnp | grep 3000`,
-- health check: `GET /api/public/info` → 200,
+- health check: `GET /api/healthz` → 200 (sprawdza też bazę),
 - miejsce na dysku (baza + WAL + `logs/` + backupy),
 - błędy w `journalctl -u zsl_order`,
 - dzienne logi w `/opt/zsl_order/data/logs/` (rotacja i retencja),
@@ -495,7 +495,7 @@ Minimum:
 Przykładowy wpis w monitoringu HTTP:
 
 ```text
-GET https://zsl.example.edu/api/public/info
+GET https://zsl.example.edu/api/healthz
 oczekiwany status: 200
 oczekiwany content-type: application/json
 ```
@@ -540,6 +540,7 @@ cat admin_start.txt
 
 # Publiczny endpoint
 curl -fsS http://127.0.0.1:38080/api/public/info | jq .
+curl -fsS http://127.0.0.1:38080/api/healthz | jq .
 
 # Logowanie admina (podstaw dane z admin_start.txt)
 curl -s -c cookies.txt -H 'Content-Type: application/json' \

@@ -306,7 +306,12 @@ pub async fn change_password(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    validate_new_password(&body.new_password, &body.current_password)?;
+    validate_new_password(
+        &body.new_password,
+        &body.current_password,
+        &user.login,
+        &user.role,
+    )?;
 
     let hash: Option<String> = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
         .bind(user.id)
@@ -356,20 +361,121 @@ pub async fn change_password(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-fn validate_new_password(new_password: &str, current_password: &str) -> Result<(), AppError> {
+/// Krótka lista najpopularniejszych haseł (małe litery). Nie zastępuje
+/// pełnej listy wycieków, ale blokuje najczęstsze wybory uczniów.
+const COMMON_PASSWORDS: &[&str] = &[
+    "password",
+    "password1",
+    "password123",
+    "haslo",
+    "haslo123",
+    "qwerty",
+    "qwerty12",
+    "qwerty123",
+    "zaq12wsx",
+    "zaq1zaq1",
+    "123456",
+    "1234567",
+    "12345678",
+    "123456789",
+    "1234567890",
+    "abc12345",
+    "admin",
+    "admin123",
+    "administrator",
+    "iloveyou",
+    "letmein",
+    "witam123",
+    "polska123",
+    "szkola123",
+    "uczen123",
+];
+
+fn password_min_length(role: &str) -> usize {
+    // Personel i administrator mają dostęp do danych całej stołówki.
+    if role == "student" { 10 } else { 12 }
+}
+
+fn validate_new_password(
+    new_password: &str,
+    current_password: &str,
+    login: &str,
+    role: &str,
+) -> Result<(), AppError> {
+    let min_length = password_min_length(role);
     let length = new_password.chars().count();
-    if !(10..=128).contains(&length) {
-        return Err(AppError::bad("Nowe hasło musi mieć od 10 do 128 znaków."));
+    if !(min_length..=128).contains(&length) {
+        return Err(AppError::bad(format!(
+            "Nowe hasło musi mieć od {min_length} do 128 znaków."
+        )));
     }
-    if !new_password.chars().any(|c| c.is_ascii_alphabetic())
-        || !new_password.chars().any(|c| c.is_ascii_digit())
-    {
+
+    let lowered = new_password.to_lowercase();
+    let login_lowered = login.trim().to_lowercase();
+    if !login_lowered.is_empty() && (lowered == login_lowered || lowered.contains(&login_lowered)) {
         return Err(AppError::bad(
-            "Nowe hasło musi zawierać co najmniej jedną literę i jedną cyfrę.",
+            "Hasło nie może zawierać loginu ani być z nim identyczne.",
         ));
     }
+
+    if COMMON_PASSWORDS.contains(&lowered.as_str()) {
+        return Err(AppError::bad(
+            "To hasło jest zbyt popularne. Wybierz inne, trudniejsze do odgadnięcia.",
+        ));
+    }
+
     if new_password == current_password {
         return Err(AppError::bad("Nowe hasło musi różnić się od obecnego."));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn student_password_requires_ten_characters() {
+        assert!(
+            validate_new_password("abcdefghij", "inne-haslo-123", "s-uczen", "student").is_ok()
+        );
+        assert!(
+            validate_new_password("abcdefghi", "inne-haslo-123", "s-uczen", "student").is_err()
+        );
+    }
+
+    #[test]
+    fn staff_password_requires_twelve_characters() {
+        assert!(
+            validate_new_password("abcdefghijkl", "inne-haslo-123", "k-kuch", "kitchen").is_ok()
+        );
+        assert!(
+            validate_new_password("abcdefghijk", "inne-haslo-123", "k-kuch", "kitchen").is_err()
+        );
+        assert!(
+            validate_new_password("abcdefghijk", "inne-haslo-123", "a-admin", "admin").is_err()
+        );
+    }
+
+    #[test]
+    fn password_cannot_contain_login() {
+        assert!(
+            validate_new_password("s-uczen-abcdefgh", "inne-haslo-123", "s-uczen", "student")
+                .is_err()
+        );
+        assert!(
+            validate_new_password("S-UCZEN-abcdefgh", "inne-haslo-123", "s-uczen", "student")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn common_passwords_are_rejected() {
+        assert!(
+            validate_new_password("Password123", "inne-haslo-123", "s-uczen", "student").is_err()
+        );
+        assert!(
+            validate_new_password("qwerty123", "inne-haslo-123", "s-uczen", "student").is_err()
+        );
+    }
 }

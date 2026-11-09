@@ -69,6 +69,10 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
   bez zewnętrznych bibliotek.
 - **Eksport CSV metadanych kont** (bez haseł) i **twarde usuwanie kont**
   wraz z historią zamówień i sesjami.
+- **Import uczniów z CSV** w formacie `klasa;liczba` (np. `1A;30`) bez
+  imion i nazwisk; hasła startowe pokazywane wyłącznie raz.
+- **Limity per konto i per IP** (konfigurowalne), limiter prób kodu
+  odbioru, unieważnianie sesji i `/api/healthz` dla monitoringu.
 - **Frontend bez build-stepu i bez CDN**: czysty HTML/CSS/JS, wszystko
   serwowane z tej samej domeny.
 - **SQLite + WAL**: prosta, szybka i łatwa w backupie baza dla jednej
@@ -109,7 +113,7 @@ Axum Router
    ├─ nagłówki bezpieczeństwa (CSP, HSTS, COOP/CORP, …)
    ├─ origin_guard (Sec-Fetch-Site / Origin)
    ├─ limit ciała 64 KiB
-   ├─ /api/auth/login, /api/public/info        (publiczne)
+   ├─ /api/auth/login, /api/public/info, /api/healthz  (publiczne)
    └─ middleware sesji + CSRF                  (chronione)
         ├─ /api/auth/*                        (każda zalogowana rola)
         ├─ /api/student/*                     (student)
@@ -174,7 +178,9 @@ Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
 
 1. Zaloguj się do `/admin` danymi z konsoli/pliku.
 2. Zmień hasło startowe (system wymusi to przed dostępem do panelu).
-3. W zakładce **Konta** wygeneruj konta uczniów i kuchni.
+3. W zakładce **Konta** wygeneruj konta uczniów i kuchni albo zaimportuj
+   uczniów z CSV (`klasa;liczba`, np. `1A;30`). Import nie przyjmuje imion
+   ani nazwisk — klasa trafia do loginu i kodu konta.
 4. **Zapisz jednorazowo wyświetlone hasła** — nie są przechowywane w
    postaci jawnej. Późniejszy eksport CSV zawiera tylko metadane kont
    (bez haseł); hasła można zapisać wyłącznie bezpośrednio po wygenerowaniu
@@ -304,6 +310,19 @@ wtedy, gdy połączenie przyszło z adresu z `TRUSTED_PROXIES`.
 | `max_connections` | `16` | 1–128, rozmiar puli SQLite |
 | `db_url` | `sqlite://baza.db` | ścieżka/URL bazy; akceptowane też `baza.db` |
 | `session_hours` | `12` | 1–720, czas życia sesji |
+| `login_max_failures` | `10` | 3–50, limit nieudanych logowań na konto |
+| `login_ip_max_failures` | `300` | 10–100000, wysoki limit na wspólny adres IP |
+| `login_window_minutes` | `10` | 1–1440, okno liczenia nieudanych logowań |
+| `login_lockout_minutes` | `15` | 1–1440, czas blokady po przekroczeniu limitu |
+| `pickup_max_failures` | `8` | 3–50, limit nieudanych kodów odbioru na konto personelu |
+| `pickup_ip_max_failures` | `100` | 10–100000, limit nieudanych kodów na IP |
+| `pickup_window_minutes` | `10` | 1–1440, okno liczenia prób kodu odbioru |
+| `pickup_lockout_minutes` | `15` | 1–1440, czas blokady po przekroczeniu limitu |
+
+Limity działają w pamięci i zerują się po restarcie. Głównym limitem jest
+limit **per konto**; limit per IP jest celowo wysoki, bo uczniowie w szkole
+często wychodzą do internetu przez jeden publiczny adres. W trybie `tunnel`
+adresem IP jest `CF-Connecting-IP` (o ile proxy przekazało poprawną wartość).
 
 Uwagi:
 

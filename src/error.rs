@@ -87,10 +87,10 @@ impl IntoResponse for AppError {
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        if let Some(seconds) = retry_after {
-            if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
-                headers.insert(header::RETRY_AFTER, value);
-            }
+        if let Some(seconds) = retry_after
+            && let Ok(value) = HeaderValue::from_str(&seconds.to_string())
+        {
+            headers.insert(header::RETRY_AFTER, value);
         }
         response
     }

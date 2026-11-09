@@ -138,6 +138,25 @@
             </div>
 
             <div class="panel">
+                <h3>Import uczniów z CSV</h3>
+                <p class="muted small">
+                    Format: <code>klasa;liczba</code>, np. <code>1A;30</code> (jedna grupa w wierszu).
+                    Bez imion i nazwisk. Maksymalnie 200 kont na import i 100 na grupę.
+                </p>
+                <form id="importForm">
+                    <div class="field">
+                        <label for="importCsv">Dane CSV</label>
+                        <textarea id="importCsv" rows="5" placeholder="1A;30&#10;2B;25"></textarea>
+                    </div>
+                    <div class="toolbar">
+                        <input id="importFile" type="file" accept=".csv,text/csv,text/plain">
+                        <button id="importButton" class="btn btn-primary" type="submit">Importuj</button>
+                    </div>
+                </form>
+                <div id="importedAccounts" class="generated" hidden></div>
+            </div>
+
+            <div class="panel">
                 <div class="section-head compact">
                     <h3>Lista kont</h3>
                     <div class="toolbar">

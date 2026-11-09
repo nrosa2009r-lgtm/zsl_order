@@ -61,6 +61,8 @@
         });
 
         App.$("#generateForm").addEventListener("submit", generateAccounts);
+        App.$("#importForm").addEventListener("submit", importStudents);
+        App.$("#importFile").addEventListener("change", loadImportFile);
         App.$("#settingsForm").addEventListener("submit", saveSettings);
 
         App.$('.tab[data-tab="dashboard"]').addEventListener("click", function () {
@@ -373,8 +375,68 @@
         }
     }
 
+    let importedAccounts = [];
+
+    async function loadImportFile() {
+        const input = App.$("#importFile");
+        const file = input.files && input.files[0];
+        if (!file) return;
+        if (file.size > 64 * 1024) {
+            App.toast("Plik jest zbyt duży (maks. 64 KiB).", "error");
+            input.value = "";
+            return;
+        }
+        try {
+            App.$("#importCsv").value = await file.text();
+        } catch (error) {
+            App.toast("Nie udało się odczytać pliku.", "error");
+        }
+    }
+
+    async function importStudents(event) {
+        event.preventDefault();
+        const button = App.$("#importButton");
+        const csv = App.$("#importCsv").value.trim();
+        if (!csv) {
+            App.toast("Wklej dane CSV lub wybierz plik.", "error");
+            return;
+        }
+
+        App.setBusy(button, true, "Importowanie…");
+        try {
+            const response = await fetch("/api/admin/users/import", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "text/csv; charset=utf-8",
+                    "X-CSRF-Token": App.state.csrf || "",
+                },
+                body: csv,
+                credentials: "same-origin",
+                cache: "no-store",
+            });
+            const data = await response.json().catch(function () { return null; });
+            if (!response.ok) {
+                throw new Error((data && data.error) || "Nie udało się zaimportować kont.");
+            }
+            importedAccounts = data.accounts || [];
+            renderAccounts("#importedAccounts", importedAccounts, data.note);
+            App.$("#importCsv").value = "";
+            App.$("#importFile").value = "";
+            await loadUsers();
+            App.toast("Zaimportowano " + importedAccounts.length + " kont.", "success");
+        } catch (error) {
+            App.toast(error.message || "Nie udało się zaimportować kont.", "error");
+        } finally {
+            App.setBusy(button, false, "Importuj");
+        }
+    }
+
     function renderGeneratedAccounts(note) {
-        const container = App.$("#generatedAccounts");
+        renderAccounts("#generatedAccounts", generatedAccounts, note);
+    }
+
+    function renderAccounts(selector, accounts, note) {
+        const container = App.$(selector);
         App.clear(container);
         container.hidden = false;
 
@@ -392,7 +454,7 @@
                 attrs: { type: "button" },
                 on: {
                     click: function () {
-                        copyText(accountsAsText(), "Dane kont skopiowane.");
+                        copyText(accountsAsText(accounts), "Dane kont skopiowane.");
                     },
                 },
             }),
@@ -400,20 +462,23 @@
                 class: "btn btn-ghost btn-small",
                 text: "Pobierz CSV",
                 attrs: { type: "button" },
-                on: { click: downloadCsv },
+                on: { click: function () { downloadCsv(accounts); } },
             })
         );
 
+        const showGroup = accounts.some(function (account) { return account.group; });
         const table = App.h("table", { class: "table" });
         const thead = App.h("thead");
         const headRow = App.h("tr");
-        ["Login", "Hasło", "Rola", "Kod"].forEach(function (label) {
+        const headers = ["Login", "Hasło", "Rola", "Kod"];
+        if (showGroup) headers.push("Grupa");
+        headers.forEach(function (label) {
             headRow.append(App.h("th", { text: label }));
         });
         thead.append(headRow);
 
         const tbody = App.h("tbody");
-        generatedAccounts.forEach(function (account) {
+        accounts.forEach(function (account) {
             const row = App.h("tr");
             row.append(
                 App.h("td", {}, [App.h("code", { text: account.login })]),
@@ -421,6 +486,9 @@
                 App.h("td", { text: App.roleLabels[account.role] || account.role }),
                 App.h("td", {}, [App.h("code", { text: account.display_code })])
             );
+            if (showGroup) {
+                row.append(App.h("td", { text: account.group || "" }));
+            }
             tbody.append(row);
         });
         table.append(thead, tbody);
@@ -431,22 +499,30 @@
         container.append(warning, toolbar, wrapper);
     }
 
-    function accountsAsText() {
-        return generatedAccounts.map(function (account) {
-            return account.login + "\t" + account.password + "\t" + (App.roleLabels[account.role] || account.role) + "\t" + account.display_code;
+    function accountsAsText(accounts) {
+        return accounts.map(function (account) {
+            const base = account.login + "\t" + account.password + "\t" + (App.roleLabels[account.role] || account.role) + "\t" + account.display_code;
+            return account.group ? base + "\t" + account.group : base;
         }).join("\n");
     }
 
-    function downloadCsv() {
+    function downloadCsv(accounts) {
         const header = ["login", "haslo", "rola", "kod"];
+        if (accounts.some(function (account) { return account.group; })) {
+            header.push("grupa");
+        }
         const lines = [header.join(";")];
-        generatedAccounts.forEach(function (account) {
-            lines.push([
+        accounts.forEach(function (account) {
+            const cells = [
                 csvCell(account.login),
                 csvCell(account.password),
                 csvCell(App.roleLabels[account.role] || account.role),
                 csvCell(account.display_code),
-            ].join(";"));
+            ];
+            if (header.length > 4) {
+                cells.push(csvCell(account.group || ""));
+            }
+            lines.push(cells.join(";"));
         });
 
         const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });

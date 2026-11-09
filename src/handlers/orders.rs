@@ -1,4 +1,5 @@
 use crate::auth::AuthUser;
+use crate::client_ip::ClientIp;
 use crate::db;
 use crate::error::AppError;
 use crate::security;
@@ -429,8 +430,21 @@ pub async fn staff_orders(
 pub async fn staff_pickup(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
+    Extension(client): Extension<ClientIp>,
     Json(body): Json<PickupRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if let Err(retry_after) = state.pickup_limiter.check(user.id, client.0) {
+        tracing::warn!(
+            user_id = user.id,
+            retry_after,
+            "Odczyt kodu odbioru zablokowany przez limiter"
+        );
+        return Err(AppError::TooManyRequests {
+            retry_after,
+            message: "Zbyt wiele nieudanych prób odczytu kodu. Odczekaj chwilę.".to_string(),
+        });
+    }
+
     let raw = body.code.trim();
     if raw.is_empty() || raw.len() > 128 {
         return Err(AppError::bad("Wpisz kod odbioru lub zeskanuj kod QR."));
@@ -446,7 +460,20 @@ pub async fn staff_pickup(
             .fetch_optional(&state.db)
             .await?;
 
-    let id = id.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia o tym kodzie."))?;
+    let Some(id) = id else {
+        state.pickup_limiter.failure(user.id, client.0);
+        if let Err(retry_after) = state.pickup_limiter.check(user.id, client.0) {
+            return Err(AppError::TooManyRequests {
+                retry_after,
+                message: "Zbyt wiele nieudanych prób odczytu kodu. Odczekaj chwilę.".to_string(),
+            });
+        }
+        return Err(AppError::not_found(
+            "Nie znaleziono zamówienia o tym kodzie.",
+        ));
+    };
+
+    state.pickup_limiter.success(user.id, client.0);
     let order = load_order(&state, id).await?;
 
     db::audit(
@@ -477,18 +504,18 @@ pub async fn staff_update_order(
         return Err(AppError::bad("Brak zmian do zapisania."));
     }
 
-    if let Some(value) = &status {
-        if !matches!(
+    if let Some(value) = &status
+        && !matches!(
             value.as_str(),
             "new" | "preparing" | "ready" | "completed" | "cancelled"
-        ) {
-            return Err(AppError::bad("Nieprawidłowy status zamówienia."));
-        }
+        )
+    {
+        return Err(AppError::bad("Nieprawidłowy status zamówienia."));
     }
-    if let Some(value) = &payment_status {
-        if !matches!(value.as_str(), "unpaid" | "paid") {
-            return Err(AppError::bad("Nieprawidłowy status płatności."));
-        }
+    if let Some(value) = &payment_status
+        && !matches!(value.as_str(), "unpaid" | "paid")
+    {
+        return Err(AppError::bad("Nieprawidłowy status płatności."));
     }
 
     let current: Option<(String, String)> =
@@ -505,19 +532,19 @@ pub async fn staff_update_order(
                 "To zamówienie jest już zamknięte i nie można go zmienić.",
             ));
         }
-        if let Some(value) = &status {
-            if !matches!(value.as_str(), "preparing" | "ready" | "completed") {
-                return Err(AppError::forbidden(
-                    "Kuchnia może ustawić tylko status: przygotowanie, gotowe lub wydane.",
-                ));
-            }
+        if let Some(value) = &status
+            && !matches!(value.as_str(), "preparing" | "ready" | "completed")
+        {
+            return Err(AppError::forbidden(
+                "Kuchnia może ustawić tylko status: przygotowanie, gotowe lub wydane.",
+            ));
         }
-        if let Some(value) = &payment_status {
-            if value != "paid" {
-                return Err(AppError::forbidden(
-                    "Kuchnia może tylko oznaczyć płatność jako opłaconą.",
-                ));
-            }
+        if let Some(value) = &payment_status
+            && value != "paid"
+        {
+            return Err(AppError::forbidden(
+                "Kuchnia może tylko oznaczyć płatność jako opłaconą.",
+            ));
         }
     }
 

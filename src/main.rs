@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderValue, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -82,7 +82,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db: pool,
         cfg: config.clone(),
         dummy_hash,
-        login_limiter: auth::LoginLimiter::new(),
+        login_limiter: auth::LoginLimiter::from_config(&config),
+        pickup_limiter: auth::PickupLimiter::from_config(&config),
         jwt_secret,
         client_ip_warning: std::sync::Mutex::new(None),
     });
@@ -152,6 +153,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/stats/activity", get(handlers::admin::activity))
         .route("/users", get(handlers::admin::users))
         .route("/users/export.csv", get(handlers::admin::export_users_csv))
+        .route("/users/import", post(handlers::admin::import_users_csv))
         .route("/users/generate", post(handlers::admin::generate_users))
         .route(
             "/users/:id",
@@ -160,6 +162,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/users/:id/reset-password",
             post(handlers::admin::reset_password),
+        )
+        .route(
+            "/users/:id/sessions",
+            delete(handlers::admin::revoke_user_sessions),
         )
         .route(
             "/settings",
@@ -186,12 +192,14 @@ fn build_router(state: Arc<AppState>) -> Router {
     let public_api = Router::new()
         .route("/auth/login", post(handlers::auth::login))
         .route("/auth/token", post(handlers::auth::token))
-        .route("/public/info", get(handlers::public::info));
+        .route("/public/info", get(handlers::public::info))
+        .route("/healthz", get(handlers::public::healthz));
 
     let api = public_api.merge(protected_api);
 
     Router::new()
         .route("/", get(index_page))
+        .route("/healthz", get(handlers::public::healthz))
         .route("/login", get(login_page))
         .route("/student", get(student_page))
         .route("/kitchen", get(kitchen_page))

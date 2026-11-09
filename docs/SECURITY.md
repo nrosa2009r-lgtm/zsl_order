@@ -42,14 +42,34 @@ denial-of-service na warstwie sieci.
   hasła.
 - Wymuszona zmiana hasła (`must_change_password`) blokuje całe API poza
   `me`, `logout`, `change-password`.
-- Polityka nowego hasła: 10–128 znaków, litera ASCII + cyfra, różne od
-  obecnego.
+- Polityka nowego hasła:
+  - uczeń: 10–128 znaków,
+  - kuchnia i administrator: 12–128 znaków,
+  - hasło nie może być identyczne z loginem ani zawierać loginu,
+  - krótka lista najpopularniejszych haseł (np. `password123`, `qwerty123`)
+    jest odrzucana,
+  - bez wymogu „litera + cyfra” — liczy się długość i unikalność,
+  - nowe hasło musi różnić się od obecnego,
+  - hasła startowe generowane losowo nadal spełniają wyższe wymagania.
 - Brak ujawniania, czy login istnieje: dla nieistniejącego konta wykonywane
   jest weryfikacja względem `dummy_hash`, aby wyrównać czas odpowiedzi.
-- Rate limiting logowania (w pamięci):
-  - 10 nieudanych prób na login w 10 min → blokada 15 min,
-  - 80 nieudanych prób na IP w 10 min → blokada 15 min,
-  - sukces czyści liczniki dla danego IP/loginu.
+- Rate limiting (w pamięci, konfigurowalny w `config.json`):
+  - logowanie: główny limit **per konto** (`login_max_failures`, domyślnie
+    10 w 10 min → blokada 15 min),
+  - logowanie: wysoki limit **per IP** (`login_ip_max_failures`, domyślnie
+    300), bo sieć szkolna może współdzielić jeden publiczny adres,
+  - kod odbioru: limit **per konto personelu** (`pickup_max_failures`,
+    domyślnie 8) oraz wysoki limit per IP (`pickup_ip_max_failures`),
+  - sukces czyści liczniki danego konta i adresu IP.
+- Unieważnianie sesji:
+  - zmiana hasła usuwa wszystkie pozostałe sesje użytkownika,
+  - reset hasła przez administratora usuwa wszystkie sesje konta,
+  - dezaktywacja lub zmiana roli usuwa wszystkie sesje konta,
+  - administrator może unieważnić wszystkie sesje wybranego konta
+    (`DELETE /api/admin/users/{id}/sessions`).
+- Import CSV (`1A;30`) tworzy konta uczniów bez danych osobowych;
+  klasa/grupa trafia do loginu i kodu konta, a hasła są pokazywane
+  wyłącznie raz w odpowiedzi.
 - Brak MFA — patrz [ograniczenia](#10-ograniczenia-i-residualne-ryzyko).
 
 ## 3. Sesje
@@ -149,7 +169,7 @@ nie-IP), aplikacja:
 
 Ostrzeżenie w logach jest sygnałem, że należy sprawdzić konfigurację
 `cloudflared` (nagłówek jest dodawany automatycznie) oraz zgodność
-`TRUSTED_PROXIES` z adresem, z którym łączy się tunel. Bez tego
+`TRUSTED_PROXIES` z adresem, z którego łączy się tunel. Bez tego
 mechanizmu błędna konfiguracja po cichu sprowadzałaby wszystkich
 użytkowników do `127.0.0.1`.
 

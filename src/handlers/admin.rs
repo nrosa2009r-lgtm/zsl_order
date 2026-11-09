@@ -137,11 +137,11 @@ struct ExportUserRow {
 }
 
 fn append_user_filters(builder: &mut QueryBuilder<'_, Sqlite>, query: &UsersQuery) {
-    if let Some(role) = query.role.as_deref() {
-        if matches!(role, "student" | "kitchen" | "admin") {
-            builder.push(" AND role = ");
-            builder.push_bind(role.to_string());
-        }
+    if let Some(role) = query.role.as_deref()
+        && matches!(role, "student" | "kitchen" | "admin")
+    {
+        builder.push(" AND role = ");
+        builder.push_bind(role.to_string());
     }
 
     if let Some(active) = query.active {
@@ -310,12 +310,11 @@ pub async fn activity(
             }
         }
 
-        if date == today {
-            if let Some(hour) = util::local_hour(created_at) {
-                if let Some(point) = hourly.get_mut(hour as usize) {
-                    point.orders += 1;
-                }
-            }
+        if date == today
+            && let Some(hour) = util::local_hour(created_at)
+            && let Some(point) = hourly.get_mut(hour as usize)
+        {
+            point.orders += 1;
         }
     }
 
@@ -494,6 +493,234 @@ pub async fn generate_users(
     })))
 }
 
+/// Jedna grupa z importu CSV: nazwa klasy/grupy i liczba kont.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImportGroup {
+    group: String,
+    count: u32,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ImportedAccount {
+    pub login: String,
+    pub password: String,
+    pub role: String,
+    pub display_code: String,
+    pub group: String,
+}
+
+fn parse_import_csv(text: &str) -> Result<Vec<ImportGroup>, AppError> {
+    let mut groups: Vec<ImportGroup> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut total: u32 = 0;
+
+    for (index, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim_start_matches('\u{feff}').trim().to_string();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<&str> = if line.contains(';') {
+            line.split(';').collect()
+        } else {
+            line.split(',').collect()
+        };
+        if fields.len() != 2 {
+            return Err(AppError::bad(format!(
+                "Wiersz {}: oczekiwano formatu „klasa;liczba”, np. „1A;30”.",
+                index + 1
+            )));
+        }
+
+        let group = fields[0].trim();
+        let count_raw = fields[1].trim();
+        let Ok(count) = count_raw.parse::<u32>() else {
+            // Nagłówek typu "klasa;liczba" pomijamy tylko na początku pliku.
+            let is_header = groups.is_empty()
+                && matches!(
+                    group.to_ascii_lowercase().as_str(),
+                    "klasa" | "grupa" | "class" | "group"
+                );
+            if is_header {
+                continue;
+            }
+            return Err(AppError::bad(format!(
+                "Wiersz {}: liczba kont musi być liczbą całkowitą.",
+                index + 1
+            )));
+        };
+
+        if group.is_empty()
+            || group.len() > 16
+            || !group
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        {
+            return Err(AppError::bad(format!(
+                "Wiersz {}: nazwa klasy/grupy może mieć 1–16 znaków (litery ASCII, cyfry, „-”, „_”).",
+                index + 1
+            )));
+        }
+        if !(1..=100).contains(&count) {
+            return Err(AppError::bad(format!(
+                "Wiersz {}: liczba kont musi wynosić od 1 do 100.",
+                index + 1
+            )));
+        }
+        if !seen.insert(group.to_ascii_lowercase()) {
+            return Err(AppError::bad(format!(
+                "Wiersz {}: grupa „{group}” występuje więcej niż raz.",
+                index + 1
+            )));
+        }
+
+        total = total.saturating_add(count);
+        if total > 200 {
+            return Err(AppError::bad(
+                "Jednorazowo można zaimportować maksymalnie 200 kont.",
+            ));
+        }
+
+        groups.push(ImportGroup {
+            group: group.to_string(),
+            count,
+        });
+    }
+
+    if groups.is_empty() {
+        return Err(AppError::bad(
+            "Plik CSV nie zawiera żadnych grup. Użyj formatu „1A;30”.",
+        ));
+    }
+
+    Ok(groups)
+}
+
+/// Import kont uczniów z CSV w formacie „klasa;liczba” (np. `1A;30`).
+/// Klasa trafia do loginu i kodu konta, więc można ją odfiltrować w panelu.
+/// Hasła są zwracane wyłącznie w tej odpowiedzi i nie są zapisywane jawnie.
+pub async fn import_users_csv(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    body: String,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let groups = parse_import_csv(&body)?;
+    let count: u32 = groups.iter().map(|group| group.count).sum();
+
+    let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await?;
+    if existing + i64::from(count) > 20_000 {
+        return Err(AppError::conflict(
+            "Osiągnięto limit liczby kont w systemie.",
+        ));
+    }
+
+    let mut accounts: Vec<ImportedAccount> = Vec::with_capacity(count as usize);
+    let mut used_logins = HashSet::new();
+    let mut used_codes = HashSet::new();
+
+    for group in &groups {
+        let slug = group.group.to_ascii_lowercase();
+        let login_prefix = format!("s-{slug}");
+        let display_prefix = format!("UCZ-{}", group.group.to_ascii_uppercase());
+
+        for _ in 0..group.count {
+            let login = loop {
+                let candidate = security::generate_login(&login_prefix);
+                if used_logins.contains(&candidate) {
+                    continue;
+                }
+                let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE login = ?")
+                    .bind(&candidate)
+                    .fetch_optional(&state.db)
+                    .await?;
+                if exists.is_none() {
+                    used_logins.insert(candidate.clone());
+                    break candidate;
+                }
+            };
+
+            let display_code = loop {
+                let candidate = security::generate_display_code(&display_prefix);
+                if !used_codes.contains(&candidate) {
+                    used_codes.insert(candidate.clone());
+                    break candidate;
+                }
+            };
+
+            accounts.push(ImportedAccount {
+                login,
+                password: security::random_password(14),
+                role: "student".to_string(),
+                display_code,
+                group: group.group.clone(),
+            });
+        }
+    }
+
+    let accounts_for_hash = accounts.clone();
+    let hashes = tokio::task::spawn_blocking(move || {
+        accounts_for_hash
+            .iter()
+            .map(|account| security::hash_password(&account.password))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("spawn_blocking: {error}")))?
+    .map_err(AppError::from)?;
+
+    let now = util::now();
+    let mut transaction = state.db.begin().await?;
+    for (account, hash) in accounts.iter().zip(hashes.iter()) {
+        sqlx::query(
+            "INSERT INTO users
+             (login, password_hash, role, display_code, active, must_change_password, created_at)
+             VALUES (?, ?, 'student', ?, 1, 1, ?)",
+        )
+        .bind(&account.login)
+        .bind(hash)
+        .bind(&account.display_code)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+
+    let group_summary: Vec<String> = groups
+        .iter()
+        .map(|group| format!("{}={}", group.group, group.count))
+        .collect();
+    db::audit(
+        &state.db,
+        Some(actor.id),
+        "users_imported",
+        &format!(
+            "Import CSV: kont={count}, grupy={}",
+            group_summary.join(", ")
+        ),
+    )
+    .await;
+    tracing::info!(
+        actor_id = actor.id,
+        count,
+        groups = groups.len(),
+        "Zaimportowano konta uczniów z CSV"
+    );
+
+    Ok(Json(serde_json::json!({
+        "accounts": accounts,
+        "groups": groups
+            .iter()
+            .map(|group| serde_json::json!({
+                "group": group.group,
+                "count": group.count,
+            }))
+            .collect::<Vec<_>>(),
+        "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
+    })))
+}
+
 pub async fn update_user(
     State(state): State<Arc<AppState>>,
     Extension(actor): Extension<AuthUser>,
@@ -503,10 +730,10 @@ pub async fn update_user(
     if body.active.is_none() && body.role.is_none() {
         return Err(AppError::bad("Brak zmian do zapisania."));
     }
-    if let Some(role) = body.role.as_deref() {
-        if !matches!(role, "student" | "kitchen" | "admin") {
-            return Err(AppError::bad("Nieprawidłowa rola użytkownika."));
-        }
+    if let Some(role) = body.role.as_deref()
+        && !matches!(role, "student" | "kitchen" | "admin")
+    {
+        return Err(AppError::bad("Nieprawidłowa rola użytkownika."));
     }
 
     let current: Option<(String, bool)> =
@@ -766,6 +993,47 @@ fn csv_cell(value: &str) -> String {
     format!("\"{}\"", text.replace('"', "\"\""))
 }
 
+/// Unieważnia wszystkie sesje wybranego konta (ciasteczka i tokeny JWT).
+/// Przydatne po podejrzeniu kradzieży urządzenia lub podejrzanym logowaniu.
+pub async fn revoke_user_sessions(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if id == actor.id {
+        return Err(AppError::bad(
+            "Aby zakończyć własną sesję, użyj przycisku wylogowania.",
+        ));
+    }
+
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::not_found("Nie znaleziono użytkownika."));
+    }
+
+    let revoked = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await?
+        .rows_affected();
+
+    db::audit(
+        &state.db,
+        Some(actor.id),
+        "sessions_revoked",
+        &format!("Unieważniono sesje konta id={id}, liczba={revoked}"),
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "revoked": revoked,
+    })))
+}
+
 pub async fn reset_password(
     State(state): State<Arc<AppState>>,
     Extension(actor): Extension<AuthUser>,
@@ -941,5 +1209,41 @@ mod tests {
         assert_eq!(csv_cell("+51"), "\"'+51\"");
         assert_eq!(csv_cell("-1"), "\"'-1\"");
         assert_eq!(csv_cell("@x"), "\"'@x\"");
+    }
+
+    #[test]
+    fn import_parses_groups_and_header() {
+        let groups = parse_import_csv("\u{feff}klasa;liczba\n1A;30\n2B;25\n").unwrap();
+        assert_eq!(
+            groups,
+            vec![
+                ImportGroup {
+                    group: "1A".to_string(),
+                    count: 30
+                },
+                ImportGroup {
+                    group: "2B".to_string(),
+                    count: 25
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn import_accepts_comments_and_commas() {
+        let groups = parse_import_csv("# komentarz\n3C,10\n").unwrap();
+        assert_eq!(groups[0].group, "3C");
+        assert_eq!(groups[0].count, 10);
+    }
+
+    #[test]
+    fn import_rejects_bad_input() {
+        assert!(parse_import_csv("").is_err());
+        assert!(parse_import_csv("1A\n").is_err());
+        assert!(parse_import_csv("1A;0\n").is_err());
+        assert!(parse_import_csv("1A;101\n").is_err());
+        assert!(parse_import_csv("1A;10\n1a;5\n").is_err());
+        assert!(parse_import_csv("zła grupa;10\n").is_err());
+        assert!(parse_import_csv("1A;10;20\n").is_err());
     }
 }

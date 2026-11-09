@@ -252,6 +252,14 @@ pub struct Config {
     pub db_url: String,
     pub max_connections: u32,
     pub session_hours: i64,
+    pub login_max_failures: u32,
+    pub login_ip_max_failures: u32,
+    pub login_window_minutes: i64,
+    pub login_lockout_minutes: i64,
+    pub pickup_max_failures: u32,
+    pub pickup_ip_max_failures: u32,
+    pub pickup_window_minutes: i64,
+    pub pickup_lockout_minutes: i64,
     pub mode: DeployMode,
     pub bind_addr: SocketAddr,
     pub trusted_proxies: Vec<IpNet>,
@@ -266,6 +274,14 @@ impl Default for Config {
             db_url: "sqlite://baza.db".to_string(),
             max_connections: 16,
             session_hours: 12,
+            login_max_failures: 10,
+            login_ip_max_failures: 300,
+            login_window_minutes: 10,
+            login_lockout_minutes: 15,
+            pickup_max_failures: 8,
+            pickup_ip_max_failures: 100,
+            pickup_window_minutes: 10,
+            pickup_lockout_minutes: 15,
             mode: DeployMode::Local,
             bind_addr: SocketAddr::from_str(DEFAULT_BIND_ADDR)
                 .expect("domyślny adres nasłuchu jest poprawny"),
@@ -354,6 +370,14 @@ impl Config {
             db_url: file.db_url,
             max_connections: file.max_connections,
             session_hours: file.session_hours,
+            login_max_failures: file.login_max_failures,
+            login_ip_max_failures: file.login_ip_max_failures,
+            login_window_minutes: file.login_window_minutes,
+            login_lockout_minutes: file.login_lockout_minutes,
+            pickup_max_failures: file.pickup_max_failures,
+            pickup_ip_max_failures: file.pickup_ip_max_failures,
+            pickup_window_minutes: file.pickup_window_minutes,
+            pickup_lockout_minutes: file.pickup_lockout_minutes,
             mode,
             bind_addr,
             trusted_proxies,
@@ -450,6 +474,14 @@ pub struct FileConfig {
     db_url: String,
     max_connections: u32,
     session_hours: i64,
+    login_max_failures: u32,
+    login_ip_max_failures: u32,
+    login_window_minutes: i64,
+    login_lockout_minutes: i64,
+    pickup_max_failures: u32,
+    pickup_ip_max_failures: u32,
+    pickup_window_minutes: i64,
+    pickup_lockout_minutes: i64,
     legacy_ip: Option<String>,
     legacy_port: Option<u16>,
     legacy_secure_cookies: Option<bool>,
@@ -461,6 +493,14 @@ impl Default for FileConfig {
             db_url: "sqlite://baza.db".to_string(),
             max_connections: 16,
             session_hours: 12,
+            login_max_failures: 10,
+            login_ip_max_failures: 300,
+            login_window_minutes: 10,
+            login_lockout_minutes: 15,
+            pickup_max_failures: 8,
+            pickup_ip_max_failures: 100,
+            pickup_window_minutes: 10,
+            pickup_lockout_minutes: 15,
             legacy_ip: None,
             legacy_port: None,
             legacy_secure_cookies: None,
@@ -495,6 +535,62 @@ impl FileConfig {
                 .and_then(|value| i64::try_from(value).ok())
                 .filter(|value| (1..=24 * 30).contains(value))
                 .unwrap_or(defaults.session_hours),
+            login_max_failures: get_u32_bounded(
+                value,
+                "login_max_failures",
+                defaults.login_max_failures,
+                3,
+                50,
+            ),
+            login_ip_max_failures: get_u32_bounded(
+                value,
+                "login_ip_max_failures",
+                defaults.login_ip_max_failures,
+                10,
+                100_000,
+            ),
+            login_window_minutes: get_i64_bounded(
+                value,
+                "login_window_minutes",
+                defaults.login_window_minutes,
+                1,
+                1440,
+            ),
+            login_lockout_minutes: get_i64_bounded(
+                value,
+                "login_lockout_minutes",
+                defaults.login_lockout_minutes,
+                1,
+                1440,
+            ),
+            pickup_max_failures: get_u32_bounded(
+                value,
+                "pickup_max_failures",
+                defaults.pickup_max_failures,
+                3,
+                50,
+            ),
+            pickup_ip_max_failures: get_u32_bounded(
+                value,
+                "pickup_ip_max_failures",
+                defaults.pickup_ip_max_failures,
+                10,
+                100_000,
+            ),
+            pickup_window_minutes: get_i64_bounded(
+                value,
+                "pickup_window_minutes",
+                defaults.pickup_window_minutes,
+                1,
+                1440,
+            ),
+            pickup_lockout_minutes: get_i64_bounded(
+                value,
+                "pickup_lockout_minutes",
+                defaults.pickup_lockout_minutes,
+                1,
+                1440,
+            ),
             legacy_ip,
             legacy_port: get_u64(value, "port")
                 .and_then(|value| u16::try_from(value).ok())
@@ -508,6 +604,14 @@ impl FileConfig {
             "db_url": self.db_url,
             "max_connections": self.max_connections,
             "session_hours": self.session_hours,
+            "login_max_failures": self.login_max_failures,
+            "login_ip_max_failures": self.login_ip_max_failures,
+            "login_window_minutes": self.login_window_minutes,
+            "login_lockout_minutes": self.login_lockout_minutes,
+            "pickup_max_failures": self.pickup_max_failures,
+            "pickup_ip_max_failures": self.pickup_ip_max_failures,
+            "pickup_window_minutes": self.pickup_window_minutes,
+            "pickup_lockout_minutes": self.pickup_lockout_minutes,
         }))
     }
 }
@@ -555,6 +659,20 @@ fn get_u64(value: &Value, key: &str) -> Option<u64> {
     entry
         .as_u64()
         .or_else(|| entry.as_str()?.trim().parse::<u64>().ok())
+}
+
+fn get_u32_bounded(value: &Value, key: &str, default: u32, min: u64, max: u64) -> u32 {
+    get_u64(value, key)
+        .filter(|number| (min..=max).contains(number))
+        .and_then(|number| u32::try_from(number).ok())
+        .unwrap_or(default)
+}
+
+fn get_i64_bounded(value: &Value, key: &str, default: i64, min: u64, max: u64) -> i64 {
+    get_u64(value, key)
+        .filter(|number| (min..=max).contains(number))
+        .and_then(|number| i64::try_from(number).ok())
+        .unwrap_or(default)
 }
 
 fn get_bool(value: &Value, key: &str, default: bool) -> bool {
