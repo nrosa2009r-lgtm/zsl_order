@@ -24,6 +24,15 @@ jeśli szkoła posiada gdzieś (np. na wydruku, w dzienniku, w arkuszu)
 powiązanie loginu z konkretnym uczniem, to po stronie szkoły mogą powstać
 dane osobowe. System tego mapowania nie przechowuje i nie wymaga.
 
+Wyjątkiem jest import CSV w formacie `klasa;liczba`: klasa/grupa trafia
+do loginu (`s-1a-...`) i kodu konta (`UCZ-1A-...`). To **zmniejsza
+pseudonimizację** — osoba z dostępem do listy kont może zawęzić krąg
+uczniów do jednej klasy, nawet bez imion i nazwisk. Dlatego import nie
+przyjmuje imion, nazwisk ani numerów z dziennika, klasa jest krótka i nie
+identyfikuje konkretnej osoby, a dostęp do panelu kont i eksportu CSV ma
+wyłącznie administrator. Mapowanie login → uczeń nadal powinno być
+przechowywane poza systemem.
+
 ## 2. Jakie dane są przechowywane
 
 ### `users`

@@ -381,6 +381,12 @@ pub async fn require_admin(request: Request, next: Next) -> Result<Response, App
     role_guard(request, next, &["admin"]).await
 }
 
+/// Górny limit liczby kluczy w mapie limitera. Chroni pamięć procesu przed
+/// nieograniczonym wzrostem przy wielu unikalnych loginach/adresach.
+/// Po przekroczeniu usuwane są wpisy wygasłe, a jeśli wszystkie są aktywne —
+/// najstarsze. Dzięki temu mapa nigdy nie rośnie bez ograniczeń.
+const MAX_TRACKED_KEYS: usize = 10_000;
+
 struct Attempt {
     failures: u32,
     window_start: Instant,
@@ -414,6 +420,32 @@ impl AttemptLimiter {
         }
     }
 
+    /// Usuwa wygasłe wpisy, a gdy mapa nadal jest pełna — najstarsze.
+    /// Wywoływane tylko po osiągnięciu `MAX_TRACKED_KEYS`, więc normalne
+    /// logowanie nie płaci kosztu skanowania całej mapy.
+    fn prune(map: &mut HashMap<String, Attempt>, now: Instant, window: Duration) {
+        if map.len() < MAX_TRACKED_KEYS {
+            return;
+        }
+
+        map.retain(|_, attempt| {
+            attempt.locked_until.is_some_and(|until| until > now)
+                || now.saturating_duration_since(attempt.window_start) < window
+        });
+
+        if map.len() >= MAX_TRACKED_KEYS {
+            let mut oldest = map
+                .iter()
+                .map(|(key, attempt)| (attempt.window_start, key.clone()))
+                .collect::<Vec<_>>();
+            oldest.sort_unstable_by_key(|(start, _)| *start);
+            let excess = map.len() - MAX_TRACKED_KEYS + 1;
+            for (_, key) in oldest.into_iter().take(excess) {
+                map.remove(&key);
+            }
+        }
+    }
+
     pub fn check(&self, primary: &str, secondary: &str) -> Result<(), u64> {
         let now = Instant::now();
         let mut map = self
@@ -421,12 +453,7 @@ impl AttemptLimiter {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
 
-        if map.len() > 10_000 {
-            map.retain(|_, attempt| {
-                attempt.locked_until.is_some_and(|until| until > now)
-                    || now.saturating_duration_since(attempt.window_start) < self.window
-            });
-        }
+        Self::prune(&mut map, now, self.window);
 
         let mut retry_after = 0u64;
         for key in [primary, secondary] {
@@ -462,6 +489,7 @@ impl AttemptLimiter {
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        Self::prune(&mut map, now, self.window);
         let attempt = map.entry(key.to_string()).or_insert(Attempt {
             failures: 0,
             window_start: now,
@@ -490,7 +518,8 @@ impl AttemptLimiter {
     }
 }
 
-/// Limiter logowania: główny limit per konto, wysoki limit per IP.
+/// Limiter logowania: limit **konto + IP** (żeby obca osoba z innej sieci nie
+/// mogła zablokować admina/kuchni) oraz wysoki limit per IP.
 pub struct LoginLimiter {
     limiter: AttemptLimiter,
 }
@@ -511,23 +540,26 @@ impl LoginLimiter {
         format!("ip:{ip}")
     }
 
-    fn login_key(login: &str) -> String {
-        format!("login:{}", login.to_ascii_lowercase())
+    /// Klucz blokady to para konto + IP. Atakujący z innego adresu nie
+    /// zablokuje konta prawdziwemu użytkownikowi; chroni to konta
+    /// administracyjne i kuchenne przed celowym „lockoutem”.
+    fn login_key(login: &str, ip: IpAddr) -> String {
+        format!("login:{}@{ip}", login.to_ascii_lowercase())
     }
 
     pub fn check(&self, ip: IpAddr, login: &str) -> Result<(), u64> {
         self.limiter
-            .check(&Self::login_key(login), &Self::ip_key(ip))
+            .check(&Self::login_key(login, ip), &Self::ip_key(ip))
     }
 
     pub fn failure(&self, ip: IpAddr, login: &str) {
         self.limiter
-            .failure(&Self::login_key(login), &Self::ip_key(ip));
+            .failure(&Self::login_key(login, ip), &Self::ip_key(ip));
     }
 
     pub fn success(&self, ip: IpAddr, login: &str) {
         self.limiter
-            .success(&Self::login_key(login), &Self::ip_key(ip));
+            .success(&Self::login_key(login, ip), &Self::ip_key(ip));
     }
 }
 
@@ -659,6 +691,42 @@ mod tests {
 
         limiter.success(ip, "s-uczen");
         assert!(limiter.check(ip, "s-uczen").is_ok());
+    }
+
+    #[test]
+    fn login_limiter_cannot_lock_account_from_another_ip() {
+        let limiter = LoginLimiter {
+            limiter: AttemptLimiter::new(3, 100, 10, 15),
+        };
+        let attacker: IpAddr = "203.0.113.66".parse().unwrap();
+        let victim: IpAddr = "192.0.2.10".parse().unwrap();
+
+        for _ in 0..5 {
+            limiter.failure(attacker, "a-admin");
+        }
+        // Atakujący blokuje tylko swoją parę konto+IP.
+        assert!(limiter.check(attacker, "a-admin").is_err());
+        // Prawdziwy administrator z innej sieci nadal może się zalogować.
+        assert!(limiter.check(victim, "a-admin").is_ok());
+    }
+
+    #[test]
+    fn attempt_limiter_prunes_and_caps_the_map() {
+        let limiter = AttemptLimiter::new(3, 5, 10, 15);
+
+        for index in 0..(MAX_TRACKED_KEYS + 50) {
+            limiter.failure(&format!("konto-{index}"), "wspolny-ip");
+        }
+
+        let map = limiter
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert!(
+            map.len() <= MAX_TRACKED_KEYS,
+            "mapa przekroczyła górny limit: {}",
+            map.len()
+        );
     }
 
     #[test]

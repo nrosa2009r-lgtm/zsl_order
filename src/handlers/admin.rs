@@ -8,7 +8,7 @@ use crate::util;
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use chrono::Local;
@@ -16,6 +16,16 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, QueryBuilder, Row, Sqlite};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+
+/// Nagłówki dla odpowiedzi zawierających jednorazowe hasła. `no-store`
+/// blokuje zapis w pamięci podręcznej przeglądarki i pośredników; hasła
+/// nie mogą wyciec przez cache ani historię podręczną.
+fn secret_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers
+}
 
 #[derive(FromRow, Serialize)]
 pub struct AdminUserView {
@@ -394,7 +404,7 @@ pub async fn generate_users(
     State(state): State<Arc<AppState>>,
     Extension(actor): Extension<AuthUser>,
     Json(body): Json<GenerateRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
     if !matches!(body.role.as_str(), "student" | "kitchen" | "admin") {
         return Err(AppError::bad("Nieprawidłowa rola użytkownika."));
     }
@@ -487,10 +497,13 @@ pub async fn generate_users(
         "Wygenerowano konta"
     );
 
-    Ok(Json(serde_json::json!({
-        "accounts": accounts,
-        "note": "Hasła są widoczne tylko teraz. Zapisz je i przekaż uczniom w bezpieczny sposób."
-    })))
+    Ok((
+        secret_headers(),
+        Json(serde_json::json!({
+            "accounts": accounts,
+            "note": "Hasła są widoczne tylko teraz. Zapisz je i przekaż uczniom w bezpieczny sposób."
+        })),
+    ))
 }
 
 /// Jedna grupa z importu CSV: nazwa klasy/grupy i liczba kont.
@@ -603,7 +616,7 @@ pub async fn import_users_csv(
     State(state): State<Arc<AppState>>,
     Extension(actor): Extension<AuthUser>,
     body: String,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
     let groups = parse_import_csv(&body)?;
     let count: u32 = groups.iter().map(|group| group.count).sum();
 
@@ -708,17 +721,20 @@ pub async fn import_users_csv(
         "Zaimportowano konta uczniów z CSV"
     );
 
-    Ok(Json(serde_json::json!({
-        "accounts": accounts,
-        "groups": groups
-            .iter()
-            .map(|group| serde_json::json!({
-                "group": group.group,
-                "count": group.count,
-            }))
-            .collect::<Vec<_>>(),
-        "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
-    })))
+    Ok((
+        secret_headers(),
+        Json(serde_json::json!({
+            "accounts": accounts,
+            "groups": groups
+                .iter()
+                .map(|group| serde_json::json!({
+                    "group": group.group,
+                    "count": group.count,
+                }))
+                .collect::<Vec<_>>(),
+            "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
+        })),
+    ))
 }
 
 pub async fn update_user(
@@ -1039,7 +1055,7 @@ pub async fn reset_password(
     Extension(actor): Extension<AuthUser>,
     Path(id): Path<i64>,
     Json(_body): Json<ResetPasswordRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
     if id == actor.id {
         return Err(AppError::bad("Własne hasło zmień w sekcji „Moje konto”."));
     }
@@ -1077,11 +1093,14 @@ pub async fn reset_password(
         "Zresetowano hasło konta"
     );
 
-    Ok(Json(serde_json::json!({
-        "login": login,
-        "password": password,
-        "note": "Nowe hasło jest widoczne tylko teraz."
-    })))
+    Ok((
+        secret_headers(),
+        Json(serde_json::json!({
+            "login": login,
+            "password": password,
+            "note": "Nowe hasło jest widoczne tylko teraz."
+        })),
+    ))
 }
 
 pub async fn settings(

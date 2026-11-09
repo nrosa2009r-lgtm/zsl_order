@@ -310,7 +310,7 @@ wtedy, gdy połączenie przyszło z adresu z `TRUSTED_PROXIES`.
 | `max_connections` | `16` | 1–128, rozmiar puli SQLite |
 | `db_url` | `sqlite://baza.db` | ścieżka/URL bazy; akceptowane też `baza.db` |
 | `session_hours` | `12` | 1–720, czas życia sesji |
-| `login_max_failures` | `10` | 3–50, limit nieudanych logowań na konto |
+| `login_max_failures` | `10` | 3–50, limit nieudanych logowań na parę konto+IP |
 | `login_ip_max_failures` | `300` | 10–100000, wysoki limit na wspólny adres IP |
 | `login_window_minutes` | `10` | 1–1440, okno liczenia nieudanych logowań |
 | `login_lockout_minutes` | `15` | 1–1440, czas blokady po przekroczeniu limitu |
@@ -320,8 +320,8 @@ wtedy, gdy połączenie przyszło z adresu z `TRUSTED_PROXIES`.
 | `pickup_lockout_minutes` | `15` | 1–1440, czas blokady po przekroczeniu limitu |
 
 Limity działają w pamięci i zerują się po restarcie. Głównym limitem jest
-limit **per konto**; limit per IP jest celowo wysoki, bo uczniowie w szkole
-często wychodzą do internetu przez jeden publiczny adres. W trybie `tunnel`
+blokada pary **konto + IP**; limit per IP jest celowo wysoki, bo uczniowie
+w szkole często wychodzą do internetu przez jeden publiczny adres. W trybie `tunnel`
 adresem IP jest `CF-Connecting-IP` (o ile proxy przekazało poprawną wartość).
 
 Uwagi:
@@ -353,8 +353,9 @@ Uwagi:
   natychmiast. Bearer nie wymaga CSRF; `origin_guard` nadal działa.
 - Dodatkowo: blokada `Sec-Fetch-Site: cross-site` i niezgodnego `Origin`.
 - RBAC na każdym endpoincie; brak dostępu po ID do cudzych zamówień.
-- Rate limiting logowania: 10 błędów na konto / 80 na IP w 10 min → blokada
-  15 min; brak ujawniania, czy login istnieje (wyrównanie czasu dummy hash).
+- Rate limiting logowania: 10 błędów na parę konto+IP / 300 na IP w 10 min
+  → blokada 15 min; brak ujawniania, czy login istnieje (wyrównanie czasu
+  dummy hash).
 - Walidacja długości i formatów, parametryzowany SQL, limit 64 KiB.
 - CSP bez `inline`, `frame-ancestors 'none'`, `nosniff`, `no-referrer`,
   `Permissions-Policy`, COOP/CORP; HSTS i `upgrade-insecure-requests` tylko
@@ -404,6 +405,18 @@ sekretu/wygaśnięcia, walidację godziny odbioru oraz escapowanie CSV.
 Testy end-to-end (API + role + CSRF + JWT + QR + statystyki + eksport +
 usuwanie kont) wykonuje się na izolowanej kopii bazy; opis
 w [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#11-testy-i-smoke-test).
+
+Skrypty smoke są w katalogu [`scripts/`](scripts/):
+
+```bash
+cargo build
+scripts/smoke-modes.sh       # tryby local/tunnel, nagłówki, start
+scripts/smoke-hardening.sh   # hasła, import CSV, IDOR, RBAC, limity, sesje
+```
+
+Skrypty tworzą izolowaną bazę w `/tmp/opencode`, same generują konta i
+**nie zawierają żadnych prawdziwych danych**. Nie uruchamiaj ich na
+prawdziwej instancji.
 
 > **Uwaga:** dane logowania używane w skryptach testowych (np.
 > `admin-test` / testowe hasło) są **wyłącznie testowe**. Nie uruchamiaj

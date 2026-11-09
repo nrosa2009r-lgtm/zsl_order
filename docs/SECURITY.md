@@ -54,13 +54,33 @@ denial-of-service na warstwie sieci.
 - Brak ujawniania, czy login istnieje: dla nieistniejącego konta wykonywane
   jest weryfikacja względem `dummy_hash`, aby wyrównać czas odpowiedzi.
 - Rate limiting (w pamięci, konfigurowalny w `config.json`):
-  - logowanie: główny limit **per konto** (`login_max_failures`, domyślnie
-    10 w 10 min → blokada 15 min),
+  - logowanie: blokada liczona dla pary **konto + IP** (`login_max_failures`,
+    domyślnie 10 w 10 min → blokada 15 min),
   - logowanie: wysoki limit **per IP** (`login_ip_max_failures`, domyślnie
     300), bo sieć szkolna może współdzielić jeden publiczny adres,
   - kod odbioru: limit **per konto personelu** (`pickup_max_failures`,
     domyślnie 8) oraz wysoki limit per IP (`pickup_ip_max_failures`),
-  - sukces czyści liczniki danego konta i adresu IP.
+  - sukces czyści liczniki danej pary konto+IP oraz adresu IP.
+- **Dlaczego konto + IP, a nie samo konto:** blokada per konto pozwalałaby
+  obcej osobie z dowolnego miejsca zablokować administratora lub kuchnię,
+  wysyłając kilka błędnych haseł (celowy „lockout”). Para konto + IP
+  sprawia, że atakujący blokuje tylko siebie; prawdziwy użytkownik z innej
+  sieci nadal się zaloguje. Residualne ryzyko: ktoś z tego samego publicznego
+  adresu (np. inny uczeń w szkolnej Wi-Fi) może zablokować konto+IP na czas
+  blokady. Dlatego blokada jest krótka (15 min) i konfigurowalna, a limit per
+  IP (300) ogranicza masowe próby. Nie stosujemy globalnej blokady konta,
+  bo bezpieczeństwo kont uprzywilejowanych jest ważniejsze niż wygoda.
+- Limiter pamięci ma **górny limit 10 000 kluczy**; przy osiągnięciu progu
+  usuwa wpisy wygasłe, a jeśli wszystkie są aktywne — najstarsze. Dzięki
+  temu wiele unikalnych loginów/adresów nie zwiększa pamięci bez ograniczeń.
+- Próby logowania na **nieistniejące konto** są liczone tak samo jak na
+  istniejące (para konto+IP i IP), a odpowiedź jest identyczna
+  (`401 Nieprawidłowy login lub hasło.`). Czas odpowiedzi wyrównuje
+  weryfikacja względem `dummy_hash`.
+- Odpowiedzi zawierające jednorazowe hasła (import CSV, generowanie kont,
+  reset hasła) mają `Cache-Control: no-store` i `Pragma: no-cache`.
+  Hasła nie trafiają do logów technicznych ani do audytu — audyt importu
+  zapisuje tylko kto wykonał import i ile kont/grup utworzono.
 - Unieważnianie sesji:
   - zmiana hasła usuwa wszystkie pozostałe sesje użytkownika,
   - reset hasła przez administratora usuwa wszystkie sesje konta,
@@ -163,8 +183,8 @@ nie-IP), aplikacja:
   Wszystkie takie żądania trafiają wtedy do jednego koszyka limitów
   per IP; nie jest to ciche przypisanie adresu konkretnemu użytkownikowi
   i nie służy do identyfikacji osób,
-- głównym mechanizmem limitowania pozostaje limit per konto, a limit per
-  IP jest wysoki i konfigurowalny — właśnie dlatego, że sieć szkolna
+- głównym mechanizmem limitowania pozostaje blokada pary konto+IP, a limit
+  per IP jest wysoki i konfigurowalny — właśnie dlatego, że sieć szkolna
   może współdzielić jeden publiczny adres.
 
 Ostrzeżenie w logach jest sygnałem, że należy sprawdzić konfigurację

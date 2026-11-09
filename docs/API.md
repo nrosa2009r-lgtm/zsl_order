@@ -705,6 +705,7 @@ Eksport jest zapisywany w audycie jako `users_exported`.
 
 **Hasła są zwracane wyłącznie w tej odpowiedzi** — nie są przechowywane
 w postaci jawnej. Nowe konta mają `must_change_password = true`.
+Odpowiedzi z hasłami mają `Cache-Control: no-store` i `Pragma: no-cache`.
 
 ### `POST /api/admin/users/import`
 
@@ -745,6 +746,10 @@ Audyt zapisuje `users_imported`.
   "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
 }
 ```
+
+Odpowiedź ma `Cache-Control: no-store` i `Pragma: no-cache`; hasła nie
+trafiają do logów ani audytu. Audyt zapisuje `users_imported` z liczbą
+kont i grup.
 
 ### `PATCH /api/admin/users/:id`
 
