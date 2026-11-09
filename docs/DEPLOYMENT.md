@@ -508,6 +508,10 @@ ciastek, tokenów ani ciał żądań. Ustaw retencję i dostęp do logów.
 
 ## 11. Testy i smoke test
 
+> **Uwaga:** dane logowania używane w skryptach testowych są **wyłącznie
+> testowe**. Testy wykonuj na izolowanej kopii bazy, nigdy na prawdziwej
+> instancji, i nie używaj testowych danych logowania w produkcji.
+
 Testy jednostkowe:
 
 ```bash

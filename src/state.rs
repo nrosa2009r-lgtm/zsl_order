@@ -1,6 +1,8 @@
 use crate::auth::LoginLimiter;
 use crate::config::Config;
 use sqlx::SqlitePool;
+use std::sync::Mutex;
+use std::time::Instant;
 
 pub struct AppState {
     pub db: SqlitePool,
@@ -10,4 +12,6 @@ pub struct AppState {
     pub login_limiter: LoginLimiter,
     /// Sekret HMAC do podpisywania i weryfikacji tokenów JWT.
     pub jwt_secret: Vec<u8>,
+    /// Czas ostatniego ostrzeżenia o braku `CF-Connecting-IP` w trybie tunnel.
+    pub client_ip_warning: Mutex<Option<Instant>>,
 }

@@ -59,7 +59,7 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 - **Hasła Argon2id** z losową solą; wymuszona zmiana hasła startowego.
 - **Silne nagłówki bezpieczeństwa**: restrykcyjny CSP bez `inline`,
   `frame-ancestors 'none'`, `nosniff`, `no-referrer`, COOP/CORP, HSTS
-  (po włączeniu HTTPS).
+  (tylko w trybie `tunnel`, bez `includeSubDomains` i `preload`).
 - **Walidacja wejścia i parametryzowany SQL** (`sqlx`), limit ciała żądania
   64 KiB, limit prób logowania.
 - **Dziennik zdarzeń** (audyt) z automatycznym czyszczeniem po 90 dniach
@@ -386,6 +386,11 @@ Testy end-to-end (API + role + CSRF + JWT + QR + statystyki + eksport +
 usuwanie kont) wykonuje się na izolowanej kopii bazy; opis
 w [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#11-testy-i-smoke-test).
 
+> **Uwaga:** dane logowania używane w skryptach testowych (np.
+> `admin-test` / testowe hasło) są **wyłącznie testowe**. Nie uruchamiaj
+> tych skryptów na prawdziwej instancji i nigdy nie używaj testowych
+> danych logowania w środowisku produkcyjnym.
+
 ## Wdrożenie produkcyjne
 
 Minimalny, bezpieczny scenariusz:
@@ -487,7 +492,6 @@ uruchomieniu z uprawnieniami `0600`.
 
 ## Licencja
 
-Repozytorium nie zawiera obecnie pliku `LICENSE`. Przed publicznym
-udostępnieniem kodu dodaj wybraną licencję (np. MIT, Apache-2.0) lub
-oznacz projekt jako wewnętrzny. Bez licencji domyślnie obowiązują
-wszystkie prawa zastrzeżone.
+Projekt jest udostępniany na licencji MIT — pełny tekst w pliku
+[LICENSE](LICENSE). Prawa autorskie: `<TWOJE IMIĘ LUB NICK>` (do
+uzupełnienia przez właściciela repozytorium).

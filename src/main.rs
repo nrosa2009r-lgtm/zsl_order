@@ -84,6 +84,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         dummy_hash,
         login_limiter: auth::LoginLimiter::new(),
         jwt_secret,
+        client_ip_warning: std::sync::Mutex::new(None),
     });
 
     let app = build_router(state);
@@ -295,7 +296,7 @@ async fn security_headers(
     if state.cfg.is_tunnel() {
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+            HeaderValue::from_static("max-age=31536000"),
         );
     }
 

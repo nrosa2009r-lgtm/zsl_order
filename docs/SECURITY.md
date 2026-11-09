@@ -133,6 +133,26 @@ Tryb `local` ignoruje `CF-Connecting-IP` i inne nagłówki proxy. W trybie
 połączenie przyszło z adresu z `TRUSTED_PROXIES`; w przeciwnym razie
 używany jest adres gniazda TCP.
 
+Jeśli w trybie `tunnel` zaufane proxy **nie przekazało** nagłówka
+`CF-Connecting-IP` albo wartość jest nieprawidłowa (pusta, wiele adresów,
+nie-IP), aplikacja:
+
+- **nie udaje**, że wszystko jest w porządku — zapisuje ostrzeżenie
+  `WARN` w logach (maks. raz na minutę, aby nie zalać logów),
+- zachowuje adres gniazda TCP, czyli adres proxy (`127.0.0.1`).
+  Wszystkie takie żądania trafiają wtedy do jednego koszyka limitów
+  per IP; nie jest to ciche przypisanie adresu konkretnemu użytkownikowi
+  i nie służy do identyfikacji osób,
+- głównym mechanizmem limitowania pozostaje limit per konto, a limit per
+  IP jest wysoki i konfigurowalny — właśnie dlatego, że sieć szkolna
+  może współdzielić jeden publiczny adres.
+
+Ostrzeżenie w logach jest sygnałem, że należy sprawdzić konfigurację
+`cloudflared` (nagłówek jest dodawany automatycznie) oraz zgodność
+`TRUSTED_PROXIES` z adresem, z którym łączy się tunel. Bez tego
+mechanizmu błędna konfiguracja po cichu sprowadzałaby wszystkich
+użytkowników do `127.0.0.1`.
+
 Żądania bez `Origin` są dozwolone (np. `curl`). W trybie ciasteczkowym
 nadal obowiązuje CSRF; w trybie Bearer nie ma czego chronić przed
 automatycznym dołączeniem. Nagłówek `Origin` nie jest jedynym
@@ -178,13 +198,15 @@ Cross-Origin-Resource-Policy: same-origin
 W trybie `tunnel` dodatkowo:
 
 ```http
-Strict-Transport-Security: max-age=31536000; includeSubDomains
+Strict-Transport-Security: max-age=31536000
 Content-Security-Policy: ...; upgrade-insecure-requests
 ```
 
-HSTS i `upgrade-insecure-requests` nie są wysyłane w trybie `local`, aby
-nie wymuszać HTTPS w sieci szkolnej. CSP bez inline, `frame-ancestors
-'none'`, `nosniff` i pozostałe nagłówki działają w obu trybach.
+HSTS nie zawiera `includeSubDomains` ani `preload` — aplikacja nie może
+zakładać, że wszystkie subdomeny szkoły używają wyłącznie HTTPS. HSTS
+i `upgrade-insecure-requests` nie są wysyłane w trybie `local`, aby nie
+wymuszać HTTPS w sieci szkolnej. CSP bez inline, `frame-ancestors 'none'`,
+`nosniff` i pozostałe nagłówki działają w obu trybach.
 
 Dla `/api/*`:
 
