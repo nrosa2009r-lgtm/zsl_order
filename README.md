@@ -525,5 +525,5 @@ uruchomieniu z uprawnieniami `0600`.
 ## Licencja
 
 Projekt jest udostępniany na licencji MIT — pełny tekst w pliku
-[LICENSE](LICENSE). Prawa autorskie: `<TWOJE IMIĘ LUB NICK>` (do
+[LICENSE](LICENSE). Prawa autorskie: `[TWOJE IMIĘ LUB NICK]` (do
 uzupełnienia przez właściciela repozytorium).
