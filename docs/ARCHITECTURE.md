@@ -27,7 +27,7 @@ API znajdują się w [API.md](API.md), a mechanizmy ochrony w
                             │ HTTP(S), ciasteczko sesji
 ┌───────────────────────────▼──────────────────────────────────┐
 │ Axum Router (src/main.rs)                                    │
-│  security_headers → origin_guard → body limit → routes       │
+│  client_ip → headers → origin_guard → routes                 │
 │                                                              │
 │  publiczne:  /api/auth/login, /api/public/info               │
 │  chronione:  auth_middleware (sesja + CSRF + forced change)  │
@@ -54,15 +54,17 @@ rozdzielanie usług.
 | Plik | Odpowiedzialność |
 | --- | --- |
 | `src/main.rs` | konfiguracja routera, trasy, nagłówki bezpieczeństwa, `origin_guard`, serwowanie `frontend/`, start serwera |
-| `src/config.rs` | wczytywanie/tworzenie `config.json`, walidacja i normalizacja pól, `sqlite_url()` |
-| `src/state.rs` | `AppState`: pula DB, konfiguracja, dummy hash, limiter logowania |
+| `src/config.rs` | wczytywanie `.env` i `config.json`, walidacja trybu wdrożenia, `PUBLIC_URL`, zaufanych proxy i `sqlite_url()` |
+| `src/client_ip.rs` | ustalanie adresu klienta: gniazdo TCP w `local`, `CF-Connecting-IP` od zaufanego proxy w `tunnel` |
+| `src/guard.rs` | walidacja `Host` i `Origin` dla obu trybów wdrożenia |
+| `src/state.rs` | `AppState`: pula DB, konfiguracja, dummy hash, limiter logowania, sekret JWT |
 | `src/db.rs` | schemat, indeksy, seed ustawień i menu, czyszczenie, bootstrap admina, audyt, ustawienia |
-| `src/auth.rs` | ciasteczka sesji, middleware sesji i CSRF, guardy ról, limiter logowania |
-| `src/security.rs` | Argon2id, generatory loginów/haseł/kodów, SHA-256 tokenów, porównanie w czasie stałym |
+| `src/auth.rs` | sesje cookie i Bearer, JWT (claims, podpis, weryfikacja), CSRF, guardy ról, limiter logowania |
+| `src/security.rs` | Argon2id, generatory loginów/haseł/kodów, SHA-256 tokenów, sekret `jwt.key`, porównanie w czasie stałym |
 | `src/logging.rs` | inicjalizacja `tracing` (stdout + dzienne pliki `logs/`), middleware logujące żądania bez danych wrażliwych |
 | `src/util.rs` | czas UTC, początek dnia lokalnego, data/godzina lokalna, walidacja `HH:MM` |
 | `src/error.rs` | `AppError`, spójne odpowiedzi JSON, mapowanie błędów SQL/Argon2/IO, logowanie błędów wewnętrznych |
-| `src/handlers/auth.rs` | login, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
+| `src/handlers/auth.rs` | login, wydanie tokenu JWT, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
 | `src/handlers/public.rs` | publiczne informacje o stołówce |
 | `src/handlers/menu.rs` | menu ucznia i personelu, CRUD pozycji |
 | `src/handlers/orders.rs` | składanie/anulowanie zamówień, QR, kolejka kuchni, pickup, zmiana statusów |
@@ -72,31 +74,42 @@ rozdzielanie usług.
 
 Kolejność warstw (od zewnątrz):
 
-0. **`request_log`** — mierzy czas i loguje metodę, ścieżkę bez query,
+0. **`client_ip`** — ustala adres klienta: w `local` zawsze z gniazda
+   TCP, w `tunnel` z `CF-Connecting-IP` tylko od zaufanego proxy.
+   Wynik trafia do rozszerzeń żądania jako `ClientIp`.
+1. **`request_log`** — mierzy czas i loguje metodę, ścieżkę bez query,
    status i czas odpowiedzi. Nie loguje nagłówków, ciasteczek, tokenów
    CSRF, ciał żądań ani adresów IP. Dla `/api/*` poziom zależy od statusu
    (info / warn / error), dla statyków sukces jest na poziomie `debug`.
-1. **`security_headers`** — dodaje CSP, `X-Content-Type-Options`,
+2. **`security_headers`** — dodaje CSP, `X-Content-Type-Options`,
    `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`,
-   COOP/CORP, opcjonalnie HSTS; dla `/api/*` dodaje
+   COOP/CORP; HSTS tylko w `tunnel`; dla `/api/*` dodaje
    `Cache-Control: no-store`.
-2. **`origin_guard`** — dla metod innych niż `GET`/`HEAD`/`OPTIONS`:
-   blokuje `Sec-Fetch-Site: cross-site` oraz niezgodny `Origin` vs `Host`.
-3. **`RequestBodyLimitLayer`** — limit 64 KiB.
-4. **Router** — dopasowanie ścieżki i metody; statyczne pliki z
+3. **`origin_guard`** — waliduje `Host` (w `tunnel` musi wskazywać
+   `PUBLIC_URL` albo loopback), a dla metod innych niż
+   `GET`/`HEAD`/`OPTIONS` blokuje `Sec-Fetch-Site: cross-site` oraz
+   niezgodny `Origin`.
+4. **`RequestBodyLimitLayer`** — limit 64 KiB.
+5. **Router** — dopasowanie ścieżki i metody; statyczne pliki z
    `frontend/` przez `ServeDir`, `/` przekierowuje na `/login`.
-5. **`auth_middleware`** (tylko trasy chronione) —
-   - odczyt ciasteczka `zsl_session`,
-   - walidacja formatu (64 hex),
-   - SHA-256 tokenu i odczyt sesji + użytkownika z bazy,
-   - sprawdzenie wygaśnięcia i `active`,
-   - weryfikacja CSRF dla metod zmieniających stan,
-   - blokada kont z `must_change_password`,
-   - odświeżenie `last_seen_at` maks. raz na 5 minut,
+6. **`auth_middleware`** (tylko trasy chronione) — dwa warianty:
+   - **ciasteczko `zsl_session`**:
+     - odczyt ciasteczka i walidacja formatu (64 hex),
+     - SHA-256 tokenu i odczyt sesji + użytkownika z bazy,
+     - sprawdzenie wygaśnięcia i `active`,
+     - weryfikacja CSRF dla metod zmieniających stan,
+     - odświeżenie `last_seen_at` maks. raz na 5 minut,
+   - **`Authorization: Bearer <JWT>`**:
+     - weryfikacja HS256, `iss`, `aud`, `exp` i rozmiaru tokenu,
+     - `jti` → `token_hash = SHA-256("jwt:" + jti)` → wiersz `sessions`,
+     - zgodność `sub`/`login`/`role`/`code` z aktualnym kontem,
+     - sprawdzenie `active` i wygaśnięcia; brak CSRF (przeglądarka nie
+       dołącza nagłówka automatycznie),
+   - wspólna blokada kont z `must_change_password`,
    - wstawienie `AuthUser` do rozszerzeń żądania.
-6. **Guard roli** (`require_student`, `require_staff`, `require_admin`) —
+7. **Guard roli** (`require_student`, `require_staff`, `require_admin`) —
    porównanie `AuthUser.role`.
-7. **Handler** — walidacja, logika, SQL, audyt, odpowiedź JSON.
+8. **Handler** — walidacja, logika, SQL, audyt, odpowiedź JSON.
 
 Dzięki `auth_middleware` handlery nie muszą same sprawdzać sesji ani CSRF.
 Guardy ról są nakładane przez `route_layer` na poddrzewa tras, więc nowy
@@ -104,7 +117,7 @@ endpoint w `/api/admin` automatycznie dziedziczy wymóg roli `admin`.
 
 ## 5. Przepływy
 
-### 5.1. Logowanie
+### 5.1. Logowanie (sesja ciasteczkowa)
 
 ```text
 POST /api/auth/login
@@ -118,7 +131,29 @@ POST /api/auth/login
   → Set-Cookie + JSON {user, csrf_token}
 ```
 
-### 5.2. Złożenie zamówienia
+### 5.2. Token API (JWT)
+
+```text
+POST /api/auth/token
+  → ta sama weryfikacja hasła i limiter co login
+  → wygeneruj jti (16 B) + claims (sub, login, role, code, iss, aud, iat, exp)
+  → podpisz HS256 sekretem z jwt.key
+  → zapisz SHA-256("jwt:" + jti) w sessions (csrf_token = '', TTL 15 min)
+  → audyt token_issued + JSON {access_token, token_type, expires_in, user}
+
+Żądanie chronione:
+Authorization: Bearer <JWT>
+  → auth_middleware: weryfikacja podpisu/iss/aud/exp
+  → odczyt sesji po SHA-256("jwt:" + jti)
+  → zgodność claims z aktualnym kontem + active
+  → bez CSRF (nagłówek nie jest wysyłany automatycznie)
+```
+
+Dzięki wpisowi w `sessions` token JWT można unieważnić natychmiast —
+tak samo jak sesję ciasteczkową. `jwt.key` jest wczytywany przy starcie;
+jego usunięcie i restart unieważnia wszystkie tokeny.
+
+### 5.3. Złożenie zamówienia
 
 ```text
 POST /api/student/orders
@@ -140,7 +175,7 @@ POST /api/student/orders
 Transakcja gwarantuje, że zamówienie nie powstanie bez pozycji. Kody są
 losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 
-### 5.3. QR i odbiór
+### 5.4. QR i odbiór
 
 - QR generuje serwer w `GET /api/student/orders/:id/qr.svg` na podstawie
   `qr_token`; w obrazie jest `ZSL:<token>`, bez danych ucznia.
@@ -151,7 +186,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
   Wydanie następuje przez `PATCH /api/staff/orders/:id`.
 - Każde wyszukanie trafia do audytu.
 
-### 5.4. Zmiana statusu i płatności
+### 5.5. Zmiana statusu i płatności
 
 - Kuchnia: `new → preparing → ready → completed` (lub pominięcie stanów),
   `completed` automatycznie ustawia `paid`.
@@ -159,7 +194,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 - Student może anulować tylko własne `new`.
 - Administrator może ustawić dowolny dozwolony status i płatność.
 
-### 5.5. Statystyki aktywności
+### 5.6. Statystyki aktywności
 
 `GET /api/admin/stats/activity?days=1..90`:
 
@@ -178,7 +213,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 Dni są grupowane według **strefy lokalnej serwera**, a znaczniki czasu w
 bazie pozostają w UTC. Statystyki nie zawierają danych osobowych.
 
-### 5.6. Twarde usuwanie konta
+### 5.7. Twarde usuwanie konta
 
 `DELETE /api/admin/users/:id`:
 
@@ -198,7 +233,7 @@ bazie pozostają w UTC. Statystyki nie zawierają danych osobowych.
 Operacja jest nieodwracalna i celowo usuwa także historię zamówień oraz
 sesje, aby nie pozostawiać osieroconych danych powiązanych z kontem.
 
-### 5.7. Eksport CSV metadanych
+### 5.8. Eksport CSV metadanych
 
 `GET /api/admin/users/export.csv` używa tych samych filtrów co lista kont
 (`role`, `active`, `q`), limit 20 000 wierszy:
@@ -215,7 +250,7 @@ sesje, aby nie pozostawiać osieroconych danych powiązanych z kontem.
 Kolumna `haslo_startowe` mówi tylko, czy konto nadal ma wymuszoną zmianę
 hasła — **nie zawiera hasła**. System nie przechowuje haseł jawnych.
 
-### 5.8. Logowanie techniczne
+### 5.9. Logowanie techniczne
 
 - `logging::init()` tworzy `logs/` i dzienne pliki
   `logs/zsl_order.log.RRRR-MM-DD` (`tracing-appender`).
@@ -223,10 +258,12 @@ hasła — **nie zawiera hasła**. System nie przechowuje haseł jawnych.
   przez `RUST_LOG`.
 - Logi trafiają równolegle na stdout i do pliku.
 - Zdarzenia: start/konfiguracja/baza/serwer, logowania (sukces, brak konta,
-  błędne hasło, limiter), zmiany haseł, generowanie/aktualizacja/usuwanie
-  kont, reset hasła, eksport CSV, błędy wewnętrzne i błędy zapisu audytu.
-- **Nigdy** nie logujemy haseł, tokenów sesji/CSRF, ciasteczek, ciał żądań
-  ani adresów IP. Logowanie żądań nie zapisuje też parametrów zapytania.
+  błędne hasło, limiter), wydanie tokenu JWT, zmiany haseł,
+  generowanie/aktualizacja/usuwanie kont, reset hasła, eksport CSV, błędy
+  wewnętrzne i błędy zapisu audytu.
+- **Nigdy** nie logujemy haseł, tokenów sesji/CSRF/JWT, sekretu `jwt.key`,
+  ciasteczek, ciał żądań ani adresów IP. Logowanie żądań nie zapisuje też
+  parametrów zapytania.
 
 ## 6. Model danych (skrót)
 
@@ -299,7 +336,9 @@ Kluczowe decyzje:
 ```text
 main()
   → logging::init() (stdout + logs/)
-  → Config::load_or_create("config.json")
+  → Config::load_or_create("config.json" + .env)
+      → walidacja DEPLOY_MODE, BIND_ADDR, TRUSTED_PROXIES, PUBLIC_URL
+      → w tunnel: loopback + PUBLIC_URL wymagane, COOKIE_SECURE=true
   → db::init()
       → połączenie SQLite + PRAGMA
       → CREATE TABLE/INDEX IF NOT EXISTS
@@ -308,16 +347,16 @@ main()
       → cleanup (sesje wygasłe, audyt > 90 dni)
       → ensure_initial_admin (tylko gdy brak adminów)
   → dummy_hash (Argon2id)
+  → load_or_create_jwt_secret("jwt.key") (0600, 64+ hex)
   → build_router(state)
-  → TcpListener::bind(ip:port)
-      └─ przy błędzie fallback na 0.0.0.0:3000 (z komunikatem)
+  → TcpListener::bind(BIND_ADDR)
+      └─ przy błędzie: czytelny błąd i zakończenie, bez fallbacku
   → axum::serve(...)
 ```
 
-Fallback na `0.0.0.0:3000` istnieje dla wygody lokalnej, ale w produkcji
-lepiej dopilnować, aby wybrany port był wolny; wtedy aplikacja nie zmieni
-nieoczekiwanie interfejsu nasłuchu. Zobacz też ograniczenia w
-[SECURITY.md](SECURITY.md).
+Aplikacja nie zmienia już w locie interfejsu nasłuchu. W trybie `tunnel`
+odmówi startu, jeśli `BIND_ADDR` nie jest adresem pętlowym, a w obu
+trybach zakończy się błędem, gdy port jest zajęty.
 
 ## 10. Decyzje i kompromisy
 
@@ -325,8 +364,10 @@ nieoczekiwanie interfejsu nasłuchu. Zobacz też ograniczenia w
 | --- | --- | --- |
 | SQLite zamiast PostgreSQL | zero administracji, łatwy backup, wystarcza dla jednej stołówki | jeden zapisujący proces, brak replikacji |
 | własne sesje w DB | pełna kontrola, natychmiastowe unieważnianie | dodatkowy odczyt DB na żądanie |
+| JWT tylko jako drugi kanał | wygoda klientów API bez rezygnacji z ciasteczek `HttpOnly` | dwa warianty w middleware, krótki TTL 15 min |
+| sesja DB także dla JWT | natychmiastowa rewokacja (logout/zmiana hasła/dezaktywacja) | wpis w `sessions` na każdy token |
 | SHA-256 tokenów sesji | wyciek bazy nie ujawnia ciasteczek | brak możliwości odzyskania tokenu (nie jest potrzebny) |
-| CSRF + origin guard | ochrona podwójna, także dla klientów bez CSRF | wymaga poprawnego nagłówka w klientach API |
+| CSRF + origin guard | ochrona podwójna dla przeglądarki | klienci Bearer są zwolnieni z CSRF |
 | brak rejestracji | zero danych osobowych, kontrola kont | ręczne generowanie kont |
 | brak e-mail/SMS | brak danych kontaktowych | brak samoobsługowego resetu |
 | płatność przy ladzie | brak danych kart | brak przedpłaty online |
@@ -350,8 +391,9 @@ przez NFS — SQLite nie jest do tego przeznaczony.
 
 ## 12. Testowalność
 
-- Testy jednostkowe w modułach `config`, `security`, `util`, `handlers::admin`
-  (`cargo test`), w tym escapowanie CSV i ochrona przed formułami.
+- Testy jednostkowe w modułach `config`, `security`, `auth`, `util`,
+  `handlers::admin` (`cargo test`), w tym roundtrip JWT, odrzucenie
+  złego sekretu/wygaśnięcia, escapowanie CSV i ochrona przed formułami.
 - Logika handlerów jest cienka; większość walidacji jest jawna i łatwa do
   pokrycia testami integracyjnymi.
 - Aplikacja nie wymaga frontendu do testów API — wystarczy `curl`.

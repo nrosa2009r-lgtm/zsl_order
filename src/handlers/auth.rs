@@ -1,4 +1,5 @@
 use crate::auth::{self, AuthUser};
+use crate::client_ip::ClientIp;
 use crate::db;
 use crate::error::AppError;
 use crate::security;
@@ -6,12 +7,12 @@ use crate::state::AppState;
 use crate::util;
 use axum::{
     Extension, Json,
-    extract::{ConnectInfo, State},
+    extract::State,
     http::{HeaderMap, header},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -126,10 +127,10 @@ async fn authenticate(
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(address): ConnectInfo<SocketAddr>,
+    Extension(client): Extension<ClientIp>,
     Json(body): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), AppError> {
-    let row = authenticate(&state, address.ip(), &body.login, &body.password).await?;
+    let row = authenticate(&state, client.0, &body.login, &body.password).await?;
 
     let token = security::random_hex(32);
     let csrf_token = security::random_hex(32);
@@ -196,10 +197,10 @@ pub async fn login(
 /// można go natychmiast unieważnić (logout, zmiana hasła, dezaktywacja).
 pub async fn token(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(address): ConnectInfo<SocketAddr>,
+    Extension(client): Extension<ClientIp>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<TokenResponse>, AppError> {
-    let row = authenticate(&state, address.ip(), &body.login, &body.password).await?;
+    let row = authenticate(&state, client.0, &body.login, &body.password).await?;
 
     let now = util::now();
     let expires_at = now + auth::JWT_TTL_SECONDS;

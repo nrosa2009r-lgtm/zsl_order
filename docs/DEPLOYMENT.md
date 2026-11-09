@@ -40,16 +40,21 @@ cargo clippy --all-targets
 ├── frontend/              # statyczne HTML/CSS/JS (0755, root:root)
 └── data/                  # katalog roboczy usługi (0700, zsl:zsl)
     ├── config.json        # 0600
+    ├── .env               # 0600, tryb wdrożenia i PUBLIC_URL
     ├── baza.db            # 0600
     ├── baza.db-wal        # tworzone przez SQLite
     ├── baza.db-shm
+    ├── jwt.key            # sekret HMAC JWT, 0600, tworzony przy starcie
+    ├── logs/              # dzienne logi, 0700, tworzone przy starcie
+    │   └── zsl_order.log.RRRR-MM-DD
     └── admin_start.txt    # tylko przy pierwszym uruchomieniu, 0600
 ```
 
-Aplikacja używa **ścieżek względnych** (`config.json`, `baza.db`,
-`admin_start.txt`, `frontend/`) wobec katalogu roboczego. Dlatego
-`WorkingDirectory` musi wskazywać `data/`, a `frontend/` musi być
-dostępny względem tego katalogu. Można użyć symlinku:
+Aplikacja używa **ścieżek względnych** (`config.json`, `.env`, `baza.db`,
+`jwt.key`, `logs/`, `admin_start.txt`, `frontend/`) wobec katalogu
+roboczego. Dlatego `WorkingDirectory` musi wskazywać `data/`, a
+`frontend/` musi być dostępny względem tego katalogu. Można użyć
+symlinku:
 
 ```bash
 ln -s /opt/zsl_order/frontend /opt/zsl_order/data/frontend
@@ -69,38 +74,159 @@ sudo chown -R root:root /opt/zsl_order/frontend
 sudo ln -s /opt/zsl_order/frontend /opt/zsl_order/data/frontend
 ```
 
+Przy pierwszym starcie aplikacja tworzy w `data/`:
+
+- `baza.db` i pliki WAL,
+- `jwt.key` (sekret HMAC do tokenów JWT, `0600`),
+- `logs/` (`0700`) z dziennymi plikami logów,
+- `admin_start.txt` (`0600`) tylko raz, gdy nie ma żadnego admina.
+
+`sudo install -d` i `UMask=0077` w systemd zapewniają, że nowe pliki nie
+są czytelne dla innych użytkowników.
+
 ## 4. Konfiguracja
 
+Konfiguracja jest podzielona na dwa pliki:
+
+- `.env` — tryb wdrożenia i granica zaufania (wzór `.env.example`),
+- `config.json` — baza, pula połączeń i sesje (wzór
+  `config.example.json`).
+
+`.env` jest ignorowany przez Git i nie zawiera sekretów. Gdy ta sama
+wartość występuje w obu plikach, `.env` ma pierwszeństwo.
+
+### 4.1. Uruchomienie lokalne
+
+Wariant dla sieci szkolnej, bez tunelu i bez publicznego adresu.
+
 ```bash
-sudo -u zsl cp /opt/zsl_order/config.example.json /opt/zsl_order/data/config.json
-sudo chmod 600 /opt/zsl_order/data/config.json
-sudo -u zsl editor /opt/zsl_order/data/config.json
+cd /opt/zsl_order/data
+sudo -u zsl cp /opt/zsl_order/config.example.json config.json
+sudo -u zsl cp /opt/zsl_order/.env.example .env
+sudo chmod 600 config.json .env
+sudo -u zsl editor .env
 ```
 
-Produkcyjnie:
+Przykładowy `.env`:
 
-```json
-{
-  "ip": "127.0.0.1",
-  "port": 3000,
-  "max_connections": 16,
-  "db_url": "sqlite://baza.db",
-  "session_hours": 12,
-  "secure_cookies": true
-}
+```dotenv
+DEPLOY_MODE=local
+BIND_ADDR=0.0.0.0:8080
+TRUSTED_PROXIES=127.0.0.1,::1
+PUBLIC_URL=http://192.168.1.10:8080
+COOKIE_SECURE=false
 ```
 
-| Pole | Znaczenie | Produkcja |
-| --- | --- | --- |
-| `ip` | interfejs nasłuchu | `127.0.0.1` za proxy |
-| `port` | port HTTP | dowolny wolny, np. 3000 |
-| `max_connections` | pula SQLite | 8–16 |
-| `db_url` | baza | `sqlite://baza.db` |
-| `session_hours` | czas sesji | 8–12 |
-| `secure_cookies` | `Secure` + HSTS + CSP upgrade | **`true`** |
+- `BIND_ADDR` musi być adresem, pod którym uczniowie mają łączyć się z
+  serwerem, np. `0.0.0.0:8080` oznacza wszystkie interfejsy.
+- `PUBLIC_URL` jest opcjonalny. Jeśli go podasz, wpisz dokładny adres
+  używany w przeglądarce (schemat, host i port).
+- `COOKIE_SECURE=auto` ustawia `Secure`, gdy `PUBLIC_URL` używa HTTPS.
+  Przy czystym HTTP w sieci lokalnej użyj `false`.
+- `CF-Connecting-IP` jest w tym trybie całkowicie ignorowany, nawet jeśli
+  ktoś go podrobi.
+- Otwórz w firewallu wyłącznie port z `BIND_ADDR`, np. `8080/tcp`.
 
-**Uwaga:** `secure_cookies = true` wymaga HTTPS. Przy testach po HTTP
-ustaw `false`, inaczej przeglądarka nie wyśle ciasteczka.
+Po zmianie `.env` zrestartuj usługę:
+
+```bash
+sudo systemctl restart zsl_order
+```
+
+### 4.2. Dołączenie Cloudflare Tunnel
+
+Wariant publiczny: cloudflared łączy się z Cloudflare, a aplikacja
+nasłuchuje wyłącznie na loopbacku. Cloudflare kończy TLS, więc aplikacja
+widzi zwykłe HTTP.
+
+W panelu Cloudflare utwórz tunel i rekord DNS dla wybranej domeny,
+np. `zsl.example.com`. Konfigurację Access, WAF i rate limitingu panelu
+Cloudflare opisujemy tylko jako zalecenie — aplikacja jej nie zastępuje.
+
+Przykładowy `/etc/cloudflared/config.yml`:
+
+```yaml
+tunnel: REPLACE_TUNNEL_ID
+credentials-file: /etc/cloudflared/REPLACE_TUNNEL_ID.json
+
+ingress:
+  - hostname: zsl.example.com
+    service: http://127.0.0.1:3000
+  - service: http_status:404
+```
+
+Przykładowa usługa `/etc/systemd/system/cloudflared.service`:
+
+```ini
+[Unit]
+Description=Cloudflare Tunnel dla ZSL Order
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Przykładowy `.env` aplikacji:
+
+```dotenv
+DEPLOY_MODE=tunnel
+BIND_ADDR=127.0.0.1:3000
+TRUSTED_PROXIES=127.0.0.1,::1
+PUBLIC_URL=https://zsl.example.com
+COOKIE_SECURE=auto
+```
+
+W tym trybie:
+
+- `BIND_ADDR` musi wskazywać `127.0.0.1` lub `::1`; aplikacja odmówi
+  startu dla `0.0.0.0`.
+- `PUBLIC_URL` jest wymagany. `Host` i `Origin` muszą wskazywać ten
+  adres; wyjątkiem są lokalne adresy pętlowe używane do diagnostyki.
+- `CF-Connecting-IP` jest honorowany tylko wtedy, gdy połączenie przyszło
+  z adresu należącego do `TRUSTED_PROXIES`.
+- `COOKIE_SECURE` jest zawsze wymuszane na `true`, niezależnie od wartości
+  w `.env`, bo przeglądarka łączy się z Cloudflare po HTTPS.
+- HSTS i `upgrade-insecure-requests` są dodawane tylko w tym trybie.
+- Nie otwieraj portu aplikacji w firewallu. Jedynym klientem ma być
+  cloudflared na tym samym hoście.
+
+Usługę aplikacji uruchom według rozdziału 6. Cloudflared:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now cloudflared
+sudo systemctl status cloudflared
+```
+
+### 4.3. Przełączanie trybów
+
+Przełączenie polega wyłącznie na zmianie `.env` i restarcie usługi — bez
+przebudowy binarki i bez zmian w bazie:
+
+```bash
+sudo -u zsl editor /opt/zsl_order/data/.env
+sudo systemctl restart zsl_order
+```
+
+Po zmianie trybu użytkownicy mogą zostać wylogowani, jeśli zmieni się
+flaga `Secure` ciasteczka lub adres publiczny. Nie trzeba czyścić bazy.
+
+Czas życia tokenów JWT jest stały (**15 minut**) i nie jest konfigurowany
+w `config.json`. Sekret `jwt.key` jest generowany automatycznie; nie ma
+osobnego pola konfiguracyjnego.
 
 ## 5. Pierwsze uruchomienie
 
@@ -139,11 +265,13 @@ Type=simple
 User=zsl
 Group=zsl
 WorkingDirectory=/opt/zsl_order/data
+EnvironmentFile=/opt/zsl_order/data/.env
 ExecStart=/opt/zsl_order/zsl_order
 Restart=on-failure
 RestartSec=3
 
-# Uprawnienia plików tworzonych przez aplikację (baza, admin_start.txt)
+# Uprawnienia plików tworzonych przez aplikację
+# (baza, jwt.key, logs/, admin_start.txt)
 UMask=0077
 
 # Hardening systemd
@@ -173,6 +301,26 @@ sudo journalctl -u zsl_order -f
 
 `ProtectSystem=strict` czyni system plików tylko do odczytu poza
 `ReadWritePaths`; dlatego katalog `data/` musi być zapisywalny dla `zsl`.
+
+Aplikacja rotuje logi dziennie (`logs/zsl_order.log.RRRR-MM-DD`), ale nie
+usuwa starych plików. Dodaj `logrotate` (albo `tmpfiles.d`), np.
+`/etc/logrotate.d/zsl_order`:
+
+```text
+/opt/zsl_order/data/logs/zsl_order.log.* {
+    daily
+    rotate 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su zsl zsl
+}
+```
+
+Katalog `logs/` powinien mieć `0700`; pliki nie zawierają haseł ani
+tokenów, ale mogą ujawniać strukturę ruchu i identyfikatory techniczne.
 
 ## 7. Nginx + TLS
 
@@ -283,6 +431,13 @@ Cron (przykład, codziennie 2:15, retencja 30 dni):
 Backup zawiera hash haseł i tokeny sesji — traktuj go jak dane wrażliwe
 (min. `0600`, szyfrowanie, ograniczony dostęp).
 
+Sekret `jwt.key` **nie musi** być backupowany: tokeny JWT żyją 15 minut, a
+po odtworzeniu bazy ze starym `jwt.key` i tak wygasną. Jeśli chcesz
+zachować ważność tokenów przez odtworzenie, zrób kopię `jwt.key` razem z
+bazą — ale wtedy traktuj ją jak klucz kryptograficzny. Brak `jwt.key`
+spowoduje wygenerowanie nowego sekretu przy starcie i unieważni
+wszystkie tokeny (sesje ciasteczkowe nadal działają).
+
 ### Odtwarzanie
 
 ```bash
@@ -320,14 +475,20 @@ dodanie tabel/indeksów zwykle nie wymaga ręcznej migracji. Zmiany
 usuwające/zmieniające kolumny wymagają **ręcznej migracji** — zawsze po
 backupie i teście na kopii. Aplikacja nie ma frameworka migracji.
 
+Aktualizacja **nie usuwa** `jwt.key`, `logs/` ani bazy. Nowa binarka
+może wymagać restartu, aby wczytać nowe trasy; nie usuwaj `jwt.key`,
+jeśli chcesz zachować ważność wydanych tokenów (i tak wygasają po 15
+minutach).
+
 ## 10. Monitoring
 
 Minimum:
 
 - proces i port: `systemctl status zsl_order`, `ss -ltnp | grep 3000`,
 - health check: `GET /api/public/info` → 200,
-- miejsce na dysku (baza + WAL + backupy),
+- miejsce na dysku (baza + WAL + `logs/` + backupy),
 - błędy w `journalctl -u zsl_order`,
+- dzienne logi w `/opt/zsl_order/data/logs/` (rotacja i retencja),
 - poprawność TLS (`openssl s_client`, certyfikaty),
 - czas systemowy (NTP).
 
@@ -339,9 +500,11 @@ oczekiwany status: 200
 oczekiwany content-type: application/json
 ```
 
-Aplikacja nie prowadzi access logów HTTP. Jeśli potrzebujesz logów
-dostępowych, włącz je w Nginx, ale nie loguj ciasteczek, nagłówka
-`X-CSRF-Token` ani ciał żądań. Ustaw retencję i dostęp do logów.
+Aplikacja prowadzi własne logi techniczne (`logs/zsl_order.log.*`) z
+metodą, ścieżką, statusem i czasem odpowiedzi — **bez** ciasteczek,
+nagłówka `Authorization`/`X-CSRF-Token`, ciał żądań i adresów IP. Jeśli
+potrzebujesz logów dostępowych z IP, włącz je w Nginx, ale nie loguj
+ciastek, tokenów ani ciał żądań. Ustaw retencję i dostęp do logów.
 
 ## 11. Testy i smoke test
 
@@ -378,6 +541,22 @@ curl -fsS http://127.0.0.1:38080/api/public/info | jq .
 curl -s -c cookies.txt -H 'Content-Type: application/json' \
   -d '{"login":"admin-...","password":"..."}' \
   http://127.0.0.1:38080/api/auth/login | jq .
+
+# Wariant API: token JWT (bez ciasteczka i bez CSRF)
+TOKEN=$(curl -s -H 'Content-Type: application/json' \
+  -d '{"login":"admin-...","password":"..."}' \
+  http://127.0.0.1:38080/api/auth/token | jq -r '.access_token')
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:38080/api/auth/me | jq .
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:38080/api/auth/logout | jq .
+# token po logout powinien zwrócić 401
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $TOKEN" http://127.0.0.1:38080/api/auth/me
+
+# Uprawnienia plików i logi
+stat -c '%a %n' jwt.key logs admin_start.txt 2>/dev/null
+ls -l logs/
 ```
 
 Po testach zatrzymaj proces i usuń katalog testowy, aby produkcyjna baza
@@ -390,7 +569,9 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 - przejście statusów do `completed` i sprawdzenie utargu,
 - próbę dostępu ucznia do `/api/admin/*` (403),
 - żądanie bez CSRF (403) i z obcym `Origin` (403),
-- obecność nagłówków CSP/HSTS.
+- wydanie tokenu JWT, żądanie Bearer bez CSRF, logout i ponowne żądanie
+  (401) oraz odrzucenie tokenu po zmianie hasła/dezaktywacji,
+- obecność nagłówków CSP/HSTS i brak danych wrażliwych w logach.
 
 ## 12. Rozwiązywanie problemów
 
@@ -401,6 +582,9 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 | 403 przy POST | brak/nieprawidłowy `X-CSRF-Token` lub obcy `Origin` | pobierz token z `/api/auth/me`, ustaw poprawny `Host`/`Origin` |
 | 403 `password_change_required` | konto ma hasło startowe | zmień hasło przez `/api/auth/change-password` |
 | 401 po restarcie | sesja wygasła lub użytkownik dezaktywowany | zaloguj ponownie |
+| 401 na tokenie JWT | token wygasł (15 min), został unieważniony przez logout/zmianę hasła/dezaktywację, usunięto `jwt.key` lub baza nie ma wiersza sesji JWT | pobierz nowy token przez `/api/auth/token`; nie próbuj „naprawiać” tokenu |
+| `jwt.key` należy do roota lub usługa nie może go odczytać | plik utworzony przez innego użytkownika | `chown zsl:zsl jwt.key && chmod 600 jwt.key`, restart (aplikacja sama wymusza tryb 0600, ale nie właściciela) |
+| brak katalogu `logs/` lub brak zapisu | `ProtectSystem`/właściciel katalogu | upewnij się, że `data/` jest w `ReadWritePaths` i należy do `zsl`; katalog `logs/` tworzy aplikacja |
 | brak stron/404 na CSS/JS | brak `frontend/` w katalogu roboczym | symlink lub kopia `frontend/` |
 | `database is locked` | zbyt wiele zapisów / inne połączenie | zwiększ `busy_timeout` (w kodzie 5 s), ogranicz `max_connections`, sprawdź inne procesy |
 | brak danych startowego admina | admin już istnieje | użyj istniejącego konta lub procedury awaryjnej przez DB |
@@ -413,14 +597,24 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
   albo usuń konto admina tylko wtedy, gdy nie ma innych adminów (wtedy
   bootstrap utworzy nowe przy starcie — ale to operacja ryzykowna).
   Bezpieczniej: przywróć dostęp przez administratora systemu i backup.
-- **Podejrzenie przejęcia konta:** dezaktywuj konto (unieważnia sesje),
-  zmień hasło/reset, przejrzyj audyt, sprawdź logi proxy, rozważ
-  unieważnienie wszystkich sesji (usunięcie wpisów `sessions`).
+- **Podejrzenie przejęcia konta:** dezaktywuj konto (unieważnia sesje
+  cookie i JWT), zmień hasło/reset, przejrzyj audyt, sprawdź logi proxy,
+  rozważ unieważnienie wszystkich sesji (usunięcie wpisów `sessions`).
+- **Wyciek tokenu JWT:** usuń powiązany wiersz z `sessions` (albo
+  wszystkie wpisy JWT: `token_hash` zaczynające się od skrótu
+  `sha256("jwt:...")`; praktycznie `DELETE FROM sessions`), zmień hasło
+  konta. Token i tak wygaśnie po 15 minutach.
+- **Podejrzenie wycieku `jwt.key`:** zatrzymaj usługę, usuń `jwt.key`,
+  uruchom ponownie (nowy sekret), co unieważnia wszystkie tokeny JWT;
+  przeanalizuj dostęp do hosta i logi. Sesje ciasteczkowe pozostają
+  ważne — w razie potrzeby usuń je z `sessions`.
 - **Kompromitacja bazy:** unieważnij wszystkie sesje (`DELETE FROM
   sessions`), wymuś zmianę haseł, przeanalizuj kopie/backupy, zgłoś
   incydent zgodnie z procedurą szkoły.
 - **Awaria dysku:** odtwórz binarkę, `frontend/`, `config.json` i ostatni
   backup bazy; sprawdź uprawnienia; przetestuj logowanie i zamówienie.
+  `jwt.key` możesz odtworzyć (zostanie wygenerowany) — spowoduje to
+  unieważnienie tokenów.
 
 ## 14. Skalowanie i ograniczenia wdrożenia
 

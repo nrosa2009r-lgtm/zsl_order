@@ -13,9 +13,11 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 
 mod auth;
+mod client_ip;
 mod config;
 mod db;
 mod error;
+mod guard;
 mod handlers;
 mod logging;
 mod security;
@@ -45,13 +47,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::load_or_create(CONF_PATH)?;
     println!("ZSL ORDER — system stołówki szkolnej");
-    println!("Konfiguracja: {}", CONF_PATH);
+    println!("Konfiguracja: {} + .env", CONF_PATH);
+    println!("Tryb wdrożenia: {}", config.mode.as_str());
     tracing::info!(
-        ip = %config.ip,
-        port = config.port,
+        mode = config.mode.as_str(),
+        bind = %config.bind_addr,
+        public_url = config
+            .public_url
+            .as_ref()
+            .map(|url| url.origin())
+            .unwrap_or("brak"),
         max_connections = config.max_connections,
         session_hours = config.session_hours,
         secure_cookies = config.secure_cookies,
+        cookie_secure_setting = config.cookie_secure_setting.as_str(),
+        trusted_proxies = config.trusted_proxies.len(),
         "Wczytano konfigurację"
     );
 
@@ -79,16 +89,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = build_router(state);
     let configured_address = config.bind_address();
 
-    let listener = match TcpListener::bind(&configured_address).await {
+    let listener = match TcpListener::bind(configured_address).await {
         Ok(listener) => listener,
         Err(error) => {
-            tracing::warn!(address = %configured_address, error = %error, "Nie można użyć skonfigurowanego adresu; fallback 0.0.0.0:3000");
-            eprintln!("Nie można użyć {configured_address} ({error}). Próbuję 0.0.0.0:3000...");
-            TcpListener::bind("0.0.0.0:3000").await?
+            tracing::error!(
+                address = %configured_address,
+                error = %error,
+                "Nie można uruchomić nasłuchu"
+            );
+            return Err(error.into());
         }
     };
 
     let local = listener.local_addr()?;
+    if let Some(public_url) = &config.public_url {
+        println!("Publiczny adres: {}", public_url.origin());
+    }
     println!("Serwer działa pod adresem: http://{local}");
     println!("Panel ucznia:  http://{local}/student");
     println!("Panel kuchni:  http://{local}/kitchen");
@@ -182,12 +198,16 @@ fn build_router(state: Arc<AppState>) -> Router {
         .nest("/api", api)
         .fallback_service(ServeDir::new("frontend").append_index_html_on_directories(true))
         .layer(RequestBodyLimitLayer::new(64 * 1024))
-        .layer(middleware::from_fn(origin_guard))
+        .layer(middleware::from_fn_with_state(state.clone(), origin_guard))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             security_headers,
         ))
         .layer(middleware::from_fn(logging::request_log))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            client_ip::client_ip_middleware,
+        ))
         .with_state(state)
 }
 
@@ -222,7 +242,7 @@ async fn security_headers(
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
-    let csp = if state.cfg.secure_cookies {
+    let csp = if state.cfg.is_tunnel() {
         "default-src 'self'; \
          script-src 'self'; \
          style-src 'self'; \
@@ -272,7 +292,7 @@ async fn security_headers(
         HeaderValue::from_static("same-origin"),
     );
 
-    if state.cfg.secure_cookies {
+    if state.cfg.is_tunnel() {
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
@@ -287,8 +307,24 @@ async fn security_headers(
 }
 
 /// Ochrona przed CSRF na poziomie pochodzenia żądania (dodatkowo do tokenu
-/// CSRF sprawdzanego w middleware sesji).
-async fn origin_guard(request: Request, next: Next) -> Result<Response, AppError> {
+/// CSRF sprawdzanego w middleware sesji). W trybie tunnel nagłówek Host
+/// musi wskazywać PUBLIC_URL albo adres pętlowy; w trybie local Host jest
+/// przyjmowany, ale Origin musi zgadzać się z Host lub PUBLIC_URL.
+async fn origin_guard(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+
+    if !guard::host_allowed(&state.cfg, host) {
+        return Err(AppError::forbidden("Nieprawidłowy nagłówek Host."));
+    }
+
     let method = request.method();
     let safe = *method == axum::http::Method::GET
         || *method == axum::http::Method::HEAD
@@ -299,40 +335,22 @@ async fn origin_guard(request: Request, next: Next) -> Result<Response, AppError
             .headers()
             .get("sec-fetch-site")
             .and_then(|value| value.to_str().ok())
+            && site.eq_ignore_ascii_case("cross-site")
         {
-            if site.eq_ignore_ascii_case("cross-site") {
-                return Err(AppError::forbidden(
-                    "Żądanie z innej strony zostało zablokowane.",
-                ));
-            }
+            return Err(AppError::forbidden(
+                "Żądanie z innej strony zostało zablokowane.",
+            ));
         }
 
         if let Some(origin) = request
             .headers()
             .get(header::ORIGIN)
             .and_then(|value| value.to_str().ok())
+            && !guard::origin_allowed(&state.cfg, host, origin)
         {
-            let host = request
-                .headers()
-                .get(header::HOST)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("");
-
-            let origin_host = origin
-                .split_once("://")
-                .map(|(_, rest)| rest)
-                .unwrap_or(origin)
-                .trim_end_matches('/');
-
-            if origin_host.is_empty()
-                || origin_host.eq_ignore_ascii_case("null")
-                || host.is_empty()
-                || !origin_host.eq_ignore_ascii_case(host)
-            {
-                return Err(AppError::forbidden(
-                    "Żądanie z innej strony zostało zablokowane.",
-                ));
-            }
+            return Err(AppError::forbidden(
+                "Żądanie z innej strony zostało zablokowane.",
+            ));
         }
     }
 

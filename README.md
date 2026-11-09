@@ -50,6 +50,9 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
   użyć czytnika USB albo wpisać kod ręcznie.
 - **Bezpieczne sesje**: tokeny 256-bit, w bazie tylko skrót SHA-256,
   ciasteczka `HttpOnly` + `SameSite=Strict`, opcjonalnie `Secure`.
+- **Tokeny API JWT**: krótkotrwałe tokeny HS256 (15 min) dla klientów
+  API, powiązane z sesją w bazie — logout i zmiana hasła unieważniają je
+  natychmiast. Sekret w `jwt.key` (0600, poza repozytorium).
 - **Ochrona CSRF**: token per sesja + nagłówek `X-CSRF-Token` + kontrola
   pochodzenia żądania i `Sec-Fetch-Site`.
 - **RBAC**: student, kitchen, admin; każdy endpoint ma jawny guard roli.
@@ -135,10 +138,20 @@ Szczegóły warstw, kolejności middleware i przepływów opisuje
 git clone https://github.com/nrosa2009r-lgtm/zsl_order.git
 cd zsl_order
 
-# opcjonalnie: bezpieczna konfiguracja lokalna (tylko 127.0.0.1)
+# opcjonalnie: konfiguracja bazy i sesji
 cp config.example.json config.json
 
+# konfiguracja wdrożeniowa (tryb local, adres nasłuchu)
+cp .env.example .env
+
 cargo run
+```
+
+Domyślnie aplikacja uruchamia się w trybie `local` na `0.0.0.0:3000`.
+Aby ograniczyć dostęp do tego samego komputera, ustaw w `.env`:
+
+```dotenv
+BIND_ADDR=127.0.0.1:3000
 ```
 
 Aplikacja wypisze adres, np. `http://127.0.0.1:3000`, oraz **jednorazowe
@@ -261,42 +274,72 @@ ustawić oba stany. Wydanie zamówienia automatycznie ustawia `paid`.
 
 ## Konfiguracja
 
-Plik `config.json` jest tworzony automatycznie przy pierwszym uruchomieniu
-(jeśli go nie ma). W repozytorium znajduje się `config.example.json`.
-Nie zawiera sekretów.
+Konfiguracja jest podzielona na dwa pliki:
+
+- `.env` — ustawienia wdrożeniowe i granica zaufania (wzór: `.env.example`),
+- `config.json` — ustawienia bazy, puli połączeń i sesji (wzór:
+  `config.example.json`). Plik nie zawiera sekretów.
+
+`.env` jest ignorowany przez Git. Gdy ta sama wartość występuje w obu
+plikach, pierwszeństwo ma `.env`.
+
+### `.env` — tryb wdrożenia
+
+| Zmienna | Domyślnie | Znaczenie |
+| --- | --- | --- |
+| `DEPLOY_MODE` | `local` | `local` (sieć szkolna, HTTP) lub `tunnel` (Cloudflare Tunnel) |
+| `BIND_ADDR` | `0.0.0.0:3000` (`local`), `127.0.0.1:3000` (`tunnel`) | adres nasłuchu; w `tunnel` dozwolony tylko loopback |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1` | IP/CIDR proxy, którym wolno przekazać `CF-Connecting-IP` |
+| `PUBLIC_URL` | brak | publiczny adres, np. `https://zsl.example.com`; wymagany w `tunnel` |
+| `COOKIE_SECURE` | `auto` | `auto`, `true` lub `false`; w `tunnel` zawsze `true` |
+
+W trybie `local` nagłówek `CF-Connecting-IP` jest ignorowany, a adres
+klienta pochodzi z gniazda TCP. W trybie `tunnel` jest honorowany tylko
+wtedy, gdy połączenie przyszło z adresu z `TRUSTED_PROXIES`.
+
+### `config.json` — baza i sesje
 
 | Pole | Domyślnie | Zakres / znaczenie |
 | --- | --- | --- |
-| `ip` | `0.0.0.0` | adres nasłuchu; produkcyjnie zalecane `127.0.0.1` za reverse proxy |
-| `port` | `3000` | port HTTP |
 | `max_connections` | `16` | 1–128, rozmiar puli SQLite |
 | `db_url` | `sqlite://baza.db` | ścieżka/URL bazy; akceptowane też `baza.db` |
 | `session_hours` | `12` | 1–720, czas życia sesji |
-| `secure_cookies` | `false` | **ustaw `true` przy HTTPS**; włącza `Secure`, HSTS i `upgrade-insecure-requests` w CSP |
 
 Uwagi:
 
+- Dla zgodności ze starszą wersją nadal odczytywane są pola `ip`, `port`
+  i `secure_cookies` z `config.json`, ale `.env` ma nad nimi
+  pierwszeństwo. Nowe instalacje powinny używać `.env`.
 - `max_connections` większy niż potrzeby nie przyspiesza SQLite — to baza
   jednego pliku; 8–16 wystarcza dla stołówki.
-- Po zmianie `secure_cookies` na `true` logowanie musi odbywać się przez
+- Po ustawieniu `COOKIE_SECURE=true` logowanie musi odbywać się przez
   HTTPS, inaczej przeglądarka nie wyśle ciasteczka.
 - Konfiguracja jest czytana odpornie: brakujące lub nieprawidłowe pola
-  dostają bezpieczne wartości domyślne, a plik jest normalizowany.
+  dostają bezpieczne wartości domyślne.
+- W trybie `tunnel` aplikacja odmówi startu, jeśli `BIND_ADDR` nie jest
+  adresem pętlowym albo brakuje `PUBLIC_URL`.
 
 ## Bezpieczeństwo w skrócie
 
 - Hasła: **Argon2id**, losowa sól, domyślne parametry (19 MiB, 2 iteracje).
 - Sesje: 32 losowe bajty → 64 znaki hex; w bazie tylko SHA-256.
-- Ciasteczko: `HttpOnly`, `SameSite=Strict`, `Path=/`, opcjonalnie `Secure`.
+- Ciasteczko: `HttpOnly`, `SameSite=Strict`, `Path=/`; `Secure` zależnie
+  od `COOKIE_SECURE` (w trybie `tunnel` zawsze).
 - CSRF: token 32 bajty na sesję, wymagany w `X-CSRF-Token` dla metod
-  zmieniających stan; porównanie w czasie stałym.
+  zmieniających stan; porównanie w czasie stałym. Dodatkowo `Origin` musi
+  zgadzać się z `PUBLIC_URL` lub bieżącym `Host` (w `local`), a w `tunnel`
+  `Host` musi wskazywać `PUBLIC_URL` albo loopback.
+- JWT: HS256, TTL 15 min, sekret `jwt.key` (0600); każdy token ma wiersz
+  w `sessions`, więc logout/zmiana hasła/dezaktywacja unieważnia go
+  natychmiast. Bearer nie wymaga CSRF; `origin_guard` nadal działa.
 - Dodatkowo: blokada `Sec-Fetch-Site: cross-site` i niezgodnego `Origin`.
 - RBAC na każdym endpoincie; brak dostępu po ID do cudzych zamówień.
 - Rate limiting logowania: 10 błędów na konto / 80 na IP w 10 min → blokada
   15 min; brak ujawniania, czy login istnieje (wyrównanie czasu dummy hash).
 - Walidacja długości i formatów, parametryzowany SQL, limit 64 KiB.
 - CSP bez `inline`, `frame-ancestors 'none'`, `nosniff`, `no-referrer`,
-  `Permissions-Policy`, COOP/CORP; HSTS po włączeniu HTTPS.
+  `Permissions-Policy`, COOP/CORP; HSTS i `upgrade-insecure-requests` tylko
+  w trybie `tunnel`.
 - Audyt zdarzeń bez danych osobowych; 90 dni retencji.
 - QR to losowy token 192-bit; krótki kod jest tylko wygodą i wymaga
   zalogowanego pracownika.
@@ -319,6 +362,8 @@ konkretną osobę, to po stronie szkoły mogą powstać dane osobowe.
   znaczniki czasu.
 - QR zawiera wyłącznie losowy token — bez loginu i danych ucznia.
 - Adresy IP nie są zapisywane w bazie; limiter logowania działa w pamięci.
+- Logi techniczne (`logs/`) zawierają metodę, ścieżkę, status i czas
+  odpowiedzi — bez IP, nagłówków, ciasteczek, tokenów i ciał żądań.
 - Audyt zawiera identyfikator konta, typ zdarzenia i techniczny opis.
 
 Przed wdrożeniem szkoła powinna określić podstawę prawną, okres
@@ -335,9 +380,10 @@ cargo build --release
 ```
 
 Testy jednostkowe obejmują m.in. roundtrip hasła Argon2, losowość tokenów,
-porównanie w czasie stałym, walidację godziny odbioru oraz escapowanie CSV.
-Testy end-to-end (API + role + CSRF + QR + statystyki + eksport + usuwanie
-kont) wykonuje się na izolowanej kopii bazy; opis
+porównanie w czasie stałym, roundtrip JWT i odrzucenie złego
+sekretu/wygaśnięcia, walidację godziny odbioru oraz escapowanie CSV.
+Testy end-to-end (API + role + CSRF + JWT + QR + statystyki + eksport +
+usuwanie kont) wykonuje się na izolowanej kopii bazy; opis
 w [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#11-testy-i-smoke-test).
 
 ## Wdrożenie produkcyjne
@@ -386,8 +432,8 @@ zsl_order/
     ├── config.rs          # config.json
     ├── state.rs           # AppState
     ├── db.rs              # schemat, seed, audyt, bootstrap admina
-    ├── auth.rs            # sesje, CSRF, role, limiter
-    ├── security.rs        # Argon2, tokeny, kody
+    ├── auth.rs            # sesje cookie, JWT, CSRF, role, limiter
+    ├── security.rs        # Argon2, tokeny, kody, sekret jwt.key
     ├── logging.rs         # tracing + dzienne logi w logs/
     ├── util.rs            # czas, walidacje
     ├── error.rs           # spójne błędy JSON
@@ -400,6 +446,8 @@ zsl_order/
 ```
 
 Katalog `logs/` powstaje automatycznie przy starcie i nie jest wersjonowany.
+Podobnie `jwt.key` — sekret HMAC do tokenów JWT, tworzony przy pierwszym
+uruchomieniu z uprawnieniami `0600`.
 
 ## Dokumentacja
 

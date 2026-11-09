@@ -63,7 +63,8 @@ denial-of-service na warstwie sieci.
   - `HttpOnly`,
   - `SameSite=Strict`,
   - `Max-Age = session_hours * 3600` (domyślnie 12 h),
-  - `Secure` tylko gdy `secure_cookies = true`.
+  - `Secure` zależnie od `COOKIE_SECURE` (`auto`, `true`, `false`);
+    w trybie `tunnel` zawsze `true`.
 - Brak `Domain` — ciasteczko jest host-only.
 - Sesja zawiera `csrf_token`, `created_at`, `expires_at`, `last_seen_at`.
 - `last_seen_at` jest odświeżane maks. raz na 5 minut (mniej zapisów).
@@ -72,22 +73,70 @@ denial-of-service na warstwie sieci.
 - Wygasłe sesje są czyszczone przy logowaniu i starcie.
 - Brak „remember me” i brak sesji trwałych poza `session_hours`.
 
+### Tokeny dostępowe JWT (API)
+
+Obok sesji ciasteczkowej działa drugi, opcjonalny kanał: krótkotrwałe
+tokeny **JWT HS256** dla klientów API.
+
+- Wydawanie: `POST /api/auth/token` po weryfikacji hasła (ten sam limiter
+  i te same zabezpieczenia czasowe co logowanie).
+- TTL: **15 minut** (`JWT_TTL_SECONDS = 900`). Brak refresh tokenów;
+  odświeżanie przez ponowne uwierzytelnienie.
+- Claims: `sub`, `login`, `role`, `code`, `jti`, `iss`, `aud`, `iat`,
+  `exp` — wyłącznie pseudonimowe identyfikatory, bez PII.
+- Sekret: plik **`jwt.key`** tworzony przy pierwszym starcie, 64+ znaki
+  hex, uprawnienia `0600` (wymuszane także przy każdym odczycie),
+  wpisany do `.gitignore`. Usunięcie pliku unieważnia wszystkie tokeny
+  (nowy sekret przy starcie).
+- Rewokacja: każdy token ma wiersz w `sessions` z
+  `token_hash = SHA-256("jwt:" + jti)`. Middleware wymaga zgodności
+  podpisu, `exp`, `iss`, `aud`, istnienia wiersza, `active` oraz
+  aktualnych `login`/`role`/`code` z bazy. Dzięki temu logout, zmiana
+  hasła, zmiana roli, dezaktywacja i usunięcie konta działają
+  **natychmiast**.
+- `jti` ma 128 bitów losowości, więc sam wyciek sekretu nie pozwala
+  zgadnąć istniejącego `jti`; mimo to sekret należy traktować jak
+  klucz kryptograficzny.
+- Token Bearer nie jest wysyłany automatycznie przez przeglądarkę,
+  dlatego ścieżka Bearer nie wymaga CSRF. `origin_guard` nadal działa.
+- Token przesyłany wyłącznie po HTTPS; nie umieszczać go w URL,
+  logach, referrerze ani repozytorium. Po stronie klienta trzymać
+  wyłącznie w pamięci lub bezpiecznym magazynie.
+
 ## 4. CSRF i kontrola pochodzenia
 
-Dla metod `POST`/`PUT`/`PATCH`/`DELETE` na trasach chronionych:
+Dla metod `POST`/`PUT`/`PATCH`/`DELETE` na trasach chronionych w trybie
+**ciasteczkowym**:
 
 1. Wymagany nagłówek `X-CSRF-Token` zgodny z tokenem sesji.
 2. Porównanie w czasie stałym (`constant_time_eq`).
 3. Brak/niezgodność → `403 forbidden`.
 
-Dodatkowo `origin_guard` (wszystkie metody zmieniające stan, także login):
+Tryb **Bearer** nie wymaga CSRF: przeglądarka nie dołącza nagłówka
+`Authorization` sama, a token nie jest ciasteczkiem. To celowe i
+bezpieczne, dopóki klient nie przechowuje tokenu w miejscu dostępnym dla
+XSS (frontend aplikacji używa ciasteczek i CSRF).
+
+Dodatkowo `origin_guard` (wszystkie metody zmieniające stan, także login
+i żądania Bearer):
 
 - `Sec-Fetch-Site: cross-site` → `403`,
-- jeśli jest `Origin`, to jego host musi być równy `Host`; `null`, pusty
-  lub inny host → `403`.
+- w trybie `local`: jeśli jest `Origin`, jego host musi być równy
+  bieżącemu `Host`, wskazywać `PUBLIC_URL` albo adres pętlowy,
+- w trybie `tunnel`: `Host` musi wskazywać `PUBLIC_URL` (wyjątek:
+  lokalne adresy pętlowe do diagnostyki), a `Origin` musi być równy
+  `PUBLIC_URL`,
+- `null`, pusty lub niezgodny `Origin` → `403`.
 
-Żądania bez `Origin` są dozwolone (np. `curl`), ale nadal obowiązuje CSRF.
-Nagłówek `Origin` nie jest jedynym mechanizmem — to warstwa dodatkowa.
+Tryb `local` ignoruje `CF-Connecting-IP` i inne nagłówki proxy. W trybie
+`tunnel` adres klienta pochodzi z `CF-Connecting-IP` wyłącznie wtedy, gdy
+połączenie przyszło z adresu z `TRUSTED_PROXIES`; w przeciwnym razie
+używany jest adres gniazda TCP.
+
+Żądania bez `Origin` są dozwolone (np. `curl`). W trybie ciasteczkowym
+nadal obowiązuje CSRF; w trybie Bearer nie ma czego chronić przed
+automatycznym dołączeniem. Nagłówek `Origin` nie jest jedynym
+mechanizmem — to warstwa dodatkowa.
 
 ## 5. Autoryzacja
 
@@ -126,12 +175,16 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Resource-Policy: same-origin
 ```
 
-Gdy `secure_cookies = true`, dodatkowo:
+W trybie `tunnel` dodatkowo:
 
 ```http
 Strict-Transport-Security: max-age=31536000; includeSubDomains
 Content-Security-Policy: ...; upgrade-insecure-requests
 ```
+
+HSTS i `upgrade-insecure-requests` nie są wysyłane w trybie `local`, aby
+nie wymuszać HTTPS w sieci szkolnej. CSP bez inline, `frame-ancestors
+'none'`, `nosniff` i pozostałe nagłówki działają w obu trybach.
 
 Dla `/api/*`:
 
@@ -180,18 +233,25 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 ## 9. Audyt i logowanie
 
 - Tabela `audit_log`: `actor_id`, `action`, `details`, `created_at`.
-- Zdarzenia m.in.: `login`, `logout`, `password_changed`,
+- Zdarzenia m.in.: `login`, `token_issued`, `logout`, `password_changed`,
   `password_change_failed`, `password_reset`, `users_generated`,
-  `user_updated`, `order_created`, `order_cancelled_by_student`,
-  `order_updated`, `pickup_lookup`, `menu_item_created`,
-  `menu_item_updated`, `menu_item_hidden`, `settings_updated`,
-  `admin_seeded`.
+  `users_exported`, `user_updated`, `user_deleted`, `order_created`,
+  `order_cancelled_by_student`, `order_updated`, `pickup_lookup`,
+  `menu_item_created`, `menu_item_updated`, `menu_item_hidden`,
+  `settings_updated`, `admin_seeded`.
 - `details` zawierają identyfikatory techniczne i statusy, nie imiona ani
   dane kontaktowe.
 - Retencja: wpisy starsze niż 90 dni są usuwane przy starcie.
-- Aplikacja nie prowadzi access logów HTTP (brak `TraceLayer`); logi
-  błędów trafiają na stderr (systemd journal). Nie loguj ciasteczek,
-  haseł ani tokenów.
+- Logi techniczne: `tracing` pisze na stdout oraz do dziennych plików
+  `logs/zsl_order.log.RRRR-MM-DD` (rotacja dzienna, bez wbudowanej
+  retencji — skonfiguruj `logrotate` lub `tmpfiles.d`).
+- Middleware `request_log` zapisuje wyłącznie metodę, ścieżkę **bez
+  query string**, status HTTP i czas odpowiedzi. **Nie** loguje
+  nagłówków, ciasteczek, `Authorization`, `X-CSRF-Token`, ciał żądań,
+  adresów IP ani tokenów JWT.
+- Logi mogą zawierać identyfikatory techniczne (np. `user_id`), role i
+  komunikaty błędów; nie zawierają haseł ani sekretów. Katalog `logs/`
+  powinien mieć uprawnienia `0700` i należeć do użytkownika usługi.
 - Audyt nie jest niezmienny — administrator z dostępem do bazy może go
   modyfikować. Dla silniejszego reżimu należy wysyłać kopię do
   zewnętrznego, append-only systemu.
@@ -212,20 +272,26 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 | QR | bearer token w bazie i na ekranie | nie publikować QR; traktować jak bilet |
 | Krótki kod | ~28 bitów | tylko personel; nie używać jako publicznego linku |
 | Zależności | brak automatycznego audytu w CI | uruchamiać `cargo audit`, aktualizować zależności |
-| Logi HTTP | brak | dodać na poziomie reverse proxy, z retencją i bez danych wrażliwych |
+| Logi HTTP | pliki dzienne bez wbudowanej retencji | `logrotate`/`tmpfiles.d`, katalog `logs/` 0700; nie logować nagłówków i ciał |
+| Tokeny JWT | 15 min, brak refresh tokenów; wymagają bezpiecznego przechowywania u klienta | HTTPS, pamięć/bezpieczny magazyn, nie logować; po podejrzeniu wycieku usunąć sesje JWT i `jwt.key` |
+| Sekret `jwt.key` | leży na dysku obok bazy | `0600`, właściciel usługi, backup tylko szyfrowany; rotacja = usunięcie pliku i restart (unieważnia wszystkie tokeny) |
 | Plik `admin_start.txt` | może pozostać, jeśli hasło nie zostanie zmienione | jak najszybciej zmienić hasło; plik ma `0600` |
 | Wszyscy admini nieaktywni | bootstrap tworzy konto tylko przy zerze rekordów `admin` | nie dezaktywować ostatniego admina; procedura awaryjna przez DB |
-| CSRF dla klientów API | wymaga nagłówka; klienci bez niego dostaną 403 | udokumentowane w [API.md](API.md) |
+| CSRF dla klientów API | w trybie ciasteczkowym wymaga nagłówka; klienci bez niego dostaną 403 | udokumentowane w [API.md](API.md); w trybie Bearer CSRF nie obowiązuje |
 
 ## 11. Checklista wdrożeniowa
 
 ### Konfiguracja
 
-- [ ] `ip = "127.0.0.1"` (za reverse proxy) lub adres w zaufanej sieci.
-- [ ] `secure_cookies = true` i działający HTTPS.
+- [ ] `.env` na podstawie `.env.example`, uprawnienia `0600`.
+- [ ] `DEPLOY_MODE` zgodny z wdrożeniem (`local` albo `tunnel`).
+- [ ] W trybie `tunnel`: `BIND_ADDR=127.0.0.1:PORT`, poprawny
+      `PUBLIC_URL` i `TRUSTED_PROXIES` ograniczone do lokalnego proxy.
+- [ ] `COOKIE_SECURE` zgodne z transportem; w `tunnel` i tak wymuszone
+      `true`.
 - [ ] `session_hours` zgodne z polityką (domyślnie 12 h).
 - [ ] `max_connections` rozsądne (8–16).
-- [ ] `config.json` i `baza.db` z uprawnieniami `0600`/`0640`, właściciel
+- [ ] `config.json`, `.env` i `baza.db` z uprawnieniami `0600`, właściciel
       = użytkownik usługi.
 - [ ] `admin_start.txt` odebrany i usunięty po pierwszej zmianie hasła.
 
@@ -250,6 +316,10 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 - [ ] Sprawdzone role (uczeń → `/api/admin/*` = 403).
 - [ ] Sprawdzone logowanie, wymuszona zmiana hasła, reset hasła.
 - [ ] Sprawdzone składanie i wydanie zamówienia oraz QR.
+- [ ] Sprawdzone wydanie tokenu JWT (`POST /api/auth/token`) i żądanie
+      Bearer bez CSRF; logout Bearer unieważnia token (401).
+- [ ] `jwt.key` istnieje, ma `0600` i należy do użytkownika usługi;
+      `logs/` ma `0700`.
 
 ### Operacje
 

@@ -3,6 +3,10 @@
 # Lokalna konfiguracja (nie zawiera sekretów, ale jest specyficzna dla maszyny)
 config.json
 
+# Lokalne ustawienia wdrożeniowe (tryb, adres nasłuchu, PUBLIC_URL).
+# Wzór znajduje się w .env.example.
+.env
+
 # Baza SQLite i pliki tymczasowe WAL
 baza.db
 *.db
@@ -21,3 +25,6 @@ logs/
 # Lokalne backupy i artefakty testowe
 backups/
 *.backup
+
+# Lokalne artefakty testowe
+/tmp/
