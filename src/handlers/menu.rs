@@ -30,6 +30,9 @@ pub struct StudentMenuResponse {
     pub ordering_enabled: bool,
     pub payment_info: String,
     pub max_order_items: i64,
+    pub cancel_window_minutes: i64,
+    pub pickup_limit_minutes: i64,
+    pub max_uncollected: i64,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +81,9 @@ pub async fn student_menu(
         )
         .await,
         max_order_items: setting_i64(&state, "max_order_items", 20).await,
+        cancel_window_minutes: setting_i64(&state, "cancel_window_minutes", 30).await,
+        pickup_limit_minutes: setting_i64(&state, "pickup_limit_minutes", 120).await,
+        max_uncollected: setting_i64(&state, "max_uncollected", 0).await,
     }))
 }
 

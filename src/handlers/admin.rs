@@ -90,6 +90,12 @@ pub struct SettingsRequest {
     pub max_open_orders: Option<i64>,
     #[serde(default)]
     pub max_order_items: Option<i64>,
+    #[serde(default)]
+    pub cancel_window_minutes: Option<i64>,
+    #[serde(default)]
+    pub pickup_limit_minutes: Option<i64>,
+    #[serde(default)]
+    pub max_uncollected: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1165,6 +1171,30 @@ pub async fn update_settings(
             ));
         }
         updates.push(("max_order_items".to_string(), value.to_string()));
+    }
+    if let Some(value) = body.cancel_window_minutes {
+        if !(0..=1440).contains(&value) {
+            return Err(AppError::bad(
+                "Termin anulowania musi wynosić od 0 do 1440 minut (0 = bez limitu).",
+            ));
+        }
+        updates.push(("cancel_window_minutes".to_string(), value.to_string()));
+    }
+    if let Some(value) = body.pickup_limit_minutes {
+        if !(0..=720).contains(&value) {
+            return Err(AppError::bad(
+                "Limit czasu odbioru musi wynosić od 0 do 720 minut (0 = wyłączony).",
+            ));
+        }
+        updates.push(("pickup_limit_minutes".to_string(), value.to_string()));
+    }
+    if let Some(value) = body.max_uncollected {
+        if !(0..=20).contains(&value) {
+            return Err(AppError::bad(
+                "Limit nieodebranych zamówień musi wynosić od 0 do 20 (0 = brak blokady).",
+            ));
+        }
+        updates.push(("max_uncollected".to_string(), value.to_string()));
     }
 
     if updates.is_empty() {

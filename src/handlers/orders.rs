@@ -227,6 +227,26 @@ pub async fn create_order(
         return Ok((StatusCode::OK, Json(load_order(&state, existing_id).await?)));
     }
 
+    let max_uncollected = setting_i64(&mut transaction, "max_uncollected", 0).await?;
+    if max_uncollected > 0 {
+        let cutoff = now - 30 * 24 * 60 * 60;
+        let uncollected: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM orders
+             WHERE user_id = ? AND uncollected_at IS NOT NULL AND uncollected_at >= ?",
+        )
+        .bind(user.id)
+        .bind(cutoff)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if uncollected >= max_uncollected {
+            transaction.rollback().await?;
+            return Err(AppError::conflict(format!(
+                "Masz {uncollected} nieodebranych zamówień w ostatnich 30 dniach. \
+                 Zamawianie jest zablokowane — zgłoś się do stołówki."
+            )));
+        }
+    }
+
     let max_open_orders = setting_i64(&mut transaction, "max_open_orders", 3).await?;
     let open_orders: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM orders
@@ -383,6 +403,7 @@ pub async fn cancel_order(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<Json<OrderView>, AppError> {
+    let cancel_window_minutes = parse_setting(&state, "cancel_window_minutes", 30).await;
     let mut connection = state.db.acquire().await?;
     let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
 
@@ -417,6 +438,14 @@ pub async fn cancel_order(
         return Err(AppError::conflict(
             "Opłaconego zamówienia nie można anulować. Skontaktuj się z obsługą stołówki.",
         ));
+    }
+    if cancel_window_minutes > 0
+        && util::now().saturating_sub(current.created_at) > cancel_window_minutes * 60
+    {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(format!(
+            "Termin anulowania zamówienia ({cancel_window_minutes} min od złożenia) już minął."
+        )));
     }
 
     let result = sqlx::query(
@@ -623,7 +652,7 @@ pub async fn staff_update_order(
 
     let current = current.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
 
-    if current.uncollected_at.is_some() {
+    if current.uncollected_at.is_some() && user.role != "admin" {
         return Err(AppError::conflict(
             "To zamówienie zostało oznaczone jako nieodebrane i nie można go już zmienić.",
         ));
@@ -701,12 +730,21 @@ pub async fn staff_update_order(
         None
     };
 
+    // Administrator może skorygować pomyłkę: zmiana statusu zdejmuje
+    // znacznik nieodebranego i przywraca zamówienie do normalnego obiegu.
+    let new_uncollected_at = if user.role == "admin" && status.is_some() {
+        None
+    } else {
+        current.uncollected_at
+    };
+
     let mut connection = state.db.acquire().await?;
     let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
 
     let result = sqlx::query(
         "UPDATE orders
-         SET status = ?, payment_status = ?, paid_at = ?, paid_by = ?, ready_at = ?, updated_at = ?
+         SET status = ?, payment_status = ?, paid_at = ?, paid_by = ?,
+             ready_at = ?, uncollected_at = ?, updated_at = ?
          WHERE id = ? AND status = ? AND payment_status = ?
            AND COALESCE(uncollected_at, 0) = ?",
     )
@@ -715,6 +753,7 @@ pub async fn staff_update_order(
     .bind(new_paid_at)
     .bind(new_paid_by)
     .bind(new_ready_at)
+    .bind(new_uncollected_at)
     .bind(now)
     .bind(id)
     .bind(&current.status)
@@ -753,6 +792,71 @@ pub async fn staff_update_order(
     .await;
 
     Ok(Json(load_order(&state, id).await?))
+}
+
+/// Oznacza jako nieodebrane zamówienia, które przez `pickup_limit_minutes`
+/// od ustawienia statusu `ready` nie zostały wydane. W bazie zostają
+/// `cancelled` z ustawionym `uncollected_at`; API pokazuje je jako
+/// `uncollected`. Funkcja jest odporna na wyścig z kuchnią dzięki
+/// warunkowemu `UPDATE ... WHERE status = 'ready'`.
+pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error> {
+    let limit = parse_setting(state, "pickup_limit_minutes", 120).await;
+    if limit <= 0 {
+        return Ok(0);
+    }
+
+    let now = util::now();
+    let cutoff = now - limit * 60;
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM orders
+         WHERE status = 'ready' AND uncollected_at IS NULL
+           AND ready_at IS NOT NULL AND ready_at <= ?
+         ORDER BY ready_at ASC LIMIT 200",
+    )
+    .bind(cutoff)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut marked = 0_u64;
+    let mut marked_ids: Vec<i64> = Vec::new();
+    for id in ids {
+        let result = sqlx::query(
+            "UPDATE orders
+             SET status = 'cancelled', uncollected_at = ?, updated_at = ?
+             WHERE id = ? AND status = 'ready' AND uncollected_at IS NULL",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+        if result.rows_affected() > 0 {
+            marked += 1;
+            if marked_ids.len() < 50 {
+                marked_ids.push(id);
+            }
+        }
+    }
+
+    if marked > 0 {
+        db::audit(
+            &state.db,
+            None,
+            "orders_uncollected",
+            &format!(
+                "Automatycznie oznaczono nieodebrane: {marked}, id=[{}]",
+                marked_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        )
+        .await;
+        tracing::info!(marked, "Oznaczono nieodebrane zamówienia");
+    }
+
+    Ok(marked)
 }
 
 async fn load_order(state: &Arc<AppState>, id: i64) -> Result<OrderView, AppError> {

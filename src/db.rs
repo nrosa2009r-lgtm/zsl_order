@@ -47,6 +47,9 @@ async fn seed_settings(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ("payment_info", "Płatność przy odbiorze: gotówka lub karta."),
         ("max_open_orders", "3"),
         ("max_order_items", "20"),
+        ("cancel_window_minutes", "30"),
+        ("pickup_limit_minutes", "120"),
+        ("max_uncollected", "0"),
     ];
 
     for (key, value) in defaults {

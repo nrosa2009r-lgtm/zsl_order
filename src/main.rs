@@ -88,6 +88,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         client_ip_warning: std::sync::Mutex::new(None),
     });
 
+    // Co minutę oznaczamy zamówienia gotowe, ale nieodebrane w terminie.
+    let background_state = state.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            if let Err(error) = handlers::orders::mark_uncollected(&background_state).await {
+                tracing::error!("Nie udało się oznaczyć nieodebranych zamówień: {error}");
+            }
+        }
+    });
+
     let app = build_router(state);
     let configured_address = config.bind_address();
 

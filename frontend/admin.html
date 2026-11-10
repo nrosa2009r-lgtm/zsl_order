@@ -257,6 +257,23 @@
                             <input id="settingMaxOrderItems" type="number" min="1" max="50" required>
                         </div>
                     </div>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label for="settingCancelWindow">Termin anulowania (minuty)</label>
+                            <input id="settingCancelWindow" type="number" min="0" max="1440" required>
+                            <small class="muted">0 = bez limitu czasu</small>
+                        </div>
+                        <div class="field">
+                            <label for="settingPickupLimit">Limit czasu odbioru (minuty)</label>
+                            <input id="settingPickupLimit" type="number" min="0" max="720" required>
+                            <small class="muted">0 = automatyczne oznaczanie wyłączone</small>
+                        </div>
+                        <div class="field">
+                            <label for="settingMaxUncollected">Blokada po nieodebranych</label>
+                            <input id="settingMaxUncollected" type="number" min="0" max="20" required>
+                            <small class="muted">0 = brak blokady; licznik z 30 dni</small>
+                        </div>
+                    </div>
                     <p id="settingsError" class="form-error" role="alert" hidden></p>
                     <button id="saveSettingsButton" class="btn btn-primary" type="submit">Zapisz ustawienia</button>
                 </form>

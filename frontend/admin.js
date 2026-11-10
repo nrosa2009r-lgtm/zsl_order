@@ -655,6 +655,9 @@
         App.$("#settingPaymentInfo").value = settings.payment_info || "";
         App.$("#settingMaxOpenOrders").value = settings.max_open_orders || "3";
         App.$("#settingMaxOrderItems").value = settings.max_order_items || "20";
+        App.$("#settingCancelWindow").value = settings.cancel_window_minutes || "30";
+        App.$("#settingPickupLimit").value = settings.pickup_limit_minutes || "120";
+        App.$("#settingMaxUncollected").value = settings.max_uncollected || "0";
         App.$("#settingsError").hidden = true;
     }
 
@@ -670,6 +673,9 @@
             payment_info: App.$("#settingPaymentInfo").value.trim(),
             max_open_orders: Number.parseInt(App.$("#settingMaxOpenOrders").value, 10),
             max_order_items: Number.parseInt(App.$("#settingMaxOrderItems").value, 10),
+            cancel_window_minutes: Number.parseInt(App.$("#settingCancelWindow").value, 10),
+            pickup_limit_minutes: Number.parseInt(App.$("#settingPickupLimit").value, 10),
+            max_uncollected: Number.parseInt(App.$("#settingMaxUncollected").value, 10),
         };
 
         App.setBusy(button, true, "Zapisywanie…");
