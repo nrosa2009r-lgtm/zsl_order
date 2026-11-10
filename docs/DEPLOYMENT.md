@@ -470,10 +470,24 @@ sudo systemctl status zsl_order
 curl -fsS https://zsl.example.edu/api/healthz >/dev/null && echo OK
 ```
 
-Schemat jest idempotentny (`CREATE TABLE/INDEX IF NOT EXISTS`), więc
-dodanie tabel/indeksów zwykle nie wymaga ręcznej migracji. Zmiany
-usuwające/zmieniające kolumny wymagają **ręcznej migracji** — zawsze po
-backupie i teście na kopii. Aplikacja nie ma frameworka migracji.
+Schemat jest zarządzany przez **wbudowane migracje `sqlx`** z katalogu
+`migrations/`. Nowa binarka sama wykonuje brakujące migracje przy starcie
+i zapisuje wersje w tabeli `_sqlx_migrations`. Migracja bazowa używa
+`CREATE TABLE/INDEX IF NOT EXISTS`, więc działa też na bazie utworzonej
+przez starszą wersję aplikacji (bez `_sqlx_migrations`) i nie usuwa
+danych.
+
+**Przed każdą aktualizacją zrób kopię pliku bazy** (obok zwykłego backupu):
+
+```bash
+sudo -u zsl sqlite3 /opt/zsl_order/data/baza.db \
+  ".backup '/var/backups/zsl/przed-migracja-$(date +%F-%H%M).db'"
+```
+
+Kopię wykonuj przy zatrzymanej aplikacji albo przez `.backup` (bezpieczne
+dla WAL). Następnie uruchom nową binarkę i sprawdź `_sqlx_migrations`
+oraz `PRAGMA integrity_check`. Migracje są addytywne; zmiany usuwające
+kolumny nadal wymagają ręcznej procedury i testu na kopii.
 
 Aktualizacja **nie usuwa** `jwt.key`, `logs/` ani bazy. Nowa binarka
 może wymagać restartu, aby wczytać nowe trasy; nie usuwaj `jwt.key`,

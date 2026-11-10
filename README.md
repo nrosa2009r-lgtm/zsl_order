@@ -412,6 +412,7 @@ Skrypty smoke są w katalogu [`scripts/`](scripts/):
 cargo build
 scripts/smoke-modes.sh       # tryby local/tunnel, nagłówki, start
 scripts/smoke-hardening.sh   # hasła, import CSV, IDOR, RBAC, limity, sesje
+scripts/test-migrations.sh   # pusta baza + baza legacy, class_group
 ```
 
 Skrypty tworzą izolowaną bazę w `/tmp/opencode`, same generują konta i

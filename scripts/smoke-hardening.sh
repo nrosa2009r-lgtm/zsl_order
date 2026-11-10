@@ -159,6 +159,10 @@ S1_PASS=$(printf '%s' "$BODY" | jq -r '.accounts[0].password')
 S2_LOGIN=$(printf '%s' "$BODY" | jq -r '.accounts[1].login')
 S2_PASS=$(printf '%s' "$BODY" | jq -r '.accounts[1].password')
 
+CLASS_GROUP=$(sqlite3 "$BASE/baza.db" "SELECT class_group FROM users WHERE login='$S1_LOGIN';")
+[ "$CLASS_GROUP" = "3C" ] && pass "import: class_group zapisane (3C)" \
+  || fail "import: class_group=$CLASS_GROUP"
+
 S1_JAR="$TMP/s1.jar"
 login "$S1_LOGIN" "$S1_PASS" "$S1_JAR"
 [ "$STATUS" = "200" ] && pass "uczeń 1: logowanie" || fail "uczeń 1: logowanie $STATUS"

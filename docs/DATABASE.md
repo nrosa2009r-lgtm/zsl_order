@@ -1,8 +1,11 @@
 # Baza danych — ZSL Order
 
-Aplikacja używa SQLite w trybie WAL. Schemat jest tworzony idempotentnie
-przy starcie (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
-Nie ma zewnętrznego serwera bazy ani frameworka migracji.
+Aplikacja używa SQLite w trybie WAL. Schemat jest zarządzany przez
+wbudowane migracje `sqlx` (`migrations/*.sql`, wykonywane przy starcie).
+Migracja bazowa używa `CREATE TABLE/INDEX IF NOT EXISTS`, więc działa
+również na bazie utworzonej przez starszą wersję aplikacji i nie usuwa
+danych. Wersje są zapisywane w `_sqlx_migrations`. Nie ma zewnętrznego
+serwera bazy.
 
 - Plik domyślnie: `baza.db` w katalogu roboczym.
 - Połączenie: `sqlite://baza.db` (konfiguracja `db_url`).
@@ -42,10 +45,12 @@ CREATE TABLE IF NOT EXISTS users (
     display_code TEXT NOT NULL UNIQUE,
     active INTEGER NOT NULL DEFAULT 1,
     must_change_password INTEGER NOT NULL DEFAULT 0,
+    class_group TEXT,
     created_at INTEGER NOT NULL,
     last_login_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS users_role_idx ON users(role);
+CREATE INDEX IF NOT EXISTS users_class_group_idx ON users(class_group);
 ```
 
 | Kolumna | Opis |
@@ -57,10 +62,13 @@ CREATE INDEX IF NOT EXISTS users_role_idx ON users(role);
 | `display_code` | pseudonimowy kod publiczny, np. `UCZ-AB12C`, unikalny |
 | `active` | 0/1; 0 blokuje logowanie i unieważnia sesje przy zmianie |
 | `must_change_password` | 0/1; 1 blokuje API poza zmianą hasła |
+| `class_group` | pseudonim klasy z importu CSV (np. `1A`) lub `NULL` |
 | `created_at` | Unix UTC |
 | `last_login_at` | Unix UTC, może być `NULL` |
 
-Brak pól osobowych: imienia, nazwiska, e-maila, telefonu, klasy itp.
+Brak pól osobowych: imienia, nazwiska, e-maila, telefonu itp.
+`class_group` to wyłącznie krótki pseudonim klasy/grupy z importu
+(`1A`, `2B`), bez numeru ucznia i bez powiązania z konkretną osobą.
 
 ### `sessions`
 
@@ -342,16 +350,27 @@ sqlite3 baza.db "PRAGMA foreign_key_check;"
 
 ## 8. Migracje
 
-Brak frameworka migracji. Zasady:
+Migracje są plikami `migrations/RRRRMMDDHHMM_opis.sql`, wbudowanymi w
+binarkę przez `sqlx::migrate!` i wykonywanymi przy starcie w kolejności
+wersji. Zastosowane wersje i sumy kontrolne trafiają do
+`_sqlx_migrations`; zmiana już zastosowanego pliku jest błędem.
 
-1. Zawsze backup przed zmianą schematu.
-2. Testuj migrację na kopii bazy.
+Zasady:
+
+1. **Zawsze backup przed migracją** — `sqlite3 baza.db ".backup ..."`.
+2. Testuj migrację na kopii bazy z danymi oraz na pustej bazie.
 3. Preferuj zmiany addytywne (`ALTER TABLE ... ADD COLUMN`,
    `CREATE INDEX IF NOT EXISTS`).
 4. SQLite ma ograniczone `ALTER TABLE`; przebudowa tabeli wymaga
    utworzenia nowej, kopiowania danych i podmiany w transakcji.
 5. Aplikacja przy starcie nie usuwa ani nie modyfikuje istniejących
    danych; seed menu działa tylko na pustej tabeli.
+6. Migracja bazowa (`0001`) jest idempotentna i obsługuje bazy starsze
+   niż `_sqlx_migrations`.
+
+`0002_users_class_group.sql` dodaje `users.class_group` i uzupełnia je
+z loginów zaimportowanych kont (`s-1a-...` → `1A`). Zwykłe konta
+`s-...` pozostają z `NULL`.
 
 ## 9. Ograniczenia SQLite w tym projekcie
 

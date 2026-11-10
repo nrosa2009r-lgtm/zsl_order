@@ -688,12 +688,13 @@ pub async fn import_users_csv(
     for (account, hash) in accounts.iter().zip(hashes.iter()) {
         sqlx::query(
             "INSERT INTO users
-             (login, password_hash, role, display_code, active, must_change_password, created_at)
-             VALUES (?, ?, 'student', ?, 1, 1, ?)",
+             (login, password_hash, role, display_code, class_group, active, must_change_password, created_at)
+             VALUES (?, ?, 'student', ?, ?, 1, 1, ?)",
         )
         .bind(&account.login)
         .bind(hash)
         .bind(&account.display_code)
+        .bind(&account.group)
         .bind(now)
         .execute(&mut *transaction)
         .await?;
