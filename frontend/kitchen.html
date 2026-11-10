@@ -20,6 +20,7 @@
             <button class="tab is-active" type="button" data-tab="orders">Zamówienia</button>
             <button class="tab" type="button" data-tab="pickup">Odbiór QR</button>
             <button class="tab" type="button" data-tab="menu">Menu</button>
+            <button class="tab" type="button" data-tab="report">Raport</button>
         </nav>
         <div class="topbar-actions">
             <button id="changePasswordButton" class="btn btn-ghost btn-small" type="button">Zmień hasło</button>
@@ -84,6 +85,41 @@
                 <button id="addMenuItemButton" class="btn btn-primary" type="button">Dodaj pozycję</button>
             </div>
             <div id="staffMenuList" class="menu-manage-list" aria-live="polite"></div>
+        </section>
+
+        <section id="tab-report" class="tab-panel" aria-labelledby="reportHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="reportHeading">Raport dnia</h2>
+                    <p id="reportUpdated" class="muted small">Ładowanie…</p>
+                </div>
+                <div class="toolbar">
+                    <div class="field">
+                        <label for="reportDate">Data</label>
+                        <input id="reportDate" type="date">
+                    </div>
+                    <button id="refreshReportButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
+                    <button id="exportReportButton" class="btn btn-secondary btn-small" type="button">Pobierz CSV</button>
+                </div>
+            </div>
+            <div id="reportSummary" class="stats-grid"></div>
+            <div class="table-wrap panel">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Metoda</th>
+                            <th>Zamówienia</th>
+                            <th>Opłacone</th>
+                            <th>Kwota opłacona</th>
+                            <th>Nieopłacone</th>
+                            <th>Kwota nieopłacona</th>
+                            <th>Anulowane</th>
+                            <th>Nieodebrane</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reportTableBody"></tbody>
+                </table>
+            </div>
         </section>
     </main>
 

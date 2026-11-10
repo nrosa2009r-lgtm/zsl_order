@@ -8,8 +8,10 @@ use crate::util;
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
+use chrono::{Duration, Local, NaiveDate};
 use qrcode::{QrCode, render::svg};
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, FromRow, QueryBuilder, Sqlite, Transaction};
@@ -126,6 +128,43 @@ pub struct UpdateOrderRequest {
     pub status: Option<String>,
     #[serde(default)]
     pub payment_status: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ReportQuery {
+    #[serde(default)]
+    pub date: Option<String>,
+}
+
+#[derive(FromRow)]
+struct ReportOrderRow {
+    status: String,
+    payment_method: String,
+    payment_status: String,
+    total_cents: i64,
+    uncollected_at: Option<i64>,
+}
+
+#[derive(Clone, Default, Serialize)]
+pub struct PaymentTotals {
+    pub orders: i64,
+    pub paid_orders: i64,
+    pub paid_cents: i64,
+    pub unpaid_orders: i64,
+    pub unpaid_cents: i64,
+    pub cancelled_orders: i64,
+    pub uncollected_orders: i64,
+    pub completed_orders: i64,
+    pub open_orders: i64,
+}
+
+#[derive(Serialize)]
+pub struct DailyReport {
+    pub date: String,
+    #[serde(flatten)]
+    pub summary: PaymentTotals,
+    pub cash: PaymentTotals,
+    pub card: PaymentTotals,
 }
 
 pub async fn student_orders(
@@ -794,6 +833,151 @@ pub async fn staff_update_order(
     Ok(Json(load_order(&state, id).await?))
 }
 
+pub async fn staff_report(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReportQuery>,
+) -> Result<Json<DailyReport>, AppError> {
+    Ok(Json(
+        build_daily_report(&state, query.date.as_deref()).await?,
+    ))
+}
+
+pub async fn staff_report_csv(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    Query(query): Query<ReportQuery>,
+) -> Result<Response, AppError> {
+    let report = build_daily_report(&state, query.date.as_deref()).await?;
+
+    let mut csv = String::from("\u{feff}");
+    csv.push_str(
+        "data;metoda;zamowienia;oplacone;kwota_oplacona_gr;nieoplacone;\
+         kwota_nieoplacona_gr;anulowane;nieodebrane\r\n",
+    );
+    for (method, totals) in [
+        ("gotówka", &report.cash),
+        ("karta", &report.card),
+        ("razem", &report.summary),
+    ] {
+        csv.push_str(&format!(
+            "{};{};{};{};{};{};{};{};{}\r\n",
+            csv_cell(&report.date),
+            csv_cell(method),
+            totals.orders,
+            totals.paid_orders,
+            totals.paid_cents,
+            totals.unpaid_orders,
+            totals.unpaid_cents,
+            totals.cancelled_orders,
+            totals.uncollected_orders,
+        ));
+    }
+
+    let filename = format!("raport-zsl-order-{}.csv", report.date);
+    db::audit(
+        &state.db,
+        Some(actor.id),
+        "report_exported",
+        &format!(
+            "Eksport raportu dziennego {}, zamówień={}",
+            report.date, report.summary.orders
+        ),
+    )
+    .await;
+
+    let mut response = (StatusCode::OK, csv).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn build_daily_report(
+    state: &Arc<AppState>,
+    requested_date: Option<&str>,
+) -> Result<DailyReport, AppError> {
+    let date = match requested_date
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .map_err(|_| AppError::bad("Data raportu musi być w formacie RRRR-MM-DD."))?,
+        None => Local::now().date_naive(),
+    };
+    let start = util::start_of_local_date(date);
+    let end = util::start_of_local_date(date + Duration::days(1));
+
+    let rows = sqlx::query_as::<_, ReportOrderRow>(
+        "SELECT status, payment_method, payment_status, total_cents, uncollected_at
+         FROM orders WHERE created_at >= ? AND created_at < ?",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(&state.db)
+    .await?;
+
+    let summary = aggregate_totals(rows.iter());
+    let cash = aggregate_totals(rows.iter().filter(|row| row.payment_method == "cash"));
+    let card = aggregate_totals(rows.iter().filter(|row| row.payment_method == "card"));
+
+    Ok(DailyReport {
+        date: date.format("%Y-%m-%d").to_string(),
+        summary,
+        cash,
+        card,
+    })
+}
+
+fn aggregate_totals<'a>(rows: impl Iterator<Item = &'a ReportOrderRow>) -> PaymentTotals {
+    let mut totals = PaymentTotals::default();
+    for row in rows {
+        totals.orders += 1;
+
+        let uncollected = row.uncollected_at.is_some();
+        let cancelled = row.status == "cancelled" && !uncollected;
+        if uncollected {
+            totals.uncollected_orders += 1;
+        } else if cancelled {
+            totals.cancelled_orders += 1;
+        } else if row.status == "completed" {
+            totals.completed_orders += 1;
+        } else if matches!(row.status.as_str(), "new" | "preparing" | "ready") {
+            totals.open_orders += 1;
+        }
+
+        // Anulowane zamówienia nie są przychodem. Nieodebrane opłacone
+        // zamówienia zostają w sumie — pieniądze wpłynęły do kasy.
+        if !cancelled {
+            if row.payment_status == "paid" {
+                totals.paid_orders += 1;
+                totals.paid_cents += row.total_cents;
+            } else {
+                totals.unpaid_orders += 1;
+                totals.unpaid_cents += row.total_cents;
+            }
+        }
+    }
+    totals
+}
+
+fn csv_cell(value: &str) -> String {
+    let mut text = value.to_string();
+    if text
+        .chars()
+        .next()
+        .is_some_and(|first| matches!(first, '=' | '+' | '-' | '@'))
+    {
+        text.insert(0, '\'');
+    }
+    format!("\"{}\"", text.replace('"', "\"\""))
+}
+
 /// Oznacza jako nieodebrane zamówienia, które przez `pickup_limit_minutes`
 /// od ustawienia statusu `ready` nie zostały wydane. W bazie zostają
 /// `cancelled` z ustawionym `uncollected_at`; API pokazuje je jako
@@ -1004,5 +1188,61 @@ mod tests {
         assert!(resolve_idempotency_key(&headers, Some("abcdefgh")).is_ok());
         assert!(resolve_idempotency_key(&headers, Some("ijklmnop")).is_err());
         assert!(resolve_idempotency_key(&headers, None).is_ok());
+    }
+
+    fn report_row(
+        status: &str,
+        method: &str,
+        payment: &str,
+        total_cents: i64,
+        uncollected: bool,
+    ) -> ReportOrderRow {
+        ReportOrderRow {
+            status: status.to_string(),
+            payment_method: method.to_string(),
+            payment_status: payment.to_string(),
+            total_cents,
+            uncollected_at: uncollected.then_some(1_700_000_000),
+        }
+    }
+
+    #[test]
+    fn report_totals_match_orders_and_split_payment_methods() {
+        let rows = [
+            report_row("completed", "cash", "paid", 1500, false),
+            report_row("completed", "card", "paid", 2500, false),
+            report_row("ready", "cash", "unpaid", 800, false),
+            report_row("cancelled", "cash", "paid", 999, false),
+            report_row("cancelled", "card", "paid", 1200, true),
+        ];
+
+        let summary = aggregate_totals(rows.iter());
+        assert_eq!(summary.orders, 5);
+        assert_eq!(summary.completed_orders, 2);
+        assert_eq!(summary.open_orders, 1);
+        assert_eq!(summary.cancelled_orders, 1);
+        assert_eq!(summary.uncollected_orders, 1);
+        // Anulowane (jawne) nie wchodzi do przychodu, nieodebrane opłacone wchodzi.
+        assert_eq!(summary.paid_orders, 3);
+        assert_eq!(summary.paid_cents, 5200);
+        assert_eq!(summary.unpaid_orders, 1);
+        assert_eq!(summary.unpaid_cents, 800);
+
+        let cash = aggregate_totals(rows.iter().filter(|row| row.payment_method == "cash"));
+        let card = aggregate_totals(rows.iter().filter(|row| row.payment_method == "card"));
+        assert_eq!(cash.paid_cents, 1500);
+        assert_eq!(cash.unpaid_cents, 800);
+        assert_eq!(cash.cancelled_orders, 1);
+        assert_eq!(card.paid_cents, 3700);
+        assert_eq!(card.uncollected_orders, 1);
+        assert_eq!(cash.paid_cents + card.paid_cents, summary.paid_cents);
+        assert_eq!(cash.unpaid_cents + card.unpaid_cents, summary.unpaid_cents);
+    }
+
+    #[test]
+    fn report_csv_quotes_cells_and_blocks_formulas() {
+        assert_eq!(csv_cell("gotówka"), "\"gotówka\"");
+        assert_eq!(csv_cell("a;b"), "\"a;b\"");
+        assert_eq!(csv_cell("=1+1"), "\"'=1+1\"");
     }
 }

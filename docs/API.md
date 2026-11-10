@@ -150,6 +150,8 @@ HTTP/1.1 403 Forbidden
 | `GET` | `/api/staff/orders` | `kitchen` / `admin` | nie |
 | `PATCH` | `/api/staff/orders/:id` | `kitchen` / `admin` | tak |
 | `POST` | `/api/staff/pickup` | `kitchen` / `admin` | tak |
+| `GET` | `/api/staff/report?date=RRRR-MM-DD` | `kitchen` / `admin` | nie |
+| `GET` | `/api/staff/report.csv?date=RRRR-MM-DD` | `kitchen` / `admin` | nie |
 | `GET` | `/api/admin/stats` | `admin` | nie |
 | `GET` | `/api/admin/stats/activity` | `admin` | nie |
 | `GET` | `/api/admin/users` | `admin` | nie |
@@ -362,7 +364,10 @@ Zwraca wyłącznie dostępne pozycje menu, posortowane po `sort_order`, nazwie.
   ],
   "ordering_enabled": true,
   "payment_info": "Płatność przy odbiorze: gotówka lub karta.",
-  "max_order_items": 20
+  "max_order_items": 20,
+  "cancel_window_minutes": 30,
+  "pickup_limit_minutes": 120,
+  "max_uncollected": 0
 }
 ```
 
@@ -380,39 +385,53 @@ pozycje w kolejności `order_items.id`.
     {"menu_item_id": 6, "quantity": 1}
   ],
   "payment_method": "cash",
-  "pickup_time": "12:30"
+  "pickup_time": "12:30",
+  "idempotency_key": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
+- `idempotency_key` (**wymagane**): 8–128 znaków `[A-Za-z0-9._:-]`.
+  Klient generuje nowy klucz na jedno kliknięcie „Złóż zamówienie” i używa
+  go ponownie wyłącznie przy ponowieniu tego samego żądania. Powtórzenie
+  klucza zwraca **istniejące** zamówienie (`200`) zamiast tworzyć drugie.
+  Klucz można też przesłać w nagłówku `Idempotency-Key`; jeśli występuje
+  w obu miejscach, wartości muszą być identyczne.
 - `items`: 1–`max_order_items` pozycji (domyślnie 20); `menu_item_id` musi
   istnieć i być dostępne; `quantity` 1–10; ta sama pozycja nie może wystąpić
-  dwa razy.
+  dwa razy. Pola `price_cents`, `total_cents`, `status` i
+  `payment_status` w żądaniu są ignorowane — ceny i statusy ustala serwer.
 - `payment_method`: `cash` lub `card`.
 - `pickup_time`: `""` (brak) lub `HH:MM` w zakresie `00:00`–`23:59`.
 - Suma jest liczona po stronie serwera na podstawie aktualnych cen.
 - Maksymalna kwota zamówienia: 200 000 gr (2000 zł).
 - Limit otwartych zamówień użytkownika: `max_open_orders` (domyślnie 3);
   statusy liczone jako otwarte: `new`, `preparing`, `ready`.
+- `max_uncollected > 0` blokuje nowe zamówienia, jeśli uczeń ma co najmniej
+  tyle nieodebranych zamówień w ostatnich 30 dniach.
 - `ordering_enabled = false` blokuje składanie zamówień.
 
-**Odpowiedź 201** — pełny `OrderView` (patrz [modele](#modele-danych)).
+**Odpowiedź 201** — nowy `OrderView`. **Odpowiedź 200** — istniejące
+zamówienie dla powtórzonego klucza idempotencji.
 
 **Błędy**
 
 | Status | `code` | Opis |
 | --- | --- | --- |
-| 400 | `bad_request` | nieprawidłowe pozycje, płatność, godzina, kwota |
-| 409 | `conflict` | zamawianie wyłączone, limit otwartych zamówień, pozycja niedostępna |
+| 400 | `bad_request` | nieprawidłowe pozycje, płatność, godzina, klucz idempotencji, kwota |
+| 409 | `conflict` | zamawianie wyłączone, limit otwartych, blokada nieodebranych, pozycja niedostępna |
 
 ### `POST /api/student/orders/:id/cancel`
 
-Puste ciało `{}`. Anulować można wyłącznie **własne** zamówienie w statusie
-`new`. Zwraca zaktualizowany `OrderView` ze statusem `cancelled`.
+Puste ciało `{}`. Anulować można wyłącznie **własne**, nieopłacone
+zamówienie w statusie `new`, w terminie `cancel_window_minutes` od
+złożenia (`0` = bez limitu). Operacja jest transakcyjna i warunkowa —
+przy dwóch równoczesnych anulowaniach jedno kończy się `200`, drugie
+`409`. Zwraca zaktualizowany `OrderView` ze statusem `cancelled`.
 
 | Status | `code` | Opis |
 | --- | --- | --- |
 | 404 | `not_found` | zamówienie nie istnieje lub należy do innego użytkownika |
-| 409 | `conflict` | zamówienie zostało już przyjęte (`preparing`, `ready`, `completed`) |
+| 409 | `conflict` | zamówienie przyjęte, opłacone, nieodebrane lub minął termin anulowania |
 
 ### `GET /api/student/orders/:id/qr.svg`
 
@@ -471,8 +490,8 @@ Pozycja pozostaje widoczna dla personelu i w historycznych zamówieniach
 
 ### `GET /api/staff/orders?scope=open|all|today`
 
-- `open` (domyślnie): statusy `new`, `preparing`, `ready`, sortowanie
-  najstarsze pierwsze (kolejka),
+- `open` (domyślnie): statusy `new`, `preparing`, `ready` bez znacznika
+  nieodebranego, sortowanie najstarsze pierwsze (kolejka),
 - `today`: zamówienia od początku lokalnego dnia, najnowsze pierwsze,
 - `all`: wszystkie, najnowsze pierwsze, maks. 300.
 
@@ -498,13 +517,22 @@ lub oba pola. Dozwolone wartości:
 
 Ograniczenia dla roli `kitchen`:
 
-- nie może zmieniać zamówień w statusie `completed` ani `cancelled` (`409`),
-- może ustawić tylko `preparing`, `ready`, `completed` (`403` dla innych),
-- może ustawić płatność tylko na `paid` (`403` dla `unpaid`),
-- `completed` automatycznie ustawia `paid`, jeśli nie podano płatności.
+- nie może zmieniać zamówień z innych dni niż dzisiejszy (`403`),
+- nie może zmieniać zamówień `completed`, `cancelled` ani nieodebranych
+  (`409`),
+- prowadzi zamówienie krok po kroku: `new → preparing → ready →
+  completed` (`403` przy pominięciu kroku),
+- może ustawić płatność tylko na `paid` i tylko gdy zamówienie jest
+  `ready` lub `completed` (`403`/`409` dla innych przypadków),
+- `completed` automatycznie ustawia `paid`, jeśli nie podano płatności,
+- przy przejściu na `paid` serwer zapisuje `paid_at` i `paid_by`.
 
-Administrator nie ma tych ograniczeń (poza walidacją wartości). Zwraca
-zaktualizowany `OrderView`. Brak zamówienia → `404`.
+Administrator nie ma ograniczeń dnia ani przejść (poza walidacją wartości).
+Zmiana statusu nieodebranego zamówienia przez administratora zdejmuje
+znacznik `uncollected_at` i przywraca je do obiegu. Wszystkie zmiany są
+transakcyjne; równoległa zmiana tego samego zamówienia kończy się `409`
+zamiast nadpisania danych. Zwraca zaktualizowany `OrderView`. Brak
+zamówienia → `404`.
 
 ### `POST /api/staff/pickup`
 
@@ -530,9 +558,46 @@ Akceptowane postacie:
 | --- | --- | --- |
 | 400 | `bad_request` | pusty kod lub > 128 znaków |
 | 404 | `not_found` | brak zamówienia o takim kodzie/tokenie |
-| 409 | `conflict` | zamówienie anulowane |
+| 409 | `conflict` | zamówienie anulowane lub nieodebrane |
 
 Każde wyszukanie jest zapisywane w audycie (`pickup_lookup`).
+
+### `GET /api/staff/report?date=RRRR-MM-DD`
+
+Raport dzienny dla kuchni i administratora. `date` opcjonalne
+(domyślnie dzisiaj, strefa lokalna serwera). Zakres obejmuje zamówienia
+**złożone** w danym dniu. Odpowiedź zawiera sumy łączne oraz podział na
+gotówkę i kartę:
+
+```json
+{
+  "date": "2026-11-10",
+  "orders": 12,
+  "paid_orders": 9,
+  "paid_cents": 18600,
+  "unpaid_orders": 1,
+  "unpaid_cents": 1400,
+  "cancelled_orders": 1,
+  "uncollected_orders": 1,
+  "completed_orders": 8,
+  "open_orders": 1,
+  "cash": { "orders": 7, "paid_orders": 5, "paid_cents": 9800, "...": "..." },
+  "card": { "orders": 5, "paid_orders": 4, "paid_cents": 8800, "...": "..." }
+}
+```
+
+- `paid_cents` sumuje zamówienia opłacone, z wyjątkiem jawnie
+  anulowanych; opłacone nieodebrane nadal jest przychodem,
+- `cancelled_orders` nie zawiera nieodebranych (te mają osobny licznik),
+- `cash.*` + `card.*` = wartości łączne,
+- nieprawidłowa data → `400`.
+
+### `GET /api/staff/report.csv?date=RRRR-MM-DD`
+
+Ten sam raport jako CSV (`text/csv; charset=utf-8`, BOM, separator `;`,
+`Cache-Control: no-store`). Wiersze: gotówka, karta, razem. Kolumny:
+data, metoda, zamówienia, opłacone, kwota opłacona w groszach,
+nieopłacone, kwota nieopłacona w groszach, anulowane, nieodebrane.
 
 ## Administrator
 
@@ -833,7 +898,10 @@ można użyć wobec własnego konta (`400`) — do tego służy
   "ordering_enabled": "1",
   "payment_info": "Płatność przy odbiorze: gotówka lub karta.",
   "max_open_orders": "3",
-  "max_order_items": "20"
+  "max_order_items": "20",
+  "cancel_window_minutes": "30",
+  "pickup_limit_minutes": "120",
+  "max_uncollected": "0"
 }
 ```
 
@@ -849,7 +917,10 @@ Wszystkie pola opcjonalne; podaje się tylko zmieniane.
   "ordering_enabled": true,
   "payment_info": "Płatność przy odbiorze: gotówka lub karta.",
   "max_open_orders": 3,
-  "max_order_items": 20
+  "max_order_items": 20,
+  "cancel_window_minutes": 30,
+  "pickup_limit_minutes": 120,
+  "max_uncollected": 0
 }
 ```
 
@@ -860,6 +931,9 @@ Wszystkie pola opcjonalne; podaje się tylko zmieniane.
 | `payment_info` | ≤ 300 znaków |
 | `max_open_orders` | 1–10 |
 | `max_order_items` | 1–50 |
+| `cancel_window_minutes` | 0–1440; 0 = bez terminu |
+| `pickup_limit_minutes` | 0–720; 0 = auto-oznaczanie wyłączone |
+| `max_uncollected` | 0–20; 0 = brak blokady |
 
 Brak zmian → `400`. Zwraca pełny obiekt ustawień.
 
@@ -934,6 +1008,9 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   "pickup_time": "12:30",
   "created_at": 1762450000,
   "updated_at": 1762450000,
+  "paid_at": null,
+  "paid_by": null,
+  "uncollected_at": null,
   "student": "s-a7k2m9p4qx",
   "student_code": "UCZ-AB12C",
   "items": [
@@ -946,6 +1023,11 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   brak imion/nazwisk.
 - `items` to snapshoty z momentu złożenia zamówienia (nazwa i cena nie
   zmieniają się po edycji menu).
+- `status` może przyjąć także `uncollected` (zamówienie gotowe, ale
+  nieodebrane w terminie); w bazie pozostaje `cancelled` z ustawionym
+  `uncollected_at`.
+- `paid_at` / `paid_by` — czas i pseudonimowy login osoby, która
+  oznaczyła płatność; `null` dla nieopłaconych.
 - `code` ma 6 wielkich liter; `qr_token` nie jest zwracany w JSON
   (dostępny wyłącznie jako obraz QR).
 
@@ -1020,6 +1102,10 @@ szczegółów SQL, ścieżek ani stack trace.
 | ilość pozycji | 1–10 |
 | liczba pozycji zamówienia | 1–`max_order_items` (1–50) |
 | `pickup_time` | `""` lub `HH:MM`, 00:00–23:59 |
+| `idempotency_key` | 8–128 znaków `[A-Za-z0-9._:-]`, wymagane |
+| `cancel_window_minutes` | 0–1440 |
+| `pickup_limit_minutes` | 0–720 |
+| `max_uncollected` | 0–20 |
 | kwota zamówienia | ≤ 200 000 gr |
 | `code` (pickup) | ≤ 128 znaków, przycinany |
 | `count` generowania | 1–100 |

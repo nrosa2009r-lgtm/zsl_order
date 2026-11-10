@@ -134,10 +134,20 @@ CREATE TABLE IF NOT EXISTS orders (
     total_cents INTEGER NOT NULL CHECK (total_cents >= 0),
     pickup_time TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    paid_at INTEGER,
+    paid_by INTEGER,
+    ready_at INTEGER,
+    uncollected_at INTEGER,
+    idempotency_key TEXT
 );
 CREATE INDEX IF NOT EXISTS orders_user_idx ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS orders_uncollected_idx ON orders(uncollected_at);
+CREATE INDEX IF NOT EXISTS orders_ready_idx ON orders(status, ready_at);
+CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_idx
+    ON orders(user_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 ```
 
 | Kolumna | Opis |
@@ -151,6 +161,16 @@ CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status, created_at);
 | `total_cents` | suma policzona po stronie serwera |
 | `pickup_time` | `""` lub `HH:MM` (godzina lokalna) |
 | `created_at`, `updated_at` | Unix UTC |
+| `paid_at` | czas oznaczenia płatności (Unix UTC) lub `NULL` |
+| `paid_by` | techniczne ID konta, które oznaczyło płatność (bez FK) |
+| `ready_at` | czas ustawienia statusu `ready`; podstawa limitu odbioru |
+| `uncollected_at` | znacznik nieodebrania; API pokazuje wtedy status `uncollected` |
+| `idempotency_key` | klucz klienta, unikalny per `user_id` (indeks częściowy) |
+
+Zamówienie nieodebrane pozostaje w bazie jako `cancelled` z ustawionym
+`uncollected_at`. Dzięki temu nie trzeba przebudowywać tabeli z
+ograniczeniem `CHECK`; API i raporty rozróżniają anulowanie od
+nieodebrania po znaczniku.
 
 Uwaga: `qr_token` jest przechowywany jawnie, ponieważ serwer musi
 wygenerować obraz QR. Ochrona pliku bazy jest ochroną kodów odbioru.
@@ -192,6 +212,9 @@ Domyślne wpisy (seed `INSERT OR IGNORE`):
 | `payment_info` | `Płatność przy odbiorze: gotówka lub karta.` | informacja dla ucznia |
 | `max_open_orders` | `3` | limit otwartych zamówień na użytkownika |
 | `max_order_items` | `20` | limit pozycji w zamówieniu |
+| `cancel_window_minutes` | `30` | termin anulowania od złożenia; `0` = bez limitu |
+| `pickup_limit_minutes` | `120` | czas od `ready` do nieodebrania; `0` = wyłączone |
+| `max_uncollected` | `0` | blokada po N nieodebranych z 30 dni; `0` = brak |
 
 Wartości są stringami; API administracyjne waliduje zakresy i konwertuje
 `ordering_enabled` z bool na `1`/`0`.
@@ -225,6 +248,9 @@ CREATE INDEX IF NOT EXISTS audit_created_idx ON audit_log(created_at);
 | `menu_available_idx` | `menu_items` | `available, sort_order` | menu ucznia |
 | `orders_user_idx` | `orders` | `user_id, created_at` | historia ucznia |
 | `orders_status_idx` | `orders` | `status, created_at` | kolejka kuchni |
+| `orders_ready_idx` | `orders` | `status, ready_at` | automatyczne nieodebrane |
+| `orders_uncollected_idx` | `orders` | `uncollected_at` | licznik nieodebranych |
+| `orders_user_idempotency_idx` | `orders` | `user_id, idempotency_key` (częściowy) | ochrona przed duplikatem |
 | `order_items_order_idx` | `order_items` | `order_id` | składanie zamówień |
 | `audit_created_idx` | `audit_log` | `created_at` | retencja, lista |
 
@@ -235,7 +261,7 @@ Unikalne ograniczenia (`UNIQUE`) tworzą dodatkowe indeksy na `users.login`,
 
 Przy każdym starcie:
 
-1. Tworzenie tabel/indeksów (idempotentne).
+1. Migracje `sqlx` (wersje z `migrations/`, m.in. tabele i indeksy).
 2. `settings`: wstawienie brakujących domyślnych kluczy.
 3. Menu: seed 7 pozycji **tylko gdy tabela jest pusta**.
 4. Czyszczenie: sesje wygasłe, audyt > 90 dni.
@@ -371,6 +397,11 @@ Zasady:
 `0002_users_class_group.sql` dodaje `users.class_group` i uzupełnia je
 z loginów zaimportowanych kont (`s-1a-...` → `1A`). Zwykłe konta
 `s-...` pozostają z `NULL`.
+
+`0003_orders_payments.sql` dodaje pola płatności/odbioru oraz
+`idempotency_key` z częściowym indeksem unikalnym. Dla istniejących
+opłaconych zamówień ustawia `paid_at = updated_at` (historyczny operator
+pozostaje nieznany, więc `paid_by = NULL`).
 
 ## 9. Ograniczenia SQLite w tym projekcie
 

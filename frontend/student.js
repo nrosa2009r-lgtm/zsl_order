@@ -5,6 +5,16 @@
     let menu = [];
     let cart = new Map();
     let info = null;
+    let checkoutKey = null;
+
+    function newIdempotencyKey() {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+            return window.crypto.randomUUID();
+        }
+        return "k-" + Date.now().toString(36) + "-" +
+            Math.random().toString(36).slice(2, 12) + "-" +
+            Math.random().toString(36).slice(2, 12);
+    }
 
     function switchTab(name) {
         const tab = App.$('.tab[data-tab="' + name + '"]');
@@ -200,9 +210,13 @@
         const paymentMethod = paymentInput ? paymentInput.value : "cash";
         const pickupTime = App.$("#pickupTime").value || "";
 
+        // Ten sam klucz przy ponowieniu po timeoucie zwraca istniejące
+        // zamówienie zamiast tworzyć drugie.
+        if (!checkoutKey) checkoutKey = newIdempotencyKey();
         const payload = {
             payment_method: paymentMethod,
             pickup_time: pickupTime,
+            idempotency_key: checkoutKey,
             items: entries.map(function (entry) {
                 return { menu_item_id: entry.item.id, quantity: entry.quantity };
             }),
@@ -211,6 +225,7 @@
         App.setBusy(button, true, "Składanie…");
         try {
             const order = await App.api.post("/api/student/orders", payload);
+            checkoutKey = null;
             cart.clear();
             renderMenu();
             renderCart();
@@ -306,6 +321,7 @@
             ["Złożono", App.fmtDate(order.created_at)],
             ["Odbiór", order.pickup_time || "Bez godziny"],
             ["Płatność", App.paymentLabels[order.payment_method] || order.payment_method],
+            ["Opłacono", order.paid_at ? App.fmtDate(order.paid_at) : "—"],
         ].forEach(function (pair) {
             const wrapper = App.h("div");
             wrapper.append(App.h("dt", { text: pair[0] }), App.h("dd", { text: pair[1] }));
@@ -349,7 +365,7 @@
             App.h("strong", { text: "Razem: " + App.fmtPLN(order.total_cents) })
         );
 
-        if (order.status === "new") {
+        if (order.status === "new" && order.payment_status !== "paid") {
             const cancel = App.h("button", {
                 class: "btn btn-danger btn-small",
                 text: "Anuluj zamówienie",

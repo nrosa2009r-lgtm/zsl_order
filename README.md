@@ -413,6 +413,7 @@ cargo build
 scripts/smoke-modes.sh       # tryby local/tunnel, nagłówki, start
 scripts/smoke-hardening.sh   # hasła, import CSV, IDOR, RBAC, limity, sesje
 scripts/test-migrations.sh   # pusta baza + baza legacy, class_group
+scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, raport/CSV
 ```
 
 Skrypty tworzą izolowaną bazę w `/tmp/opencode`, same generują konta i
@@ -512,8 +513,9 @@ uruchomieniu z uprawnieniami `0600`.
   dla zalogowanego personelu, a nie jako publiczny sekret.
 - Brak wbudowanego harmonogramu retencji zamówień — administrator powinien
   ustalić i okresowo wykonywać politykę usuwania/anonymizacji.
-- Brak formalnego systemu migracji — schemat jest idempotentny
-  (`CREATE TABLE IF NOT EXISTS`); zmiany wymagają ręcznej migracji.
+- Migracje `sqlx` są wbudowane w binarkę i działają przy starcie; przed
+  aktualizacją zawsze wykonuj kopię pliku bazy (procedura w
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 - Brak MFA dla kont administracyjnych; zalecane silne, unikalne hasła
   i ograniczenie dostępu sieciowego.
 - Hasła nie są odzyskiwalne z bazy (tylko Argon2id); eksport CSV zawiera

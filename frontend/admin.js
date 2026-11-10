@@ -4,6 +4,7 @@
 
     let ordersUi = null;
     let menuUi = null;
+    let reportUi = null;
     let generatedAccounts = [];
     let activityData = null;
     let resizeTimer = null;
@@ -20,6 +21,14 @@
             listSelector: "#ordersList",
             scopeSelector: ".seg[data-scope]",
             role: "admin",
+        });
+
+        reportUi = StaffUI.setupDailyReport({
+            dateSelector: "#reportDate",
+            summarySelector: "#reportSummary",
+            tableSelector: "#reportTableBody",
+            updatedSelector: "#reportUpdated",
+            exportButtonSelector: "#exportReportButton",
         });
 
         await loadStats();
@@ -77,6 +86,13 @@
         });
         App.$('.tab[data-tab="orders"]').addEventListener("click", function () {
             ordersUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
+        });
+        App.$('.tab[data-tab="report"]').addEventListener("click", function () {
+            reportUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
+        });
+        App.$("#refreshReportButton").addEventListener("click", function () {
+            reportUi.refresh().then(function () { App.toast("Raport odświeżony.", "success"); })
+                .catch(function (error) { App.toast(error.message, "error"); });
         });
         App.$('.tab[data-tab="settings"]').addEventListener("click", function () {
             loadSettings().catch(function (error) { App.toast(error.message, "error"); });

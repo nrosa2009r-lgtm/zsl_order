@@ -174,6 +174,7 @@
         ready: "Gotowe",
         completed: "Wydane",
         cancelled: "Anulowane",
+        uncollected: "Nieodebrane",
     };
 
     const paymentLabels = {

@@ -208,13 +208,20 @@
         head.append(code, badges);
 
         const meta = App.h("dl", { class: "order-meta" });
-        [
+        const metaPairs = [
             ["Uczeń (kod)", order.student_code || "—"],
             ["Złożono", App.fmtDate(order.created_at)],
             ["Odbiór", order.pickup_time || "Bez godziny"],
             ["Płatność", App.paymentLabels[order.payment_method] || order.payment_method],
             ["Kwota", App.fmtPLN(order.total_cents)],
-        ].forEach(function (pair) {
+        ];
+        if (order.paid_at) {
+            metaPairs.push(["Opłacono", App.fmtDate(order.paid_at)]);
+        }
+        if (order.paid_by) {
+            metaPairs.push(["Opłacone przez", order.paid_by]);
+        }
+        metaPairs.forEach(function (pair) {
             const wrapper = App.h("div");
             wrapper.append(App.h("dt", { text: pair[0] }), App.h("dd", { text: pair[1] }));
             meta.append(wrapper);
@@ -234,6 +241,15 @@
         detail.append(meta, items);
 
         const actions = App.h("div", { class: "order-actions" });
+
+        if (order.status === "uncollected") {
+            actions.append(App.h("span", {
+                class: "muted small",
+                text: role === "admin"
+                    ? "Zamówienie nieodebrane. Możesz je skorygować."
+                    : "Zamówienie nieodebrane — zamknięte.",
+            }));
+        }
 
         if (role === "kitchen") {
             if (order.status === "new") {
@@ -271,7 +287,7 @@
                 }));
             }
 
-            if (order.payment_status === "unpaid" && !["completed", "cancelled"].includes(order.status)) {
+            if (order.payment_status === "unpaid" && order.status === "ready") {
                 actions.append(App.h("button", {
                     class: "btn btn-secondary btn-small",
                     text: "Oznacz jako opłacone",
@@ -283,6 +299,18 @@
                     },
                 }));
             }
+        } else if (order.status === "uncollected") {
+            actions.append(App.h("button", {
+                class: "btn btn-secondary btn-small",
+                text: "Skoryguj: wydane",
+                attrs: { type: "button" },
+                on: {
+                    click: function () {
+                        if (!window.confirm("Przywrócić zamówienie jako wydane i zdjąć znacznik nieodebranego?")) return;
+                        updateOrder(order.id, { status: "completed" }, options);
+                    },
+                },
+            }));
         } else {
             const statusSelect = App.h("select", {
                 attrs: { "aria-label": "Status zamówienia" },
@@ -403,6 +431,86 @@
         };
     }
 
+    function localToday() {
+        const now = new Date();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        return now.getFullYear() + "-" + month + "-" + day;
+    }
+
+    function setupDailyReport(options) {
+        const dateInput = App.$(options.dateSelector);
+        const summary = App.$(options.summarySelector);
+        const tbody = App.$(options.tableSelector);
+        const updated = App.$(options.updatedSelector);
+        const exportButton = App.$(options.exportButtonSelector);
+
+        if (dateInput && !dateInput.value) dateInput.value = localToday();
+
+        function stat(label, value, hint) {
+            return App.h("div", { class: "stat-card" }, [
+                App.h("span", { class: "stat-label", text: label }),
+                App.h("strong", { class: "stat-value", text: value }),
+                App.h("span", { class: "stat-hint", text: hint }),
+            ]);
+        }
+
+        function renderRow(label, totals) {
+            const row = App.h("tr");
+            [
+                label,
+                totals.orders,
+                totals.paid_orders,
+                App.fmtPLN(totals.paid_cents),
+                totals.unpaid_orders,
+                App.fmtPLN(totals.unpaid_cents),
+                totals.cancelled_orders,
+                totals.uncollected_orders,
+            ].forEach(function (value) {
+                row.append(App.h("td", { text: value }));
+            });
+            tbody.append(row);
+        }
+
+        async function refresh() {
+            const date = (dateInput && dateInput.value) || localToday();
+            const report = await App.api.get("/api/staff/report?date=" + encodeURIComponent(date));
+
+            App.clear(summary);
+            summary.append(
+                stat("Zamówienia", report.orders, "złożone w dniu"),
+                stat("Opłacone", report.paid_orders, App.fmtPLN(report.paid_cents)),
+                stat("Nieopłacone", report.unpaid_orders, App.fmtPLN(report.unpaid_cents)),
+                stat("Nieodebrane", report.uncollected_orders, "w tym dniu"),
+                stat("Anulowane", report.cancelled_orders, "poza nieodebranymi")
+            );
+
+            App.clear(tbody);
+            renderRow("Gotówka", report.cash);
+            renderRow("Karta", report.card);
+            renderRow("Razem", report);
+
+            if (updated) {
+                updated.textContent = "Raport za " + report.date +
+                    " · zaktualizowano " + new Date().toLocaleTimeString("pl-PL");
+            }
+        }
+
+        if (dateInput) {
+            dateInput.addEventListener("change", function () {
+                refresh().catch(function (error) { App.toast(error.message, "error"); });
+            });
+        }
+        if (exportButton) {
+            exportButton.addEventListener("click", function () {
+                const date = (dateInput && dateInput.value) || localToday();
+                window.location.href = "/api/staff/report.csv?date=" + encodeURIComponent(date);
+            });
+        }
+
+        return { refresh: refresh };
+    }
+
     function renderPickupResult(container, order, onUpdated) {
         App.clear(container);
         container.append(
@@ -419,6 +527,7 @@
         setupMenuManager: setupMenuManager,
         setupOrders: setupOrders,
         orderCard: orderCard,
+        setupDailyReport: setupDailyReport,
         renderPickupResult: renderPickupResult,
     };
 })();

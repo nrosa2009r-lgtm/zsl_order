@@ -550,6 +550,7 @@ textarea {
 .badge-ready { background: var(--success-soft); color: #166534; }
 .badge-completed { background: #e5e7eb; color: #374151; }
 .badge-cancelled { background: var(--danger-soft); color: var(--danger); }
+.badge-uncollected { background: #ffedd5; color: #9a3412; }
 .badge-pay-unpaid { background: #fde68a; color: #854d0e; }
 .badge-pay-paid { background: var(--success-soft); color: #166534; }
 
@@ -791,6 +792,7 @@ textarea {
 .order-ready { border-left-color: #16a34a; }
 .order-completed { border-left-color: #6b7280; opacity: 0.86; }
 .order-cancelled { border-left-color: #dc2626; opacity: 0.82; }
+.order-uncollected { border-left-color: #ea580c; opacity: 0.9; }
 
 .order-head {
     display: flex;

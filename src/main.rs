@@ -159,6 +159,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/orders", get(handlers::orders::staff_orders))
         .route("/orders/:id", patch(handlers::orders::staff_update_order))
         .route("/pickup", post(handlers::orders::staff_pickup))
+        .route("/report", get(handlers::orders::staff_report))
+        .route("/report.csv", get(handlers::orders::staff_report_csv))
         .route_layer(middleware::from_fn(auth::require_staff));
 
     let admin_routes = Router::new()

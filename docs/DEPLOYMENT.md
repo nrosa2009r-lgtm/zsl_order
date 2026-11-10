@@ -532,6 +532,16 @@ Testy jednostkowe:
 cargo test --locked
 ```
 
+Skrypty smoke (izolowane bazy w `/tmp/opencode`, dane wyłącznie testowe):
+
+```bash
+cargo build
+scripts/smoke-modes.sh       # tryby local/tunnel i nagłówki
+scripts/smoke-hardening.sh   # hasła, import CSV, RBAC, limity, sesje
+scripts/test-migrations.sh   # pusta baza + baza legacy
+scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, raport/CSV
+```
+
 Test dymny na izolowanej kopii (nie na produkcji):
 
 ```bash
@@ -584,8 +594,14 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 - wymuszoną zmianę hasła,
 - wygenerowanie kont i logowanie ucznia,
 - złożenie/anulowanie zamówienia,
+- powtórzenie żądania z tym samym `idempotency_key` (bez duplikatu),
+- dwa równoczesne anulowania (jedno `200`, jedno `409`),
+- próbę ustawienia przez ucznia `status`/`price_cents`/`total_cents`,
+- zmianę zamówienia z innego dnia przez kuchnię (`403`),
+- przejście statusów do `completed`, `paid_at`/`paid_by` i sprawdzenie
+  raportu dziennego oraz CSV (gotówka/karta),
+- automatyczne oznaczenie nieodebranego i blokadę po `max_uncollected`,
 - pobranie QR i pickup po kodzie oraz `ZSL:<token>`,
-- przejście statusów do `completed` i sprawdzenie utargu,
 - próbę dostępu ucznia do `/api/admin/*` (403),
 - żądanie bez CSRF (403) i z obcym `Origin` (403),
 - wydanie tokenu JWT, żądanie Bearer bez CSRF, logout i ponowne żądanie

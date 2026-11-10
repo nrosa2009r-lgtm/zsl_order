@@ -4,6 +4,7 @@
 
     let ordersUi = null;
     let menuUi = null;
+    let reportUi = null;
     let pickupContainer = null;
     let lastPickupCode = "";
     let scannerStream = null;
@@ -35,6 +36,14 @@
             addButtonSelector: "#addMenuItemButton",
         });
 
+        reportUi = StaffUI.setupDailyReport({
+            dateSelector: "#reportDate",
+            summarySelector: "#reportSummary",
+            tableSelector: "#reportTableBody",
+            updatedSelector: "#reportUpdated",
+            exportButtonSelector: "#exportReportButton",
+        });
+
         await ordersUi.refresh();
         await menuUi.refresh();
 
@@ -51,6 +60,16 @@
         });
         App.$('.tab[data-tab="menu"]').addEventListener("click", function () {
             menuUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
+        });
+        App.$('.tab[data-tab="report"]').addEventListener("click", function () {
+            reportUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
+        });
+        App.$("#refreshReportButton").addEventListener("click", function () {
+            reportUi.refresh().then(function () {
+                App.toast("Raport odświeżony.", "success");
+            }).catch(function (error) {
+                App.toast(error.message, "error");
+            });
         });
 
         const pickupForm = App.$("#pickupForm");
