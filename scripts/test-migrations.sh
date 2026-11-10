@@ -67,8 +67,8 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "2" ] \
-  && pass "pusta baza: 2 migracje zastosowane" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "3" ] \
+  && pass "pusta baza: 3 migracje zastosowane" \
   || fail "pusta baza: brak migracji"
 
 for table in users sessions menu_items orders order_items settings audit_log; do
@@ -80,6 +80,16 @@ done
 [ "$(sqlite3 "$legacy_db" 'SELECT COUNT(*) FROM orders;')" = "1" ] \
   && pass "legacy: zamówienie zachowane" \
   || fail "legacy: utracono zamówienie"
+
+for column in paid_at paid_by ready_at uncollected_at idempotency_key; do
+  [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('orders') WHERE name='$column';")" = "1" ] \
+    && pass "legacy: kolumna orders.$column" \
+    || fail "legacy: brak kolumny orders.$column"
+done
+
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM orders WHERE payment_status='paid' AND paid_at IS NOT NULL;")" = "1" ] \
+  && pass "legacy: paid_at uzupełnione dla opłaconych" \
+  || fail "legacy: brak paid_at dla opłaconego zamówienia"
 
 [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM users WHERE role != 'admin';")" = "4" ] \
   && pass "legacy: konta zachowane" \

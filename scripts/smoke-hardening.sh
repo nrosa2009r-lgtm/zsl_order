@@ -180,7 +180,7 @@ request GET /api/student/menu "$S1_JAR" "" ""
 ITEM=$(printf '%s' "$BODY" | jq -r '.items[0].id // empty')
 if [ -n "$ITEM" ]; then
   request POST /api/student/orders "$S1_JAR" "$S1_CSRF" \
-    '{"items":[{"menu_item_id":'"$ITEM"',"quantity":1}],"payment_method":"cash","pickup_time":"12:30"}'
+    '{"items":[{"menu_item_id":'"$ITEM"',"quantity":1}],"payment_method":"cash","pickup_time":"12:30","idempotency_key":"smoke-order-1"}'
   ORDER_ID=$(printf '%s' "$BODY" | jq -r '.id // empty')
   [ "$STATUS" = "201" ] && pass "uczeń 1: złożono zamówienie" || fail "uczeń 1: zamówienie $STATUS ($BODY)"
 else

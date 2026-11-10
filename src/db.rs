@@ -373,7 +373,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 2);
+        assert_eq!(applied, 3);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")

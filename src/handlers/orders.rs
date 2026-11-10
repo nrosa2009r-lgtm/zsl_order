@@ -8,20 +8,23 @@ use crate::util;
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
 };
 use qrcode::{QrCode, render::svg};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, QueryBuilder, Sqlite};
+use sqlx::{Connection, FromRow, QueryBuilder, Sqlite, Transaction};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 const ORDER_SELECT: &str = "SELECT o.id, o.code, o.status, o.payment_method, o.payment_status,
         o.total_cents, o.pickup_time, o.created_at, o.updated_at,
+        o.paid_at, o.uncollected_at,
         u.login AS user_login, u.display_code AS user_display_code,
+        p.login AS paid_by_login,
         oi.name AS item_name, oi.price_cents AS item_price, oi.quantity AS item_qty
  FROM orders o
  JOIN users u ON u.id = o.user_id
+ LEFT JOIN users p ON p.id = o.paid_by
  LEFT JOIN order_items oi ON oi.order_id = o.id";
 
 #[derive(Clone, Serialize)]
@@ -42,6 +45,9 @@ pub struct OrderView {
     pub pickup_time: String,
     pub created_at: i64,
     pub updated_at: i64,
+    pub paid_at: Option<i64>,
+    pub paid_by: Option<String>,
+    pub uncollected_at: Option<i64>,
     pub student: String,
     pub student_code: String,
     pub items: Vec<OrderItemView>,
@@ -58,8 +64,11 @@ struct OrderRow {
     pickup_time: String,
     created_at: i64,
     updated_at: i64,
+    paid_at: Option<i64>,
+    uncollected_at: Option<i64>,
     user_login: String,
     user_display_code: String,
+    paid_by_login: Option<String>,
     item_name: Option<String>,
     item_price: Option<i64>,
     item_qty: Option<i64>,
@@ -73,12 +82,25 @@ struct MenuItemRow {
     available: bool,
 }
 
+#[derive(FromRow)]
+struct OrderState {
+    status: String,
+    payment_status: String,
+    created_at: i64,
+    paid_at: Option<i64>,
+    paid_by: Option<i64>,
+    ready_at: Option<i64>,
+    uncollected_at: Option<i64>,
+}
+
 #[derive(Deserialize)]
 pub struct CreateOrderRequest {
     pub items: Vec<CreateOrderItem>,
     pub payment_method: String,
     #[serde(default)]
     pub pickup_time: String,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +149,7 @@ pub async fn student_orders(
 pub async fn create_order(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
     Json(body): Json<CreateOrderRequest>,
 ) -> Result<(StatusCode, Json<OrderView>), AppError> {
     if db::get_setting_or(&state.db, "ordering_enabled", "1").await != "1" {
@@ -135,21 +158,9 @@ pub async fn create_order(
         ));
     }
 
-    let max_open_orders = parse_setting(&state, "max_open_orders", 3).await;
-    let max_order_items = parse_setting(&state, "max_order_items", 20).await;
-    let open_orders: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM orders
-         WHERE user_id = ? AND status IN ('new','preparing','ready')",
-    )
-    .bind(user.id)
-    .fetch_one(&state.db)
-    .await?;
+    let idempotency_key = resolve_idempotency_key(&headers, body.idempotency_key.as_deref())?;
 
-    if open_orders >= max_open_orders {
-        return Err(AppError::conflict(format!(
-            "Masz już {open_orders} oczekujących zamówień. Maksymalnie {max_open_orders}."
-        )));
-    }
+    let max_order_items = parse_setting(&state, "max_order_items", 20).await;
 
     let payment_method = body.payment_method.trim().to_string();
     if !matches!(payment_method.as_str(), "cash" | "card") {
@@ -190,6 +201,49 @@ pub async fn create_order(
     }
 
     let ids: Vec<i64> = quantities.keys().copied().collect();
+    let now = util::now();
+
+    // BEGIN IMMEDIATE serializuje zapisy: równoległe kliknięcia nie mogą
+    // przekroczyć limitu otwartych zamówień ani utworzyć dwóch zamówień
+    // z tym samym kluczem idempotencji.
+    let mut connection = state.db.acquire().await?;
+    let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
+
+    let existing_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM orders WHERE user_id = ? AND idempotency_key = ? LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(&idempotency_key)
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    if let Some(existing_id) = existing_id {
+        transaction.rollback().await?;
+        tracing::info!(
+            user_id = user.id,
+            order_id = existing_id,
+            "Powtórzone żądanie utworzenia zamówienia — zwracam istniejące"
+        );
+        return Ok((StatusCode::OK, Json(load_order(&state, existing_id).await?)));
+    }
+
+    let max_open_orders = setting_i64(&mut transaction, "max_open_orders", 3).await?;
+    let open_orders: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM orders
+         WHERE user_id = ? AND status IN ('new','preparing','ready')
+           AND uncollected_at IS NULL",
+    )
+    .bind(user.id)
+    .fetch_one(&mut *transaction)
+    .await?;
+
+    if open_orders >= max_open_orders {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(format!(
+            "Masz już {open_orders} oczekujących zamówień. Maksymalnie {max_open_orders}."
+        )));
+    }
+
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT id, name, price_cents, available FROM menu_items WHERE id IN (",
     );
@@ -203,10 +257,11 @@ pub async fn create_order(
 
     let menu_rows = builder
         .build_query_as::<MenuItemRow>()
-        .fetch_all(&state.db)
+        .fetch_all(&mut *transaction)
         .await?;
 
     if menu_rows.len() != ids.len() {
+        transaction.rollback().await?;
         return Err(AppError::bad(
             "Niektóre wybrane pozycje menu nie istnieją. Odśwież menu.",
         ));
@@ -221,6 +276,7 @@ pub async fn create_order(
             .get(id)
             .ok_or_else(|| AppError::bad("Niektóre wybrane pozycje menu nie istnieją."))?;
         if !item.available {
+            transaction.rollback().await?;
             return Err(AppError::conflict(format!(
                 "Pozycja „{}” jest chwilowo niedostępna.",
                 item.name
@@ -232,11 +288,9 @@ pub async fn create_order(
     }
 
     if total_cents > 200_000 {
+        transaction.rollback().await?;
         return Err(AppError::bad("Kwota zamówienia jest zbyt duża."));
     }
-
-    let now = util::now();
-    let mut transaction = state.db.begin().await?;
 
     let mut code = String::new();
     for _ in 0..20 {
@@ -275,8 +329,8 @@ pub async fn create_order(
     let result = sqlx::query(
         "INSERT INTO orders
          (user_id, code, qr_token, status, payment_method, payment_status, total_cents,
-          pickup_time, created_at, updated_at)
-         VALUES (?, ?, ?, 'new', ?, 'unpaid', ?, ?, ?, ?)",
+          pickup_time, idempotency_key, created_at, updated_at)
+         VALUES (?, ?, ?, 'new', ?, 'unpaid', ?, ?, ?, ?, ?)",
     )
     .bind(user.id)
     .bind(&code)
@@ -284,6 +338,7 @@ pub async fn create_order(
     .bind(&payment_method)
     .bind(total_cents)
     .bind(&pickup_time)
+    .bind(&idempotency_key)
     .bind(now)
     .bind(now)
     .execute(&mut *transaction)
@@ -328,25 +383,62 @@ pub async fn cancel_order(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<Json<OrderView>, AppError> {
-    let status: Option<String> =
-        sqlx::query_scalar("SELECT status FROM orders WHERE id = ? AND user_id = ?")
-            .bind(id)
-            .bind(user.id)
-            .fetch_optional(&state.db)
-            .await?;
+    let mut connection = state.db.acquire().await?;
+    let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
 
-    let status = status.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
-    if status != "new" {
+    let current: Option<OrderState> = sqlx::query_as(
+        "SELECT status, payment_status, created_at, paid_at, paid_by, ready_at, uncollected_at
+         FROM orders WHERE id = ? AND user_id = ?",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+
+    let Some(current) = current else {
+        transaction.rollback().await?;
+        return Err(AppError::not_found("Nie znaleziono zamówienia."));
+    };
+
+    if current.uncollected_at.is_some() {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(
+            "To zamówienie zostało oznaczone jako nieodebrane.",
+        ));
+    }
+    if current.status != "new" {
+        transaction.rollback().await?;
         return Err(AppError::conflict(
             "Można anulować tylko zamówienie, które nie zostało jeszcze przyjęte przez kuchnię.",
         ));
     }
+    if current.payment_status == "paid" {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(
+            "Opłaconego zamówienia nie można anulować. Skontaktuj się z obsługą stołówki.",
+        ));
+    }
 
-    sqlx::query("UPDATE orders SET status = 'cancelled', updated_at = ? WHERE id = ?")
-        .bind(util::now())
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE orders
+         SET status = 'cancelled', updated_at = ?
+         WHERE id = ? AND user_id = ? AND status = 'new'
+           AND payment_status = 'unpaid' AND uncollected_at IS NULL",
+    )
+    .bind(util::now())
+    .bind(id)
+    .bind(user.id)
+    .execute(&mut *transaction)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(
+            "Zamówienie zostało właśnie zmienione. Odśwież listę i spróbuj ponownie.",
+        ));
+    }
+
+    transaction.commit().await?;
 
     db::audit(
         &state.db,
@@ -409,6 +501,7 @@ pub async fn staff_orders(
         ),
         _ => format!(
             "{ORDER_SELECT} WHERE o.status IN ('new','preparing','ready')
+             AND o.uncollected_at IS NULL
              ORDER BY o.created_at ASC, o.id ASC, oi.id ASC LIMIT 300"
         ),
     };
@@ -484,8 +577,10 @@ pub async fn staff_pickup(
     )
     .await;
 
-    if order.status == "cancelled" {
-        return Err(AppError::conflict("To zamówienie zostało anulowane."));
+    if order.status == "cancelled" || order.status == "uncollected" {
+        return Err(AppError::conflict(
+            "To zamówienie zostało anulowane lub nieodebrane.",
+        ));
     }
 
     Ok(Json(serde_json::json!({ "order": order })))
@@ -518,26 +613,45 @@ pub async fn staff_update_order(
         return Err(AppError::bad("Nieprawidłowy status płatności."));
     }
 
-    let current: Option<(String, String)> =
-        sqlx::query_as("SELECT status, payment_status FROM orders WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&state.db)
-            .await?;
-    let (old_status, old_payment) =
-        current.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
+    let current: Option<OrderState> = sqlx::query_as(
+        "SELECT status, payment_status, created_at, paid_at, paid_by, ready_at, uncollected_at
+         FROM orders WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let current = current.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
+
+    if current.uncollected_at.is_some() {
+        return Err(AppError::conflict(
+            "To zamówienie zostało oznaczone jako nieodebrane i nie można go już zmienić.",
+        ));
+    }
 
     if user.role == "kitchen" {
-        if matches!(old_status.as_str(), "completed" | "cancelled") {
+        if current.created_at < util::start_of_today() {
+            return Err(AppError::forbidden(
+                "Kuchnia może zmieniać tylko dzisiejsze zamówienia.",
+            ));
+        }
+        if matches!(current.status.as_str(), "completed" | "cancelled") {
             return Err(AppError::conflict(
                 "To zamówienie jest już zamknięte i nie można go zmienić.",
             ));
         }
-        if let Some(value) = &status
-            && !matches!(value.as_str(), "preparing" | "ready" | "completed")
-        {
-            return Err(AppError::forbidden(
-                "Kuchnia może ustawić tylko status: przygotowanie, gotowe lub wydane.",
-            ));
+        if let Some(value) = &status {
+            let allowed = match current.status.as_str() {
+                "new" => matches!(value.as_str(), "new" | "preparing"),
+                "preparing" => matches!(value.as_str(), "preparing" | "ready"),
+                "ready" => matches!(value.as_str(), "ready" | "completed"),
+                _ => false,
+            };
+            if !allowed {
+                return Err(AppError::forbidden(
+                    "Niedozwolona zmiana statusu. Kuchnia prowadzi zamówienie krok po kroku.",
+                ));
+            }
         }
         if let Some(value) = &payment_status
             && value != "paid"
@@ -546,36 +660,94 @@ pub async fn staff_update_order(
                 "Kuchnia może tylko oznaczyć płatność jako opłaconą.",
             ));
         }
+        let final_status = status.as_deref().unwrap_or(&current.status);
+        if payment_status.as_deref() == Some("paid")
+            && !matches!(final_status, "ready" | "completed")
+        {
+            return Err(AppError::conflict(
+                "Płatność można oznaczyć dopiero przy wydaniu zamówienia.",
+            ));
+        }
     }
 
     if status.as_deref() == Some("completed") && payment_status.is_none() {
         payment_status = Some("paid".to_string());
     }
 
-    sqlx::query(
+    let final_status = status.as_deref().unwrap_or(&current.status).to_string();
+    let final_payment = payment_status
+        .as_deref()
+        .unwrap_or(&current.payment_status)
+        .to_string();
+
+    let now = util::now();
+    let (new_paid_at, new_paid_by) = if final_payment == "paid" {
+        if current.payment_status == "paid" {
+            (current.paid_at, current.paid_by)
+        } else {
+            (Some(now), Some(user.id))
+        }
+    } else {
+        (None, None)
+    };
+
+    let new_ready_at = if final_status == "ready" {
+        if current.status == "ready" {
+            current.ready_at
+        } else {
+            Some(now)
+        }
+    } else {
+        None
+    };
+
+    let mut connection = state.db.acquire().await?;
+    let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
+
+    let result = sqlx::query(
         "UPDATE orders
-         SET status = COALESCE(?, status),
-             payment_status = COALESCE(?, payment_status),
-             updated_at = ?
-         WHERE id = ?",
+         SET status = ?, payment_status = ?, paid_at = ?, paid_by = ?, ready_at = ?, updated_at = ?
+         WHERE id = ? AND status = ? AND payment_status = ?
+           AND COALESCE(uncollected_at, 0) = ?",
     )
-    .bind(status.as_deref())
-    .bind(payment_status.as_deref())
-    .bind(util::now())
+    .bind(&final_status)
+    .bind(&final_payment)
+    .bind(new_paid_at)
+    .bind(new_paid_by)
+    .bind(new_ready_at)
+    .bind(now)
     .bind(id)
-    .execute(&state.db)
+    .bind(&current.status)
+    .bind(&current.payment_status)
+    .bind(current.uncollected_at.unwrap_or(0))
+    .execute(&mut *transaction)
     .await?;
+
+    if result.rows_affected() == 0 {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(
+            "Zamówienie zostało właśnie zmienione przez inną osobę. Odśwież listę.",
+        ));
+    }
+
+    transaction.commit().await?;
 
     db::audit(
         &state.db,
         Some(user.id),
         "order_updated",
         &format!(
-            "Zamówienie id={id}, status {} -> {}, płatność {} -> {}",
-            old_status,
-            status.as_deref().unwrap_or(&old_status),
-            old_payment,
-            payment_status.as_deref().unwrap_or(&old_payment)
+            "Zamówienie id={id}, status {} -> {}, płatność {} -> {}, opłacone przez={}, paid_at={}",
+            current.status,
+            final_status,
+            current.payment_status,
+            final_payment,
+            new_paid_by
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "—".to_string()),
+            new_paid_at
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "—".to_string()),
         ),
     )
     .await;
@@ -606,16 +778,24 @@ fn group_orders(rows: Vec<OrderRow>) -> Vec<OrderView> {
             None => {
                 let position = orders.len();
                 index.insert(row.id, position);
+                let status = if row.uncollected_at.is_some() {
+                    "uncollected".to_string()
+                } else {
+                    row.status
+                };
                 orders.push(OrderView {
                     id: row.id,
                     code: row.code,
-                    status: row.status,
+                    status,
                     payment_method: row.payment_method,
                     payment_status: row.payment_status,
                     total_cents: row.total_cents,
                     pickup_time: row.pickup_time,
                     created_at: row.created_at,
                     updated_at: row.updated_at,
+                    paid_at: row.paid_at,
+                    paid_by: row.paid_by_login,
+                    uncollected_at: row.uncollected_at,
                     student: row.user_login,
                     student_code: row.user_display_code,
                     items: Vec::new(),
@@ -643,4 +823,82 @@ async fn parse_setting(state: &Arc<AppState>, key: &str, default: i64) -> i64 {
         .await
         .parse()
         .unwrap_or(default)
+}
+
+async fn setting_i64(
+    transaction: &mut Transaction<'_, Sqlite>,
+    key: &str,
+    default: i64,
+) -> Result<i64, sqlx::Error> {
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    Ok(value
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(default))
+}
+
+/// Klient generuje losowy klucz na jedno kliknięcie „Złóż zamówienie”.
+/// Powtórzenie tego samego żądania (np. ponowienie po timeoucie) zwraca
+/// istniejące zamówienie zamiast tworzyć drugie.
+fn resolve_idempotency_key(
+    headers: &HeaderMap,
+    body_key: Option<&str>,
+) -> Result<String, AppError> {
+    let header_key = headers
+        .get("idempotency-key")
+        .or_else(|| headers.get("x-idempotency-key"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let body_key = body_key.map(str::trim).filter(|value| !value.is_empty());
+
+    if let (Some(body), Some(header)) = (body_key, header_key)
+        && body != header
+    {
+        return Err(AppError::bad(
+            "Klucz idempotencji w nagłówku i treści musi być zgodny.",
+        ));
+    }
+
+    let key = body_key.or(header_key).ok_or_else(|| {
+        AppError::bad("Brak klucza idempotencji. Odśwież stronę i spróbuj ponownie.")
+    })?;
+
+    if key.len() < 8
+        || key.len() > 128
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(AppError::bad("Nieprawidłowy klucz idempotencji."));
+    }
+
+    Ok(key.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idempotency_key_requires_safe_value() {
+        let headers = HeaderMap::new();
+        assert!(resolve_idempotency_key(&headers, Some("abcdefgh")).is_ok());
+        assert!(resolve_idempotency_key(&headers, Some("krótki")).is_err());
+        assert!(resolve_idempotency_key(&headers, Some("abcdefgh")).is_ok());
+        assert!(resolve_idempotency_key(&headers, Some("abc defgh")).is_err());
+        assert!(resolve_idempotency_key(&headers, Some("abc;defgh")).is_err());
+        assert!(resolve_idempotency_key(&headers, None).is_err());
+    }
+
+    #[test]
+    fn idempotency_key_header_and_body_must_match() {
+        let mut headers = HeaderMap::new();
+        headers.insert("idempotency-key", "abcdefgh".parse().unwrap());
+        assert!(resolve_idempotency_key(&headers, Some("abcdefgh")).is_ok());
+        assert!(resolve_idempotency_key(&headers, Some("ijklmnop")).is_err());
+        assert!(resolve_idempotency_key(&headers, None).is_ok());
+    }
 }
