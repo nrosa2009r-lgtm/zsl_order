@@ -77,6 +77,14 @@ else
   fail "WAL: brak pliku baza.db-wal"
 fi
 
+DB_MODE="$(stat -c '%a' "$BASE/baza.db")"
+[ "$DB_MODE" = "600" ] && pass "uprawnienia: baza.db ma 0600" \
+  || fail "uprawnienia: baza.db ma $DB_MODE zamiast 600"
+
+JOURNAL="$(sqlite3 "$BASE/baza.db" 'PRAGMA journal_mode;' 2>/dev/null)"
+[ "$JOURNAL" = "wal" ] && pass "WAL: journal_mode = wal" \
+  || fail "WAL: journal_mode = ${JOURNAL:-błąd}"
+
 # --------------------------------------------------------------- backup
 if (cd "$BASE" && "$BIN" backup >backup-1.log 2>&1); then
   pass "backup: pierwsza kopia zakończona sukcesem"

@@ -31,12 +31,57 @@ pub async fn init(cfg: &Config) -> Result<SqlitePool, Box<dyn Error>> {
         .await?;
 
     MIGRATOR.run(&pool).await?;
+    secure_database_files(cfg)?;
 
     seed_settings(&pool).await?;
     seed_menu(&pool).await?;
     ensure_initial_admin(&pool).await?;
 
     Ok(pool)
+}
+
+/// Wymusza `0600` na pliku bazy i istniejących plikach WAL/SHM. Nowe pliki
+/// WAL tworzone później chroni `UMask=0077` usługi systemd; lokalnie ten
+/// sam efekt daje `umask 077`. W bazie są hashe haseł i tokeny sesji.
+fn secure_database_files(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let options = SqliteConnectOptions::from_str(&cfg.sqlite_url())?;
+    let path = options.get_filename();
+    if path == std::path::Path::new(":memory:") {
+        return Ok(());
+    }
+
+    let mut candidates = vec![path.to_path_buf()];
+    for suffix in ["-wal", "-shm"] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        candidates.push(std::path::PathBuf::from(name));
+    }
+
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&candidate, fs::Permissions::from_mode(0o600)).map_err(
+                |error| {
+                    format!(
+                        "Nie można ustawić uprawnień 0600 na „{}”: {error}",
+                        candidate.display()
+                    )
+                },
+            )?;
+        }
+        #[cfg(not(unix))]
+        let _ = &candidate;
+    }
+
+    tracing::info!(
+        path = %path.display(),
+        "Uprawnienia plików bazy ustawione na 0600"
+    );
+    Ok(())
 }
 
 async fn seed_settings(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -329,6 +374,32 @@ mod tests {
 
         // Ponowne uruchomienie nie może powtórzyć migracji.
         MIGRATOR.run(&pool).await.expect("migracje są idempotentne");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_files_are_chmod_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("zsl-order-perm-{}-{unique}.db", std::process::id()));
+        fs::write(&path, b"test").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let config = Config {
+            db_url: format!("sqlite://{}", path.display()),
+            ..Config::default()
+        };
+        secure_database_files(&config).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = fs::remove_file(path);
     }
 
     #[tokio::test]

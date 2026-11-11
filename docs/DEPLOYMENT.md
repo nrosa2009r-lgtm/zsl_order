@@ -40,9 +40,8 @@ cargo clippy --all-targets
 ├── frontend/              # statyczne HTML/CSS/JS (0755, root:root)
 └── data/                  # katalog roboczy usługi (0700, zsl:zsl)
     ├── config.json        # 0600
-    ├── .env               # 0600, tryb wdrożenia i PUBLIC_URL
     ├── baza.db            # 0600
-    ├── baza.db-wal        # tworzone przez SQLite
+    ├── baza.db-wal        # tworzone przez SQLite, 0600
     ├── baza.db-shm
     ├── jwt.key            # sekret HMAC JWT, 0600, tworzony przy starcie
     ├── logs/              # dzienne logi, 0700, tworzone przy starcie
@@ -51,9 +50,14 @@ cargo clippy --all-targets
     └── admin_start.txt    # tylko przy pierwszym uruchomieniu, 0600
 ```
 
-Aplikacja używa **ścieżek względnych** (`config.json`, `.env`, `baza.db`,
-`jwt.key`, `logs/`, `admin_start.txt`, `frontend/`) wobec katalogu
-roboczego. Dlatego `WorkingDirectory` musi wskazywać `data/`, a
+Konfiguracja wdrożeniowa `.env` nie leży w `data/`. Znajduje się w
+`/etc/zsl-order/zsl-order.env` (`root:zsl-order`, `0640`) i jest
+wczytywana przez systemd jako `EnvironmentFile`. Dzięki temu katalog
+roboczy aplikacji nie musi zawierać pliku ze zmiennymi środowiskowymi.
+
+Aplikacja używa **ścieżek względnych** (`config.json`, `baza.db`,
+`jwt.key`, `logs/`, `backups/`, `admin_start.txt`, `frontend/`) wobec
+katalogu roboczego. Dlatego `WorkingDirectory` musi wskazywać `data/`, a
 `frontend/` musi być dostępny względem tego katalogu. Można użyć
 symlinku:
 
@@ -68,16 +72,22 @@ aktualizacjach.
 
 ```bash
 sudo useradd --system --home /opt/zsl_order --shell /usr/sbin/nologin zsl
+sudo groupadd --system zsl-order
+sudo usermod -aG zsl-order zsl
 sudo install -d -o zsl -g zsl -m 0700 /opt/zsl_order/data
+sudo install -d -o root -g zsl-order -m 0750 /etc/zsl-order
 sudo install -o root -g root -m 0755 target/release/zsl_order /opt/zsl_order/zsl_order
 sudo cp -r frontend /opt/zsl_order/frontend
 sudo chown -R root:root /opt/zsl_order/frontend
 sudo ln -s /opt/zsl_order/frontend /opt/zsl_order/data/frontend
 ```
 
+Grupa `zsl-order` daje usłudze tylko odczyt plików konfiguracji
+wdrożeniowej. Nie dodawaj do niej innych kont.
+
 Przy pierwszym starcie aplikacja tworzy w `data/`:
 
-- `baza.db` i pliki WAL,
+- `baza.db` i pliki WAL (aplikacja wymusza `0600` na pliku bazy),
 - `jwt.key` (sekret HMAC do tokenów JWT, `0600`),
 - `logs/` (`0700`) z dziennymi plikami logów,
 - `admin_start.txt` (`0600`) tylko raz, gdy nie ma żadnego admina.
@@ -89,13 +99,14 @@ są czytelne dla innych użytkowników.
 
 Konfiguracja jest podzielona na dwa pliki:
 
-- `.env` — tryb wdrożenia, granica zaufania, kopie i retencja (wzór
-  `.env.example`),
+- `/etc/zsl-order/zsl-order.env` — tryb wdrożenia, granica zaufania,
+  kopie i retencja (wzór `.env.example`),
 - `config.json` — baza, pula połączeń, sesje, kopie i retencja (wzór
   `config.example.json`).
 
-`.env` jest ignorowany przez Git i nie zawiera sekretów. Gdy ta sama
-wartość występuje w obu plikach, `.env` ma pierwszeństwo.
+Plik `/etc/zsl-order/zsl-order.env` nie znajduje się w repozytorium i
+nie zawiera sekretów. Gdy ta sama wartość występuje w obu plikach,
+zmienna środowiskowa ma pierwszeństwo.
 
 ### 4.1. Uruchomienie lokalne
 
@@ -104,12 +115,13 @@ Wariant dla sieci szkolnej, bez tunelu i bez publicznego adresu.
 ```bash
 cd /opt/zsl_order/data
 sudo -u zsl cp /opt/zsl_order/config.example.json config.json
-sudo -u zsl cp /opt/zsl_order/.env.example .env
-sudo chmod 600 config.json .env
-sudo -u zsl editor .env
+sudo chmod 600 config.json
+sudo install -o root -g zsl-order -m 0640 \
+  /opt/zsl_order/.env.example /etc/zsl-order/zsl-order.env
+sudoedit /etc/zsl-order/zsl-order.env
 ```
 
-Przykładowy `.env`:
+Przykładowy `/etc/zsl-order/zsl-order.env`:
 
 ```dotenv
 DEPLOY_MODE=local
@@ -129,7 +141,7 @@ COOKIE_SECURE=false
   ktoś go podrobi.
 - Otwórz w firewallu wyłącznie port z `BIND_ADDR`, np. `8080/tcp`.
 
-Po zmianie `.env` zrestartuj usługę:
+Po zmianie `/etc/zsl-order/zsl-order.env` zrestartuj usługę:
 
 ```bash
 sudo systemctl restart zsl_order
@@ -181,7 +193,7 @@ ProtectHome=true
 WantedBy=multi-user.target
 ```
 
-Przykładowy `.env` aplikacji:
+Przykładowy `/etc/zsl-order/zsl-order.env` dla trybu tunnel:
 
 ```dotenv
 DEPLOY_MODE=tunnel
@@ -219,7 +231,7 @@ Przełączenie polega wyłącznie na zmianie `.env` i restarcie usługi — bez
 przebudowy binarki i bez zmian w bazie:
 
 ```bash
-sudo -u zsl editor /opt/zsl_order/data/.env
+sudoedit /etc/zsl-order/zsl-order.env
 sudo systemctl restart zsl_order
 ```
 
@@ -295,7 +307,8 @@ Jeśli uruchomisz od razu usługę, dane znajdziesz w
 
 ## 6. Usługa systemd
 
-`/etc/systemd/system/zsl_order.service`:
+Jednostka jest w repozytorium jako `deploy/systemd/zsl-order.service`.
+`/etc/systemd/system/zsl-order.service`:
 
 ```ini
 [Unit]
@@ -307,14 +320,15 @@ Wants=network-online.target
 Type=simple
 User=zsl
 Group=zsl
+SupplementaryGroups=zsl-order
 WorkingDirectory=/opt/zsl_order/data
-EnvironmentFile=/opt/zsl_order/data/.env
+EnvironmentFile=/etc/zsl-order/zsl-order.env
 ExecStart=/opt/zsl_order/zsl_order
 Restart=on-failure
 RestartSec=3
 
 # Uprawnienia plików tworzonych przez aplikację
-# (baza, jwt.key, logs/, admin_start.txt)
+# (baza, WAL, jwt.key, admin_start.txt)
 UMask=0077
 
 # Hardening systemd
@@ -326,14 +340,49 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
 ReadWritePaths=/opt/zsl_order/data
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+`EnvironmentFile` musi istnieć i być czytelny dla grupy `zsl-order`.
+Przygotuj go raz, przed pierwszym startem:
+
+```bash
+sudo install -d -o root -g zsl-order -m 0750 /etc/zsl-order
+sudo install -o root -g zsl-order -m 0640 \
+  /opt/zsl_order/.env.example /etc/zsl-order/zsl-order.env
+sudoedit /etc/zsl-order/zsl-order.env
+```
+
+Jeśli w starszym wdrożeniu plik `.env` leżał w `data/`, po przeniesieniu
+ustawień odsuń go, aby uniknąć dwóch źródeł prawdy:
+
+```bash
+sudo mv /opt/zsl_order/data/.env /opt/zsl_order/data/.env.stare
+sudo chmod 600 /opt/zsl_order/data/.env.stare
+```
+
+`SystemCallArchitectures=native` blokuje wywołania systemowe z obcych
+architektur (np. 32-bitowych), a `SystemCallFilter=@system-service`
+ogranicza zestaw syscalli do typowych dla usług. `CapabilityBoundingSet=`
+odbiera wszystkie capability — aplikacja nasłuchuje na porcie
+nieuprzywilejowanym i nie potrzebuje żadnych.
 
 ```bash
 sudo systemctl daemon-reload
@@ -344,6 +393,33 @@ sudo journalctl -u zsl_order -f
 
 `ProtectSystem=strict` czyni system plików tylko do odczytu poza
 `ReadWritePaths`; dlatego katalog `data/` musi być zapisywalny dla `zsl`.
+
+SQLite działa w trybie WAL z `synchronous=NORMAL`, `busy_timeout=5 s` i
+włączonymi kluczami obcymi. Przy starcie aplikacja wymusza `0600` na
+pliku bazy i istniejących plikach `-wal`/`-shm`; nowe pliki chroni
+`UMask=0077`.
+
+### 6.1. Ocena hardeningu
+
+Po uruchomieniu usługi sprawdź wynik:
+
+```bash
+sudo systemd-analyze security zsl_order
+```
+
+Przykładowy wynik na systemd 262 (wynik zależy od wersji systemd i
+jądra):
+
+```text
+→ Overall exposure level for zsl_order.service: 1.7 OK 🙂
+
+```
+
+`1.7 OK` oznacza niską ekspozycję. Wartości powyżej `5` wymagają
+przeglądu. `systemd-analyze` pokazuje też pojedyncze sugestie (np.
+`RemoveIPC=`, `PrivateUsers=`) — nie każda ma zastosowanie do tej
+aplikacji; nie wyłączaj jednak `ProtectSystem`, `NoNewPrivileges` ani
+`SystemCallArchitectures`.
 
 Aplikacja rotuje logi dziennie (`logs/zsl_order.log.RRRR-MM-DD`), ale nie
 usuwa starych plików. Dodaj `logrotate` (albo `tmpfiles.d`), np.
@@ -475,7 +551,8 @@ sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --v
 `PRAGMA integrity_check`; nie tworzy ani nie zmienia plików. Pełna pomoc:
 `zsl_order backup --help`.
 
-Konfiguracja (`.env` ma pierwszeństwo nad `config.json`):
+Konfiguracja (`/etc/zsl-order/zsl-order.env` ma pierwszeństwo nad
+`config.json`):
 
 | `config.json` | `.env` | Domyślnie | Znaczenie |
 | --- | --- | --- | --- |
@@ -505,8 +582,9 @@ OnFailure=zsl-order-backup-failed.service
 Type=oneshot
 User=zsl
 Group=zsl
+SupplementaryGroups=zsl-order
 WorkingDirectory=/opt/zsl_order/data
-EnvironmentFile=-/opt/zsl_order/data/.env
+EnvironmentFile=/etc/zsl-order/zsl-order.env
 ExecStart=/opt/zsl_order/zsl_order backup
 Nice=10
 IOSchedulingClass=best-effort
@@ -520,10 +598,20 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
 RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
 ReadWritePaths=/opt/zsl_order/data
 ```
 
