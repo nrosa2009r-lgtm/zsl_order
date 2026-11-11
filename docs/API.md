@@ -395,7 +395,9 @@ pozycje w kolejności `order_items.id`.
   go ponownie wyłącznie przy ponowieniu tego samego żądania. Powtórzenie
   klucza zwraca **istniejące** zamówienie (`200`) zamiast tworzyć drugie.
   Klucz można też przesłać w nagłówku `Idempotency-Key`; jeśli występuje
-  w obu miejscach, wartości muszą być identyczne.
+  w obu miejscach, wartości muszą być identyczne. Indeks unikalny obejmuje
+  parę `(user_id, idempotency_key)`, więc ten sam klucz użyty przez innego
+  ucznia tworzy jego własne zamówienie i nigdy nie ujawnia cudzego.
 - `items`: 1–`max_order_items` pozycji (domyślnie 20); `menu_item_id` musi
   istnieć i być dostępne; `quantity` 1–10; ta sama pozycja nie może wystąpić
   dwa razy. Pola `price_cents`, `total_cents`, `status` i
@@ -407,7 +409,9 @@ pozycje w kolejności `order_items.id`.
 - Limit otwartych zamówień użytkownika: `max_open_orders` (domyślnie 3);
   statusy liczone jako otwarte: `new`, `preparing`, `ready`.
 - `max_uncollected > 0` blokuje nowe zamówienia, jeśli uczeń ma co najmniej
-  tyle nieodebranych zamówień w ostatnich 30 dniach.
+  tyle nieodebranych zamówień w ostatnich 30 dniach. Blokadę można zdjąć
+  akcją administratora `POST /api/admin/users/:id/clear-uncollected-block`;
+  historia nieodebranych i raporty pozostają bez zmian.
 - `ordering_enabled = false` blokuje składanie zamówień.
 
 **Odpowiedź 201** — nowy `OrderView`. **Odpowiedź 200** — istniejące
@@ -492,7 +496,7 @@ Pozycja pozostaje widoczna dla personelu i w historycznych zamówieniach
 
 - `open` (domyślnie): statusy `new`, `preparing`, `ready` bez znacznika
   nieodebranego, sortowanie najstarsze pierwsze (kolejka),
-- `today`: zamówienia od początku lokalnego dnia, najnowsze pierwsze,
+- `today`: zamówienia od początku doby `Europe/Warsaw`, najnowsze pierwsze,
 - `all`: wszystkie, najnowsze pierwsze, maks. 300.
 
 Każdy wariant zwraca maks. 300 zamówień. Odpowiedź to tablica
@@ -524,6 +528,10 @@ Ograniczenia dla roli `kitchen`:
   completed` (`403` przy pominięciu kroku),
 - może ustawić płatność tylko na `paid` i tylko gdy zamówienie jest
   `ready` lub `completed` (`403`/`409` dla innych przypadków),
+- nie może oznaczyć jako opłacone zamówienia anulowanego ani nieodebranego,
+- nie może cofnąć płatności (`paid → unpaid`); robi to wyłącznie
+  administrator, a zdarzenie trafia do audytu jako
+  `order_payment_reverted`,
 - `completed` automatycznie ustawia `paid`, jeśli nie podano płatności,
 - przy przejściu na `paid` serwer zapisuje `paid_at` i `paid_by`.
 
@@ -565,9 +573,10 @@ Każde wyszukanie jest zapisywane w audycie (`pickup_lookup`).
 ### `GET /api/staff/report?date=RRRR-MM-DD`
 
 Raport dzienny dla kuchni i administratora. `date` opcjonalne
-(domyślnie dzisiaj, strefa lokalna serwera). Zakres obejmuje zamówienia
-**złożone** w danym dniu. Odpowiedź zawiera sumy łączne oraz podział na
-gotówkę i kartę:
+(domyślnie dzisiaj). Doba jest liczona w **Europe/Warsaw** — także przy
+zmianie czasu (dzień wiosenny ma 23 h, jesienny 25 h). Zakres obejmuje
+zamówienia **złożone** w danym dniu. Odpowiedź zawiera sumy łączne oraz
+podział na gotówkę i kartę:
 
 ```json
 {
@@ -579,16 +588,25 @@ gotówkę i kartę:
   "unpaid_cents": 1400,
   "cancelled_orders": 1,
   "uncollected_orders": 1,
-  "completed_orders": 8,
+  "completed_orders": 9,
   "open_orders": 1,
   "cash": { "orders": 7, "paid_orders": 5, "paid_cents": 9800, "...": "..." },
   "card": { "orders": 5, "paid_orders": 4, "paid_cents": 8800, "...": "..." }
 }
 ```
 
-- `paid_cents` sumuje zamówienia opłacone, z wyjątkiem jawnie
-  anulowanych; opłacone nieodebrane nadal jest przychodem,
+- `paid_orders`, `unpaid_orders`, `cancelled_orders` i `uncollected_orders`
+  to **rozłączne** kategorie liczbowe:
+  `paid_orders + unpaid_orders + cancelled_orders + uncollected_orders =
+  orders`. Nieodebrane nie jest liczone jednocześnie jako opłacone,
+  nieopłacone ani anulowane.
+- `paid_cents` to utarg z opłaconych zamówień z wyjątkiem jawnie
+  anulowanych; **opłacone nieodebrane nadal jest przychodem** i wchodzi do
+  tej sumy (mimo że nie zwiększa `paid_orders`). Analogicznie
+  `unpaid_cents` obejmuje nieopłacone nieodebrane.
 - `cancelled_orders` nie zawiera nieodebranych (te mają osobny licznik),
+- `completed_orders + open_orders + cancelled_orders + uncollected_orders =
+  orders` (podział według realizacji),
 - `cash.*` + `card.*` = wartości łączne,
 - nieprawidłowa data → `400`.
 
@@ -619,7 +637,7 @@ nieopłacone, kwota nieopłacona w groszach, anulowane, nieodebrane.
 ```
 
 - `students`, `kitchen`, `admins` — tylko aktywne konta,
-- `orders_today`, `revenue_today_cents` — od początku lokalnego dnia;
+- `orders_today`, `revenue_today_cents` — od początku doby `Europe/Warsaw`;
   utarg liczy tylko `payment_status = 'paid'` i status inny niż `cancelled`,
 - `open_orders` — `new`, `preparing`, `ready`,
 - `awaiting_payment` — `unpaid` i status inny niż `cancelled`,
@@ -628,8 +646,8 @@ nieopłacone, kwota nieopłacona w groszach, anulowane, nieodebrane.
 ### `GET /api/admin/stats/activity?days=7|14|30|90`
 
 Statystyki aktywności dla wykresów. `days` jest przycinane do zakresu
-1–90 (domyślnie 14). Dni i godziny są liczone w **strefie lokalnej
-serwera**; znaczniki czasu pozostają w UTC.
+1–90 (domyślnie 14). Dni i godziny są liczone w **Europe/Warsaw**
+(niezależnie od strefy serwera); znaczniki czasu pozostają w UTC.
 
 **Odpowiedź 200**
 
@@ -734,8 +752,8 @@ login;rola;kod;aktywne;haslo_startowe;utworzono;ostatnie_logowanie
 | `kod` | pseudonimowy `display_code` |
 | `aktywne` | `tak` / `nie` |
 | `haslo_startowe` | `tak`, jeśli konto nadal wymaga zmiany hasła — **to nie jest hasło** |
-| `utworzono` | data i godzina lokalna `RRRR-MM-DD HH:MM` |
-| `ostatnie_logowanie` | data i godzina lokalna lub puste |
+| `utworzono` | data i godzina `RRRR-MM-DD HH:MM` w Europe/Warsaw |
+| `ostatnie_logowanie` | data i godzina w Europe/Warsaw lub puste |
 
 **Eksport nie zawiera haseł i nie może ich zawierać** — baza przechowuje
 wyłącznie skróty Argon2id. Hasła są dostępne tylko w odpowiedzi
@@ -888,6 +906,21 @@ można użyć wobec własnego konta (`400`) — do tego służy
 
 ```json
 {"ok": true, "revoked": 2}
+```
+
+### `POST /api/admin/users/:id/clear-uncollected-block`
+
+Puste ciało `{}`. Zdejmuje blokadę nowych zamówień wynikającą z limitu
+`max_uncollected`, nie usuwając historii ani znaczników `uncollected_at`.
+Licznik blokady uwzględnia tylko zamówienia nieodebrane po dacie tej akcji,
+więc kolejne nieodebrane zamówienie znów zablokuje konto. Dotyczy wyłącznie
+kont uczniów (`400` dla innych ról); brak konta → `404`. Audyt zapisuje
+`uncollected_block_cleared`.
+
+**Odpowiedź 200**
+
+```json
+{"ok": true, "cleared_at": 1762451234}
 ```
 
 ### `GET /api/admin/settings`

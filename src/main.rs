@@ -183,6 +183,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             delete(handlers::admin::revoke_user_sessions),
         )
         .route(
+            "/users/:id/clear-uncollected-block",
+            post(handlers::admin::clear_uncollected_block),
+        )
+        .route(
             "/settings",
             get(handlers::admin::settings).put(handlers::admin::update_settings),
         )

@@ -432,10 +432,14 @@
     }
 
     function localToday() {
-        const now = new Date();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const day = String(now.getDate()).padStart(2, "0");
-        return now.getFullYear() + "-" + month + "-" + day;
+        // Doba raportu jest zawsze warszawska, niezależnie od ustawień
+        // przeglądarki (np. laptop ucznia na wyjeździe).
+        return new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Europe/Warsaw",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).format(new Date());
     }
 
     function setupDailyReport(options) {
@@ -479,9 +483,9 @@
             App.clear(summary);
             summary.append(
                 stat("Zamówienia", report.orders, "złożone w dniu"),
-                stat("Opłacone", report.paid_orders, App.fmtPLN(report.paid_cents)),
+                stat("Opłacone", report.paid_orders, App.fmtPLN(report.paid_cents) + " (z nieodebranymi)"),
                 stat("Nieopłacone", report.unpaid_orders, App.fmtPLN(report.unpaid_cents)),
-                stat("Nieodebrane", report.uncollected_orders, "w tym dniu"),
+                stat("Nieodebrane", report.uncollected_orders, "poza opłaconymi"),
                 stat("Anulowane", report.cancelled_orders, "poza nieodebranymi")
             );
 

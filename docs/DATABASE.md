@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS users (
     must_change_password INTEGER NOT NULL DEFAULT 0,
     class_group TEXT,
     created_at INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    uncollected_block_reset_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS users_role_idx ON users(role);
 CREATE INDEX IF NOT EXISTS users_class_group_idx ON users(class_group);
@@ -65,6 +66,7 @@ CREATE INDEX IF NOT EXISTS users_class_group_idx ON users(class_group);
 | `class_group` | pseudonim klasy z importu CSV (np. `1A`) lub `NULL` |
 | `created_at` | Unix UTC |
 | `last_login_at` | Unix UTC, może być `NULL` |
+| `uncollected_block_reset_at` | Unix UTC; od tej chwili liczy się blokada nieodebranych po akcji „zdejmij blokadę” |
 
 Brak pól osobowych: imienia, nazwiska, e-maila, telefonu itp.
 `class_group` to wyłącznie krótki pseudonim klasy/grupy z importu
@@ -402,6 +404,11 @@ z loginów zaimportowanych kont (`s-1a-...` → `1A`). Zwykłe konta
 `idempotency_key` z częściowym indeksem unikalnym. Dla istniejących
 opłaconych zamówień ustawia `paid_at = updated_at` (historyczny operator
 pozostaje nieznany, więc `paid_by = NULL`).
+
+`0004_uncollected_block_reset.sql` dodaje
+`users.uncollected_block_reset_at`. Dzięki temu administrator może zdjąć
+blokadę nieodebranych bez kasowania historii zamówień; licznik blokady
+uwzględnia tylko zamówienia nieodebrane po tej dacie.
 
 ## 9. Ograniczenia SQLite w tym projekcie
 

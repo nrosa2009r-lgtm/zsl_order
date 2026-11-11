@@ -62,7 +62,7 @@ rozdzielanie usług.
 | `src/auth.rs` | sesje cookie i Bearer, JWT (claims, podpis, weryfikacja), CSRF, guardy ról, limiter logowania |
 | `src/security.rs` | Argon2id, generatory loginów/haseł/kodów, SHA-256 tokenów, sekret `jwt.key`, porównanie w czasie stałym |
 | `src/logging.rs` | inicjalizacja `tracing` (stdout + dzienne pliki `logs/`), middleware logujące żądania bez danych wrażliwych |
-| `src/util.rs` | czas UTC, początek dnia lokalnego, data/godzina lokalna, walidacja `HH:MM` |
+| `src/util.rs` | czas UTC, doba i godziny w `Europe/Warsaw`, formatowanie dat, walidacja `HH:MM` |
 | `src/error.rs` | `AppError`, spójne odpowiedzi JSON, mapowanie błędów SQL/Argon2/IO, logowanie błędów wewnętrznych |
 | `src/handlers/auth.rs` | login, wydanie tokenu JWT, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
 | `src/handlers/public.rs` | publiczne informacje o stołówce i `/api/healthz` |
@@ -199,7 +199,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 `GET /api/admin/stats/activity?days=1..90`:
 
 ```text
-→ wybierz zakres [początek dnia lokalnego (dziś - days + 1), teraz]
+→ wybierz zakres [początek doby Europe/Warsaw (dziś - days + 1), teraz]
 → jedno zapytanie o zamówienia z zakresu (created_at, status, payment_status, total)
 → agregacja w Rust:
     ├─ daily[] — liczba, ukończone, anulowane, utarg (tylko paid i nie-cancelled)
@@ -210,8 +210,9 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 → JSON gotowy do wykresów canvas
 ```
 
-Dni są grupowane według **strefy lokalnej serwera**, a znaczniki czasu w
-bazie pozostają w UTC. Statystyki nie zawierają danych osobowych.
+Dni są grupowane według **Europe/Warsaw** (niezależnie od strefy serwera),
+a znaczniki czasu w bazie pozostają w UTC. Statystyki nie zawierają danych
+osobowych.
 
 ### 5.7. Twarde usuwanie konta
 
@@ -326,8 +327,8 @@ Kluczowe decyzje:
   serializuje zapisy, więc większa pula nie zwiększa przepustowości zapisu.
 - Zapisy zamówienia w transakcji; odczyty równoległe.
 - Indeksy pod kolejność zamówień, sesje, menu i audyt.
-- Czasy w bazie: Unix UTC. `start_of_today()` liczy początek dnia
-  w strefie lokalnej serwera (statystyki dzienne).
+- Czasy w bazie: Unix UTC. `start_of_today()` liczy początek doby
+  w `Europe/Warsaw` (statystyki dzienne), z poprawną obsługą DST.
 - `pickup_time` to tekst `HH:MM` — godzina ścienna, bez strefy; wyświetlana
   bez konwersji.
 

@@ -11,7 +11,6 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use chrono::Local;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, QueryBuilder, Row, Sqlite};
 use std::collections::{BTreeMap, HashSet};
@@ -247,7 +246,7 @@ pub async fn activity(
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let days = query.days.unwrap_or(14).clamp(1, 90);
-    let today = Local::now().date_naive();
+    let today = util::today();
     let first_date = today - chrono::Duration::days(days - 1);
     let range_start = util::start_of_local_date(first_date);
 
@@ -960,7 +959,7 @@ pub async fn export_users_csv(
         ));
     }
 
-    let filename = format!("konta-zsl-order-{}.csv", Local::now().format("%Y-%m-%d"));
+    let filename = format!("konta-zsl-order-{}.csv", util::today().format("%Y-%m-%d"));
 
     db::audit(
         &state.db,
@@ -995,12 +994,7 @@ pub async fn export_users_csv(
 }
 
 fn format_local_datetime(timestamp: i64) -> String {
-    use chrono::TimeZone;
-    Local
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .map(|value| value.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_default()
+    util::format_local_datetime(timestamp)
 }
 
 fn csv_cell(value: &str) -> String {
@@ -1054,6 +1048,52 @@ pub async fn revoke_user_sessions(
     Ok(Json(serde_json::json!({
         "ok": true,
         "revoked": revoked,
+    })))
+}
+
+/// Zdejmuje blokadę nowych zamówień wynikającą z limitu nieodebranych,
+/// nie usuwając historii ani znaczników `uncollected_at`. Licznik blokady
+/// liczy tylko zamówienia nieodebrane po dacie resetu.
+pub async fn clear_uncollected_block(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
+    let role = role.ok_or_else(|| AppError::not_found("Nie znaleziono użytkownika."))?;
+
+    if role != "student" {
+        return Err(AppError::bad(
+            "Blokada nieodebranych dotyczy wyłącznie kont uczniów.",
+        ));
+    }
+
+    let cleared_at = util::now();
+    sqlx::query("UPDATE users SET uncollected_block_reset_at = ? WHERE id = ?")
+        .bind(cleared_at)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+    db::audit(
+        &state.db,
+        Some(actor.id),
+        "uncollected_block_cleared",
+        &format!("Zdjęto blokadę nieodebranych dla konta id={id}"),
+    )
+    .await;
+    tracing::info!(
+        actor_id = actor.id,
+        target_id = id,
+        "Zdjęto blokadę nieodebranych"
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "cleared_at": cleared_at,
     })))
 }
 

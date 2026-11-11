@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Duration, NaiveDate};
 use qrcode::{QrCode, render::svg};
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, FromRow, QueryBuilder, Sqlite, Transaction};
@@ -269,19 +269,28 @@ pub async fn create_order(
     let max_uncollected = setting_i64(&mut transaction, "max_uncollected", 0).await?;
     if max_uncollected > 0 {
         let cutoff = now - 30 * 24 * 60 * 60;
+        let block_reset_at: Option<i64> =
+            sqlx::query_scalar("SELECT uncollected_block_reset_at FROM users WHERE id = ?")
+                .bind(user.id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        let block_reset_at = block_reset_at.unwrap_or(0);
         let uncollected: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM orders
-             WHERE user_id = ? AND uncollected_at IS NOT NULL AND uncollected_at >= ?",
+             WHERE user_id = ? AND uncollected_at IS NOT NULL
+               AND uncollected_at >= ? AND uncollected_at > ?",
         )
         .bind(user.id)
         .bind(cutoff)
+        .bind(block_reset_at)
         .fetch_one(&mut *transaction)
         .await?;
         if uncollected >= max_uncollected {
             transaction.rollback().await?;
             return Err(AppError::conflict(format!(
-                "Masz {uncollected} nieodebranych zamówień w ostatnich 30 dniach. \
-                 Zamawianie jest zablokowane — zgłoś się do stołówki."
+                "Masz {uncollected} nieodebranych zamówień w ostatnich 30 dniach \
+                 (limit: {max_uncollected}). Nowe zamówienia są zablokowane — \
+                 poproś obsługę stołówki o zdjęcie blokady."
             )));
         }
     }
@@ -565,7 +574,7 @@ pub async fn staff_orders(
             format!("{ORDER_SELECT} ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300")
         }
         "today" => format!(
-            "{ORDER_SELECT} WHERE o.created_at >= ? ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
+            "{ORDER_SELECT} WHERE o.created_at >= ? AND o.created_at < ? ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
         ),
         _ => format!(
             "{ORDER_SELECT} WHERE o.status IN ('new','preparing','ready')
@@ -577,6 +586,7 @@ pub async fn staff_orders(
     let rows = if scope == "today" {
         sqlx::query_as::<_, OrderRow>(&sql)
             .bind(util::start_of_today())
+            .bind(util::start_of_local_date(util::today() + Duration::days(1)))
             .fetch_all(&state.db)
             .await?
     } else {
@@ -690,6 +700,15 @@ pub async fn staff_update_order(
     .await?;
 
     let current = current.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
+
+    if current.payment_status == "paid"
+        && payment_status.as_deref() == Some("unpaid")
+        && user.role != "admin"
+    {
+        return Err(AppError::forbidden(
+            "Cofnięcie płatności może wykonać tylko administrator.",
+        ));
+    }
 
     if current.uncollected_at.is_some() && user.role != "admin" {
         return Err(AppError::conflict(
@@ -810,10 +829,16 @@ pub async fn staff_update_order(
 
     transaction.commit().await?;
 
+    let payment_reverted = current.payment_status == "paid" && final_payment == "unpaid";
+    let audit_action = if payment_reverted {
+        "order_payment_reverted"
+    } else {
+        "order_updated"
+    };
     db::audit(
         &state.db,
         Some(user.id),
-        "order_updated",
+        audit_action,
         &format!(
             "Zamówienie id={id}, status {} -> {}, płatność {} -> {}, opłacone przez={}, paid_at={}",
             current.status,
@@ -908,7 +933,7 @@ async fn build_daily_report(
     {
         Some(value) => NaiveDate::parse_from_str(value, "%Y-%m-%d")
             .map_err(|_| AppError::bad("Data raportu musi być w formacie RRRR-MM-DD."))?,
-        None => Local::now().date_naive(),
+        None => util::today(),
     };
     let start = util::start_of_local_date(date);
     let end = util::start_of_local_date(date + Duration::days(1));
@@ -941,6 +966,8 @@ fn aggregate_totals<'a>(rows: impl Iterator<Item = &'a ReportOrderRow>) -> Payme
 
         let uncollected = row.uncollected_at.is_some();
         let cancelled = row.status == "cancelled" && !uncollected;
+        // Kategorie liczby zamówień są rozłączne:
+        // paid + unpaid + cancelled + uncollected = orders.
         if uncollected {
             totals.uncollected_orders += 1;
         } else if cancelled {
@@ -951,14 +978,20 @@ fn aggregate_totals<'a>(rows: impl Iterator<Item = &'a ReportOrderRow>) -> Payme
             totals.open_orders += 1;
         }
 
-        // Anulowane zamówienia nie są przychodem. Nieodebrane opłacone
-        // zamówienia zostają w sumie — pieniądze wpłynęły do kasy.
+        // Kwoty pieniężne obejmują również nieodebrane zamówienia: jeśli
+        // zostały opłacone, pieniądze wpłynęły do kasy. Jawne anulowanie
+        // nie jest przychodem. Liczniki `paid_orders`/`unpaid_orders` są
+        // rozłączne z `uncollected_orders`, aby nie podwajać zamówień.
         if !cancelled {
             if row.payment_status == "paid" {
-                totals.paid_orders += 1;
+                if !uncollected {
+                    totals.paid_orders += 1;
+                }
                 totals.paid_cents += row.total_cents;
             } else {
-                totals.unpaid_orders += 1;
+                if !uncollected {
+                    totals.unpaid_orders += 1;
+                }
                 totals.unpaid_cents += row.total_cents;
             }
         }
@@ -1222,8 +1255,16 @@ mod tests {
         assert_eq!(summary.open_orders, 1);
         assert_eq!(summary.cancelled_orders, 1);
         assert_eq!(summary.uncollected_orders, 1);
+        // Kategorie są rozłączne: nieodebrane nie jest liczone jako opłacone.
+        assert_eq!(
+            summary.paid_orders
+                + summary.unpaid_orders
+                + summary.cancelled_orders
+                + summary.uncollected_orders,
+            summary.orders
+        );
         // Anulowane (jawne) nie wchodzi do przychodu, nieodebrane opłacone wchodzi.
-        assert_eq!(summary.paid_orders, 3);
+        assert_eq!(summary.paid_orders, 2);
         assert_eq!(summary.paid_cents, 5200);
         assert_eq!(summary.unpaid_orders, 1);
         assert_eq!(summary.unpaid_cents, 800);
@@ -1240,9 +1281,33 @@ mod tests {
     }
 
     #[test]
+    fn report_paid_then_uncollected_counts_once() {
+        let rows = [report_row("cancelled", "cash", "paid", 1500, true)];
+
+        let summary = aggregate_totals(rows.iter());
+        assert_eq!(summary.orders, 1);
+        assert_eq!(summary.uncollected_orders, 1);
+        assert_eq!(summary.cancelled_orders, 0);
+        assert_eq!(summary.paid_orders, 0);
+        assert_eq!(summary.unpaid_orders, 0);
+        // Pieniądze z opłaconego, ale nieodebranego zamówienia zostają w kasie.
+        assert_eq!(summary.paid_cents, 1500);
+        assert_eq!(
+            summary.paid_orders
+                + summary.unpaid_orders
+                + summary.cancelled_orders
+                + summary.uncollected_orders,
+            summary.orders
+        );
+    }
+
+    #[test]
     fn report_csv_quotes_cells_and_blocks_formulas() {
         assert_eq!(csv_cell("gotówka"), "\"gotówka\"");
         assert_eq!(csv_cell("a;b"), "\"a;b\"");
         assert_eq!(csv_cell("=1+1"), "\"'=1+1\"");
+        assert_eq!(csv_cell("+51"), "\"'+51\"");
+        assert_eq!(csv_cell("-1"), "\"'-1\"");
+        assert_eq!(csv_cell("@x"), "\"'@x\"");
     }
 }

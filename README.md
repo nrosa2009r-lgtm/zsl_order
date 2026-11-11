@@ -99,7 +99,7 @@ wydrukowany/wręczony login i hasło od administratora lub wychowawcy.
 | Hasła | Argon2id (`argon2` 0.5) | losowa sól, domyślne parametry |
 | Tokeny | `rand` 0.9 + `sha2` + `hex` | sesje, CSRF, QR |
 | QR | `qrcode` 0.14 (SVG) | generowany po stronie serwera |
-| Czas | `chrono` | UTC w bazie, dzień lokalny w statystykach |
+| Czas | `chrono` + `chrono-tz` | UTC w bazie, doba `Europe/Warsaw` w statystykach |
 | Frontend | HTML + CSS + vanilla JS | bez frameworka, bez CDN, bez build-stepu |
 | Statyczne pliki | `tower-http::ServeDir` | tylko z katalogu `frontend/` |
 

@@ -157,6 +157,7 @@
         return new Date(Number(timestamp) * 1000).toLocaleString("pl-PL", {
             dateStyle: "short",
             timeStyle: "short",
+            timeZone: "Europe/Warsaw",
         });
     }
 
@@ -165,6 +166,7 @@
         return new Date(Number(timestamp) * 1000).toLocaleTimeString("pl-PL", {
             hour: "2-digit",
             minute: "2-digit",
+            timeZone: "Europe/Warsaw",
         });
     }
 

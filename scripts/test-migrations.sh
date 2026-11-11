@@ -67,8 +67,8 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "3" ] \
-  && pass "pusta baza: 3 migracje zastosowane" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "4" ] \
+  && pass "pusta baza: 4 migracje zastosowane" \
   || fail "pusta baza: brak migracji"
 
 for table in users sessions menu_items orders order_items settings audit_log; do
@@ -98,6 +98,10 @@ done
 [ "$(sqlite3 "$legacy_db" "SELECT class_group FROM users WHERE login='s-1a-abcdefghij';")" = "1A" ] \
   && pass "legacy: class_group 1A uzupełnione" \
   || fail "legacy: brak class_group 1A"
+
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='uncollected_block_reset_at';")" = "1" ] \
+  && pass "legacy: kolumna users.uncollected_block_reset_at" \
+  || fail "legacy: brak kolumny users.uncollected_block_reset_at"
 
 [ "$(sqlite3 "$legacy_db" "SELECT class_group FROM users WHERE login='s-2b-klmnopqrst';")" = "2B" ] \
   && pass "legacy: class_group 2B uzupełnione" \

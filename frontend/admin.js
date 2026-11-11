@@ -361,6 +361,34 @@
                 })
             );
 
+            if (user.role === "student") {
+                actions.append(
+                    App.h("button", {
+                        class: "btn btn-secondary btn-small",
+                        text: "Zdejmij blokadę",
+                        attrs: { type: "button" },
+                        on: {
+                            click: async function () {
+                                if (!window.confirm(
+                                    "Zdjąć blokadę nieodebranych dla " + user.login + "? " +
+                                    "Historia zamówień i raporty pozostaną bez zmian."
+                                )) return;
+                                try {
+                                    await App.api.post(
+                                        "/api/admin/users/" + user.id + "/clear-uncollected-block",
+                                        {}
+                                    );
+                                    App.toast("Blokada nieodebranych zdjęta.", "success");
+                                    await loadUsers();
+                                } catch (error) {
+                                    App.toast(error.message, "error");
+                                }
+                            },
+                        },
+                    })
+                );
+            }
+
             row.append(loginCell, codeCell, roleCell, statusCell, createdCell, actions);
             tbody.append(row);
         });

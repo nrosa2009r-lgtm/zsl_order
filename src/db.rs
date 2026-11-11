@@ -376,7 +376,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 3);
+        assert_eq!(applied, 4);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")
@@ -384,5 +384,10 @@ mod tests {
                 .await
                 .expect("kolumny users");
         assert!(columns.iter().any(|name| name == "class_group"));
+        assert!(
+            columns
+                .iter()
+                .any(|name| name == "uncollected_block_reset_at")
+        );
     }
 }

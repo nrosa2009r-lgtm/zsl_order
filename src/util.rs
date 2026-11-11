@@ -1,43 +1,76 @@
-use chrono::{Local, NaiveDate, TimeZone};
+use chrono::{DateTime, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono_tz::Europe::Warsaw;
+use chrono_tz::Tz;
+
+/// Strefa czasowa szkoły. Wszystkie znaczniki w bazie pozostają w UTC,
+/// ale doby, raporty i godziny prezentowane użytkownikowi liczymy
+/// wyłącznie w `Europe/Warsaw` — niezależnie od strefy serwera.
+pub const APP_TZ: Tz = Warsaw;
 
 /// Znacznik czasu Unix (sekundy). Wszystkie czasy w bazie są w UTC.
 pub fn now() -> i64 {
-    chrono::Utc::now().timestamp()
+    Utc::now().timestamp()
 }
 
-/// Początek bieżącego dnia w czasie lokalnym (dla statystyk dziennych).
+/// Bieżąca data w strefie szkoły.
+pub fn today() -> NaiveDate {
+    warsaw_now().date_naive()
+}
+
+/// Bieżący czas w strefie szkoły.
+pub fn warsaw_now() -> DateTime<Tz> {
+    Utc::now().with_timezone(&APP_TZ)
+}
+
+/// Początek bieżącego dnia w strefie szkoły (dla statystyk dziennych).
 pub fn start_of_today() -> i64 {
-    start_of_local_date(Local::now().date_naive())
+    start_of_local_date(today())
 }
 
-/// Początek wskazanego dnia w czasie lokalnym (Unix UTC).
+/// Początek wskazanego dnia w strefie szkoły (Unix UTC).
 pub fn start_of_local_date(date: NaiveDate) -> i64 {
     let naive = match date.and_hms_opt(0, 0, 0) {
         Some(value) => value,
-        None => return Local::now().timestamp(),
+        None => return now(),
     };
-    Local
-        .from_local_datetime(&naive)
-        .earliest()
-        .map(|value| value.timestamp())
-        .unwrap_or_else(|| Local::now().timestamp())
+    match APP_TZ.from_local_datetime(&naive) {
+        LocalResult::Single(value) => value.timestamp(),
+        // W Europie zmiana czasu wypada o 02:00/03:00, więc północ nie jest
+        // niejednoznaczna. Wybieramy wcześniejszy wariant na wypadek zmian
+        // historycznych.
+        LocalResult::Ambiguous(earliest, _) => earliest.timestamp(),
+        // Teoretyczna luka DST o północy: traktujemy czas jak UTC, aby
+        // funkcja zawsze zwróciła sensowny znacznik.
+        LocalResult::None => Utc.from_utc_datetime(&naive).timestamp(),
+    }
 }
 
-/// Data lokalna odpowiadająca znacznikowi czasu UTC.
+/// Data w strefie szkoły odpowiadająca znacznikowi czasu UTC.
 pub fn local_date(timestamp: i64) -> Option<NaiveDate> {
-    Local
-        .timestamp_opt(timestamp, 0)
+    Utc.timestamp_opt(timestamp, 0)
         .single()
-        .map(|value| value.date_naive())
+        .map(|value| value.with_timezone(&APP_TZ).date_naive())
 }
 
-/// Godzina lokalna (0–23) odpowiadająca znacznikowi czasu UTC.
+/// Godzina w strefie szkoły (0–23) odpowiadająca znacznikowi czasu UTC.
 pub fn local_hour(timestamp: i64) -> Option<u32> {
     use chrono::Timelike;
-    Local
-        .timestamp_opt(timestamp, 0)
+    Utc.timestamp_opt(timestamp, 0)
         .single()
-        .map(|value| value.hour())
+        .map(|value| value.with_timezone(&APP_TZ).hour())
+}
+
+/// Data i godzina `RRRR-MM-DD HH:MM` w strefie szkoły.
+pub fn format_local_datetime(timestamp: i64) -> String {
+    Utc.timestamp_opt(timestamp, 0)
+        .single()
+        .map(|value| {
+            value
+                .with_timezone(&APP_TZ)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
 }
 
 /// Akceptujemy tylko godzinę w formacie HH:MM (opcjonalne pole odbioru).
@@ -63,6 +96,11 @@ pub fn valid_pickup_time(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
+
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).expect("poprawna data")
+    }
 
     #[test]
     fn pickup_time_validation() {
@@ -73,5 +111,80 @@ mod tests {
         assert!(!valid_pickup_time("7:30"));
         assert!(!valid_pickup_time("12-30"));
         assert!(!valid_pickup_time("12:60"));
+    }
+
+    #[test]
+    fn midnight_belongs_to_the_warsaw_day() {
+        let day = date(2026, 11, 10);
+        let start = start_of_local_date(day);
+        let end = start_of_local_date(day + Duration::days(1));
+
+        // 10 listopada 2026 to czas zimowy (UTC+1).
+        assert_eq!(
+            start,
+            Utc.with_ymd_and_hms(2026, 11, 9, 23, 0, 0)
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(end - start, 86_400);
+        assert_eq!(local_date(start), Some(day));
+        assert_eq!(local_date(end - 1), Some(day));
+        assert_eq!(local_date(end), Some(day + Duration::days(1)));
+
+        assert_eq!(local_date(start - 60), Some(day - Duration::days(1)));
+        assert_eq!(local_date(end + 60), Some(day + Duration::days(1)));
+    }
+
+    #[test]
+    fn spring_forward_day_has_23_hours() {
+        let day = date(2026, 3, 29);
+        let start = start_of_local_date(day);
+        let end = start_of_local_date(day + Duration::days(1));
+
+        assert_eq!(
+            start,
+            Utc.with_ymd_and_hms(2026, 3, 28, 23, 0, 0)
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(end - start, 23 * 3_600);
+        assert_eq!(local_date(start), Some(day));
+        assert_eq!(local_date(end - 1), Some(day));
+    }
+
+    #[test]
+    fn fall_back_day_has_25_hours() {
+        let day = date(2026, 10, 25);
+        let start = start_of_local_date(day);
+        let end = start_of_local_date(day + Duration::days(1));
+
+        assert_eq!(
+            start,
+            Utc.with_ymd_and_hms(2026, 10, 24, 22, 0, 0)
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(end - start, 25 * 3_600);
+        assert_eq!(local_date(start), Some(day));
+        assert_eq!(local_date(end - 1), Some(day));
+    }
+
+    #[test]
+    fn local_hour_follows_warsaw_time() {
+        // 23:59 czasu warszawskiego (UTC+1) i 00:01 następnego dnia.
+        let before_midnight = Utc
+            .with_ymd_and_hms(2026, 11, 10, 22, 59, 0)
+            .unwrap()
+            .timestamp();
+        let after_midnight = Utc
+            .with_ymd_and_hms(2026, 11, 10, 23, 1, 0)
+            .unwrap()
+            .timestamp();
+
+        assert_eq!(local_hour(before_midnight), Some(23));
+        assert_eq!(local_date(before_midnight), Some(date(2026, 11, 10)));
+        assert_eq!(local_hour(after_midnight), Some(0));
+        assert_eq!(local_date(after_midnight), Some(date(2026, 11, 11)));
+        assert_eq!(format_local_datetime(before_midnight), "2026-11-10 23:59");
     }
 }
