@@ -13,6 +13,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 
 mod auth;
+mod backup;
 mod client_ip;
 mod config;
 mod db;
@@ -32,10 +33,44 @@ pub const CONF_PATH: &str = "config.json";
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    match args.first().map(String::as_str) {
+        Some("backup") => {
+            if let Err(error) = backup::run(&args[1..]).await {
+                eprintln!("Błąd kopii zapasowej: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Some("--help" | "-h" | "help") => {
+            print_usage();
+            return;
+        }
+        Some(argument) => {
+            eprintln!("Nieznany argument: {argument}");
+            print_usage();
+            std::process::exit(2);
+        }
+        None => {}
+    }
+
     if let Err(error) = run().await {
         eprintln!("Błąd krytyczny: {error}");
         std::process::exit(1);
     }
+}
+
+fn print_usage() {
+    println!(
+        "ZSL Order — system stołówki szkolnej
+
+Użycie:
+  zsl_order                 uruchom serwer
+  zsl_order backup          utwórz kopię bazy i zastosuj retencję
+  zsl_order backup --help   opcje kopii zapasowej
+  zsl_order --help          pokaż tę pomoc"
+    );
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {

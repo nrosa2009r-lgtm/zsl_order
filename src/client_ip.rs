@@ -160,6 +160,7 @@ mod tests {
                 trusted_proxies: Some("127.0.0.1,::1".to_string()),
                 public_url: Some("https://zsl.example.com".to_string()),
                 cookie_secure: Some("auto".to_string()),
+                ..EnvConfig::default()
             },
         )
         .unwrap()

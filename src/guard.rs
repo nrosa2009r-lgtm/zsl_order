@@ -56,6 +56,7 @@ mod tests {
                 trusted_proxies: None,
                 public_url: public_url.map(str::to_string),
                 cookie_secure: Some("auto".to_string()),
+                ..EnvConfig::default()
             },
         )
         .unwrap()

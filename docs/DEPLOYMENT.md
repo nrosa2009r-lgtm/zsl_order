@@ -47,6 +47,7 @@ cargo clippy --all-targets
     ├── jwt.key            # sekret HMAC JWT, 0600, tworzony przy starcie
     ├── logs/              # dzienne logi, 0700, tworzone przy starcie
     │   └── zsl_order.log.RRRR-MM-DD
+    ├── backups/           # kopie bazy, 0700 i 0600, tworzone przez `backup`
     └── admin_start.txt    # tylko przy pierwszym uruchomieniu, 0600
 ```
 
@@ -404,32 +405,236 @@ zsl.example.edu {
 
 ## 8. Backup i odtwarzanie
 
-### Backup
+### 8.1. Wbudowana kopia zapasowa
 
-SQLite z WAL należy kopiować przez API backupu, nie przez `cp` w trakcie
-zapisu:
+SQLite w trybie WAL należy kopiować przez API backupu, nie przez `cp`
+przy działającej aplikacji. Binarka ma do tego polecenie `backup`, które:
+
+1. wykonuje `VACUUM INTO` do pliku tymczasowego w `backup_dir`,
+2. sprawdza kopię przez `PRAGMA integrity_check`,
+3. ustawia uprawnienia `0600` i atomowo zmienia nazwę na docelową,
+4. usuwa najstarsze kopie zgodnie z retencją, ale **zawsze zachowuje
+   co najmniej 7 najnowszych**.
+
+Kopia ma nazwę `zsl-order-RRRRMMDD-HHMMSS.db` (czas `Europe/Warsaw`).
+Nie zawiera plików `-wal` ani `-shm`; jest spójnym, samodzielnym plikiem
+SQLite.
+
+Ręczne wykonanie (katalogiem roboczym musi być `data/`):
 
 ```bash
-sudo install -d -o zsl -g zsl -m 0700 /var/backups/zsl
-sudo -u zsl sqlite3 /opt/zsl_order/data/baza.db \
-  ".backup '/var/backups/zsl/baza-$(date +%F-%H%M).db'"
+sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup'
+sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --keep-days 14'
+sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify backups/zsl-order-20261111-031500.db'
 ```
 
-lub:
+`--keep-days` nadpisuje konfigurację tylko dla tego uruchomienia.
+`--verify` otwiera istniejącą kopię tylko do odczytu i uruchamia
+`PRAGMA integrity_check`; nie tworzy ani nie zmienia plików. Pełna pomoc:
+`zsl_order backup --help`.
+
+Konfiguracja (`.env` ma pierwszeństwo nad `config.json`):
+
+| `config.json` | `.env` | Domyślnie | Znaczenie |
+| --- | --- | --- | --- |
+| `backup_dir` | `BACKUP_DIR` | `backups` | katalog kopii, względny wobec `data/` lub absolutny |
+| `backup_keep_days` | `BACKUP_KEEP_DAYS` | `30` | wiek kopii w dniach; `0` oznacza „zostaw tylko 7 najnowszych” |
+
+Retencja opiera się na czasie modyfikacji pliku. Kopie spoza wzorca
+`zsl-order-*.db` nie są usuwane. Katalog `backups/` jest tworzony z
+trybem `0700`, a każda kopia ma `0600`.
+
+### 8.2. Codzienny timer systemd
+
+Jednostki są w repozytorium w `deploy/systemd/`. Na serwerze skopiuj je
+do `/etc/systemd/system/` albo utwórz ręcznie:
+
+`/etc/systemd/system/zsl-order-backup.service`:
+
+```ini
+[Unit]
+Description=ZSL Order - kopia zapasowa bazy danych
+Documentation=file:/opt/zsl_order/docs/DEPLOYMENT.md
+After=zsl-order.service
+Wants=zsl-order.service
+OnFailure=zsl-order-backup-failed.service
+
+[Service]
+Type=oneshot
+User=zsl
+Group=zsl
+WorkingDirectory=/opt/zsl_order/data
+EnvironmentFile=-/opt/zsl_order/data/.env
+ExecStart=/opt/zsl_order/zsl_order backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/opt/zsl_order/data
+```
+
+`/etc/systemd/system/zsl-order-backup.timer`:
+
+```ini
+[Unit]
+Description=ZSL Order - codzienna kopia zapasowa
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+AccuracySec=1min
+Unit=zsl-order-backup.service
+
+[Install]
+WantedBy=timers.target
+```
+
+`/etc/systemd/system/zsl-order-backup-failed.service`:
+
+```ini
+[Unit]
+Description=ZSL Order - powiadomienie o nieudanej kopii zapasowej
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -t zsl-order-backup -p daemon.err "Kopia zapasowa ZSL Order nie powiodla sie. Sprawdz: journalctl -u zsl-order-backup.service"
+```
+
+`OnFailure=` uruchamia jednostkę powiadamiającą, gdy kopia się nie uda.
+Domyślnie wpis trafia do journald z priorytetem `err`. W środowisku
+produkcyjnym podłącz tam własny kanał (e-mail, monitoring, webhook) —
+samo `logger` nie zastępuje alertu poza serwerem.
+
+Włączenie i test:
 
 ```bash
-sudo -u zsl sqlite3 /opt/zsl_order/data/baza.db \
-  "VACUUM INTO '/var/backups/zsl/baza-$(date +%F-%H%M).db'"
+sudo systemctl daemon-reload
+sudo systemctl enable --now zsl-order-backup.timer
+sudo systemctl list-timers zsl-order-backup.timer
+sudo systemctl start zsl-order-backup.service
+sudo journalctl -u zsl-order-backup.service -n 50 --no-pager
 ```
 
-Cron (przykład, codziennie 2:15, retencja 30 dni):
+`Persistent=true` uruchamia zaległą kopię po restarcie hosta. Jeśli
+godzina 03:15 koliduje z innymi zadaniami, zmień `OnCalendar` i wykonaj
+`systemctl daemon-reload`. Kopia działa niezależnie od tego, czy
+aplikacja jest uruchomiona; `VACUUM INTO` jest bezpieczne dla WAL.
+
+### 8.3. Kopiowanie poza serwer
+
+Kopia na tym samym dysku nie chroni przed awarią hosta ani ransomware.
+Po każdym backupie (albo osobnym timerem) skopiuj katalog na drugie
+urządzenie przez `rsync` po SSH:
+
+```bash
+# Jednorazowo: klucz SSH dla użytkownika zsl i katalog docelowy.
+sudo -u zsl ssh-keygen -t ed25519 -N '' -f /opt/zsl_order/data/.ssh-backup
+sudo -u zsl ssh-copy-id -i /opt/zsl_order/data/.ssh-backup.pub backup@backup-host
+
+sudo -u zsl rsync -a --delete \
+  -e 'ssh -i /opt/zsl_order/data/.ssh-backup -o IdentitiesOnly=yes' \
+  /opt/zsl_order/data/backups/ backup@backup-host:/srv/backup/zsl/
+```
+
+`--delete` powoduje, że zdalny katalog jest lustrem lokalnego — po
+lokalnej retencji stare kopie znikną też zdalnie. Jeśli chcesz trzymać
+dłuższą historię poza serwerem, usuń `--delete` i ustaw osobną retencję
+na urządzeniu docelowym.
+
+Przykładowy cron użytkownika `zsl` (kopiowanie o 03:45, po backupie):
 
 ```cron
-15 2 * * * zsl sqlite3 /opt/zsl_order/data/baza.db ".backup '/var/backups/zsl/baza-$(date +\%F).db'" && find /var/backups/zsl -name 'baza-*.db' -mtime +30 -delete
+45 3 * * * rsync -a --delete -e 'ssh -i /opt/zsl_order/data/.ssh-backup -o IdentitiesOnly=yes' /opt/zsl_order/data/backups/ backup@backup-host:/srv/backup/zsl/ >> /opt/zsl_order/data/rsync-backup.log 2>&1
 ```
 
-Backup zawiera hash haseł i tokeny sesji — traktuj go jak dane wrażliwe
-(min. `0600`, szyfrowanie, ograniczony dostęp).
+Zadbaj, aby drugie urządzenie miało szyfrowany dysk, ograniczony dostęp
+i własną kopię zapasową. Kopia zdalna zawiera te same dane wrażliwe co
+lokalna.
+
+### 8.4. Szyfrowanie poza aplikacją (`age`)
+
+Aplikacja nie szyfruje kopii — robi to administrator narzędziem `age`
+albo innym systemem szyfrowania. Klucz publiczny może być na serwerze,
+prywatny trzymaj **poza serwerem** (np. w sejfie lub menedżerze haseł).
+
+```bash
+# Jednorazowo, poza serwerem produkcyjnym:
+age-keygen -o zsl-backup-age.key
+# age1... to klucz publiczny; wpisz go do skryptu na serwerze.
+
+# Na serwerze, po utworzeniu kopii:
+age -r age1... -o /var/backups/zsl-out/zsl-order-20261111-031500.db.age \
+  /opt/zsl_order/data/backups/zsl-order-20261111-031500.db
+
+# Odszyfrowanie na potrzeby testu odtworzenia (na osobnym hoście):
+age -d -i zsl-backup-age.key -o kopia.db kopia.db.age
+/opt/zsl_order/zsl_order backup --verify kopia.db
+```
+
+Szyfruj zwłaszcza kopie opuszczające serwer. Nie umieszczaj klucza
+prywatnego obok zaszyfrowanych kopii — wtedy szyfrowanie nie chroni
+przed przejęciem hosta.
+
+### 8.5. Odtwarzanie (tylko ręczne)
+
+Aplikacja **nie ma** polecenia `restore`. Odtwarzanie jest celowo
+procedurą ręczną, wykonywaną przy zatrzymanej usłudze:
+
+1. Zatrzymaj usługę i zweryfikuj wybraną kopię:
+
+   ```bash
+   sudo systemctl stop zsl_order
+   sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify backups/zsl-order-20261111-031500.db'
+   ```
+
+2. Odsuń obecną bazę i pliki WAL (nie usuwaj ich od razu — mogą być
+   potrzebne do analizy):
+
+   ```bash
+   cd /opt/zsl_order/data
+   sudo -u zsl mkdir -p restore-old
+   sudo -u zsl mv baza.db "restore-old/baza.db.$(date +%F-%H%M%S)"
+   for plik in baza.db-wal baza.db-shm; do
+     [ -e "$plik" ] && sudo -u zsl mv "$plik" "restore-old/$plik.$(date +%F-%H%M%S)"
+   done
+   ```
+
+3. Wstaw kopię i ustaw uprawnienia:
+
+   ```bash
+   sudo -u zsl cp backups/zsl-order-20261111-031500.db baza.db
+   sudo -u zsl chmod 600 baza.db
+   ```
+
+4. Uruchom aplikację i sprawdź integralność oraz działanie:
+
+   ```bash
+   sudo systemctl start zsl_order
+   sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify baza.db'
+   sudo journalctl -u zsl_order -n 50 --no-pager
+   curl -fsS http://127.0.0.1:3000/api/healthz
+   ```
+
+5. Zaloguj się do panelu admina, sprawdź listę zamówień i raport
+   dzienny. Dopiero po potwierdzeniu poprawności usuń katalog
+   `restore-old/`.
+
+Przywrócenie starszej kopii i uruchomienie nowszej binarki jest
+bezpieczne: `sqlx` doda brakujące migracje przy starcie. Jeśli kopia
+pochodzi z wersji sprzed migracji, zachowaj `restore-old/` do czasu
+potwierdzenia danych.
 
 Sekret `jwt.key` **nie musi** być backupowany: tokeny JWT żyją 15 minut, a
 po odtworzeniu bazy ze starym `jwt.key` i tak wygasną. Jeśli chcesz
@@ -438,24 +643,33 @@ bazą — ale wtedy traktuj ją jak klucz kryptograficzny. Brak `jwt.key`
 spowoduje wygenerowanie nowego sekretu przy starcie i unieważni
 wszystkie tokeny (sesje ciasteczkowe nadal działają).
 
-### Odtwarzanie
+### 8.6. Checklist backupu
 
-```bash
-sudo systemctl stop zsl_order
-sudo -u zsl cp /var/backups/zsl/baza-2026-11-07.db /opt/zsl_order/data/baza.db
-sudo -u zsl rm -f /opt/zsl_order/data/baza.db-wal /opt/zsl_order/data/baza.db-shm
-sudo chmod 600 /opt/zsl_order/data/baza.db
-sudo systemctl start zsl_order
-```
+- [ ] `backup_dir` wskazuje katalog na dysku z wystarczającą ilością
+      miejsca; katalog ma `0700`, kopie `0600`.
+- [ ] `zsl-order-backup.timer` jest włączony i widoczny w
+      `systemctl list-timers`.
+- [ ] Ręczne `systemctl start zsl-order-backup.service` kończy się
+      sukcesem, a `journalctl` nie zawiera błędów.
+- [ ] `zsl_order backup --verify` przechodzi dla najnowszej kopii.
+- [ ] Retencja zachowuje co najmniej 7 najnowszych kopii.
+- [ ] Kopie są regularnie wysyłane poza serwer (`rsync`) i zdalny katalog
+      jest sprawdzany.
+- [ ] Kopie opuszczające serwer są szyfrowane (`age`), a klucz prywatny
+      jest przechowywany poza serwerem.
+- [ ] Odtworzenie zostało przetestowane na izolowanej kopii, wraz z
+      logowaniem i sprawdzeniem zamówień.
+- [ ] `OnFailure=` prowadzi do kanału, który faktycznie czyta człowiek.
 
-Zawsze testuj odtworzenie na kopii i sprawdź logowanie oraz listę
-zamówień. Backup bez testu odtworzenia nie jest backupem.
+Backup bez testu odtworzenia nie jest backupem.
+
 
 ## 9. Aktualizacje
 
 ```bash
 # 1. Backup
-sudo -u zsl sqlite3 /opt/zsl_order/data/baza.db ".backup '/var/backups/zsl/przed-aktualizacja.db'"
+sudo systemctl start zsl-order-backup.service
+sudo journalctl -u zsl-order-backup.service -n 20 --no-pager
 
 # 2. Zatrzymanie
 sudo systemctl stop zsl_order
@@ -480,14 +694,15 @@ danych.
 **Przed każdą aktualizacją zrób kopię pliku bazy** (obok zwykłego backupu):
 
 ```bash
-sudo -u zsl sqlite3 /opt/zsl_order/data/baza.db \
-  ".backup '/var/backups/zsl/przed-migracja-$(date +%F-%H%M).db'"
+sudo systemctl start zsl-order-backup.service
+sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify $(ls -1t backups/zsl-order-*.db | head -n1)'
 ```
 
-Kopię wykonuj przy zatrzymanej aplikacji albo przez `.backup` (bezpieczne
-dla WAL). Następnie uruchom nową binarkę i sprawdź `_sqlx_migrations`
-oraz `PRAGMA integrity_check`. Migracje są addytywne; zmiany usuwające
-kolumny nadal wymagają ręcznej procedury i testu na kopii.
+Kopię wykonuj przy zatrzymanej aplikacji albo przez wbudowane `backup`
+(bezpieczne dla WAL). Następnie uruchom nową binarkę i sprawdź
+`_sqlx_migrations` oraz `PRAGMA integrity_check`. Migracje są addytywne;
+zmiany usuwające kolumny nadal wymagają ręcznej procedury i testu na
+kopii.
 
 Aktualizacja **nie usuwa** `jwt.key`, `logs/` ani bazy. Nowa binarka
 może wymagać restartu, aby wczytać nowe trasy; nie usuwaj `jwt.key`,
@@ -500,8 +715,10 @@ Minimum:
 
 - proces i port: `systemctl status zsl_order`, `ss -ltnp | grep 3000`,
 - health check: `GET /api/healthz` → 200 (sprawdza też bazę),
-- miejsce na dysku (baza + WAL + `logs/` + backupy),
+- miejsce na dysku (baza + WAL + `logs/` + `backups/`),
 - błędy w `journalctl -u zsl_order`,
+- `systemctl list-timers zsl-order-backup.timer` oraz
+  `journalctl -u zsl-order-backup.service` (ostatnia kopia, błędy),
 - dzienne logi w `/opt/zsl_order/data/logs/` (rotacja i retencja),
 - poprawność TLS (`openssl s_client`, certyfikaty),
 - czas systemowy (NTP).
@@ -540,6 +757,7 @@ scripts/smoke-modes.sh       # tryby local/tunnel i nagłówki
 scripts/smoke-hardening.sh   # hasła, import CSV, RBAC, limity, sesje
 scripts/test-migrations.sh   # pusta baza + baza legacy
 scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, raport/CSV
+scripts/smoke-backup.sh      # kopia WAL, integralność, retencja min. 7, --verify
 ```
 
 Test dymny na izolowanej kopii (nie na produkcji):

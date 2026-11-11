@@ -252,6 +252,8 @@ pub struct Config {
     pub db_url: String,
     pub max_connections: u32,
     pub session_hours: i64,
+    pub backup_dir: String,
+    pub backup_keep_days: i64,
     pub login_max_failures: u32,
     pub login_ip_max_failures: u32,
     pub login_window_minutes: i64,
@@ -274,6 +276,8 @@ impl Default for Config {
             db_url: "sqlite://baza.db".to_string(),
             max_connections: 16,
             session_hours: 12,
+            backup_dir: "backups".to_string(),
+            backup_keep_days: 30,
             login_max_failures: 10,
             login_ip_max_failures: 300,
             login_window_minutes: 10,
@@ -366,10 +370,27 @@ impl Config {
             },
         };
 
+        let backup_dir = env.backup_dir.unwrap_or(file.backup_dir);
+        let backup_keep_days = match env.backup_keep_days {
+            Some(raw) => raw
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .filter(|value| (0..=3650).contains(value))
+                .ok_or_else(|| {
+                    format!(
+                        "Nieprawidłowy BACKUP_KEEP_DAYS „{raw}”. Podaj liczbę dni od 0 do 3650."
+                    )
+                })?,
+            None => file.backup_keep_days,
+        };
+
         Ok(Self {
             db_url: file.db_url,
             max_connections: file.max_connections,
             session_hours: file.session_hours,
+            backup_dir,
+            backup_keep_days,
             login_max_failures: file.login_max_failures,
             login_ip_max_failures: file.login_ip_max_failures,
             login_window_minutes: file.login_window_minutes,
@@ -474,6 +495,8 @@ pub struct FileConfig {
     db_url: String,
     max_connections: u32,
     session_hours: i64,
+    backup_dir: String,
+    backup_keep_days: i64,
     login_max_failures: u32,
     login_ip_max_failures: u32,
     login_window_minutes: i64,
@@ -493,6 +516,8 @@ impl Default for FileConfig {
             db_url: "sqlite://baza.db".to_string(),
             max_connections: 16,
             session_hours: 12,
+            backup_dir: "backups".to_string(),
+            backup_keep_days: 30,
             login_max_failures: 10,
             login_ip_max_failures: 300,
             login_window_minutes: 10,
@@ -535,6 +560,14 @@ impl FileConfig {
                 .and_then(|value| i64::try_from(value).ok())
                 .filter(|value| (1..=24 * 30).contains(value))
                 .unwrap_or(defaults.session_hours),
+            backup_dir: get_string(value, "backup_dir", &defaults.backup_dir),
+            backup_keep_days: get_i64_bounded(
+                value,
+                "backup_keep_days",
+                defaults.backup_keep_days,
+                0,
+                3650,
+            ),
             login_max_failures: get_u32_bounded(
                 value,
                 "login_max_failures",
@@ -604,6 +637,8 @@ impl FileConfig {
             "db_url": self.db_url,
             "max_connections": self.max_connections,
             "session_hours": self.session_hours,
+            "backup_dir": self.backup_dir,
+            "backup_keep_days": self.backup_keep_days,
             "login_max_failures": self.login_max_failures,
             "login_ip_max_failures": self.login_ip_max_failures,
             "login_window_minutes": self.login_window_minutes,
@@ -623,6 +658,8 @@ pub struct EnvConfig {
     pub trusted_proxies: Option<String>,
     pub public_url: Option<String>,
     pub cookie_secure: Option<String>,
+    pub backup_dir: Option<String>,
+    pub backup_keep_days: Option<String>,
 }
 
 impl EnvConfig {
@@ -633,6 +670,8 @@ impl EnvConfig {
             trusted_proxies: env_value("TRUSTED_PROXIES"),
             public_url: env_value("PUBLIC_URL"),
             cookie_secure: env_value("COOKIE_SECURE"),
+            backup_dir: env_value("BACKUP_DIR"),
+            backup_keep_days: env_value("BACKUP_KEEP_DAYS"),
         }
     }
 }
@@ -708,6 +747,8 @@ mod tests {
             trusted_proxies: None,
             public_url: public_url.map(str::to_string),
             cookie_secure: Some(cookie_secure.to_string()),
+            backup_dir: None,
+            backup_keep_days: None,
         }
     }
 
@@ -722,15 +763,39 @@ mod tests {
     }
 
     #[test]
+    fn backup_settings_can_be_overridden_from_env() {
+        let mut file = file_config();
+        file.backup_keep_days = 30;
+        let mut env = env_with("local", "0.0.0.0:3000", None, "false");
+        env.backup_dir = Some("/var/backups/zsl".to_string());
+        env.backup_keep_days = Some("7".to_string());
+
+        let config = Config::from_file_and_env(file, env).unwrap();
+        assert_eq!(config.backup_dir, "/var/backups/zsl");
+        assert_eq!(config.backup_keep_days, 7);
+    }
+
+    #[test]
+    fn invalid_backup_keep_days_is_rejected() {
+        let mut env = env_with("local", "0.0.0.0:3000", None, "false");
+        env.backup_keep_days = Some("niedawno".to_string());
+
+        let error = Config::from_file_and_env(file_config(), env).unwrap_err();
+        assert!(error.to_string().contains("BACKUP_KEEP_DAYS"));
+    }
+
+    #[test]
     fn parses_legacy_string_numbers() {
         let value: Value = serde_json::from_str(
-            r#"{"ip":"127.0.0.1","port":"8080","max_connections":"20","db_url":"baza.db"}"#,
+            r#"{"ip":"127.0.0.1","port":"8080","max_connections":"20","db_url":"baza.db","backup_dir":"kopia","backup_keep_days":"14"}"#,
         )
         .unwrap();
         let file = FileConfig::from_value(&value);
         assert_eq!(file.legacy_ip.as_deref(), Some("127.0.0.1"));
         assert_eq!(file.legacy_port, Some(8080));
         assert_eq!(file.max_connections, 20);
+        assert_eq!(file.backup_dir, "kopia");
+        assert_eq!(file.backup_keep_days, 14);
     }
 
     #[test]

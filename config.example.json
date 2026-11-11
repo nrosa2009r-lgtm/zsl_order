@@ -2,6 +2,8 @@
   "max_connections": 16,
   "db_url": "sqlite://baza.db",
   "session_hours": 12,
+  "backup_dir": "backups",
+  "backup_keep_days": 30,
   "login_max_failures": 10,
   "login_ip_max_failures": 300,
   "login_window_minutes": 10,

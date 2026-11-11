@@ -437,7 +437,8 @@ Minimalny, bezpieczny scenariusz:
 5. Uruchom jako usługa systemd z `UMask=0077`, `NoNewPrivileges=yes`,
    `ProtectSystem=strict`.
 6. Odbierz dane startowego admina, zaloguj się, zmień hasło (plik zniknie).
-7. Skonfiguruj backup SQLite (`sqlite3 baza.db ".backup ..."`) i monitoring.
+7. Skonfiguruj `zsl_order backup` i timer systemd
+   (`deploy/systemd/zsl-order-backup.timer`), a kopie wysyłaj poza serwer.
 
 Gotowe przykłady systemd i Nginx, backup, aktualizacja i checklista:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

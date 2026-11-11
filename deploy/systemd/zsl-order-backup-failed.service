@@ -1,0 +1,6 @@
+[Unit]
+Description=ZSL Order - powiadomienie o nieudanej kopii zapasowej
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -t zsl-order-backup -p daemon.err "Kopia zapasowa ZSL Order nie powiodla sie. Sprawdz: journalctl -u zsl-order-backup.service"
