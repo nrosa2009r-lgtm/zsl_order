@@ -89,8 +89,9 @@ są czytelne dla innych użytkowników.
 
 Konfiguracja jest podzielona na dwa pliki:
 
-- `.env` — tryb wdrożenia i granica zaufania (wzór `.env.example`),
-- `config.json` — baza, pula połączeń i sesje (wzór
+- `.env` — tryb wdrożenia, granica zaufania, kopie i retencja (wzór
+  `.env.example`),
+- `config.json` — baza, pula połączeń, sesje, kopie i retencja (wzór
   `config.example.json`).
 
 `.env` jest ignorowany przez Git i nie zawiera sekretów. Gdy ta sama
@@ -228,6 +229,47 @@ flaga `Secure` ciasteczka lub adres publiczny. Nie trzeba czyścić bazy.
 Czas życia tokenów JWT jest stały (**15 minut**) i nie jest konfigurowany
 w `config.json`. Sekret `jwt.key` jest generowany automatycznie; nie ma
 osobnego pola konfiguracyjnego.
+
+### 4.4. Retencja danych
+
+Czyszczenie odbywa się **wyłącznie raz na dobę** o godzinie
+`retention_run_at` w strefie `Europe/Warsaw` (domyślnie `03:30`). Nie
+uruchamia się przy starcie aplikacji. Każda porcja ma maksymalnie 1000
+rekordów, więc pojedyncza transakcja nie blokuje zapisów na długo.
+
+| `config.json` | `.env` | Domyślnie | Znaczenie |
+| --- | --- | --- | --- |
+| `retention_orders_days` | `RETENTION_ORDERS_DAYS` | `0` | usuwanie całych dni zamówień starszych niż N; `0` = wyłączone |
+| `retention_idempotency_days` | `RETENTION_IDEMPOTENCY_DAYS` | `7` | zerowanie starych `orders.idempotency_key`; `0` = wyłączone |
+| `retention_audit_days` | `RETENTION_AUDIT_DAYS` | `90` | usuwanie wpisów audytu starszych niż N; `0` = wyłączone |
+| `retention_run_at` | `RETENTION_RUN_AT` | `03:30` | stała pora dobowa w formacie `HH:MM` |
+
+Domyślne `RETENTION_ORDERS_DAYS=0` oznacza, że **stare zamówienia nie są
+usuwane**. Przy starcie pojawia się wtedy ostrzeżenie w logu:
+
+```text
+RETENTION_ORDERS_DAYS=0 — automatyczne usuwanie starych zamówień jest wyłączone...
+```
+
+Ustaw świadomie liczbę dni, np. `RETENTION_ORDERS_DAYS=365`, jeśli
+polityka szkoły pozwala usuwać starsze zamówienia. Po zmianie konfiguracji
+zrestartuj usługę.
+
+Zawsze czyszczone są wygasłe sesje (cookie i JWT), niezależnie od
+pozostałych ustawień. Klucze idempotencji są zerowane po 7 dniach, ale
+same zamówienia pozostają — dzięki temu stare żądania nie mogą zostać
+powtórzone przypadkiem, a historia zamówień nie znika przed czasem.
+
+**Raporty z usuniętych dni będą puste.** Aplikacja nie prowadzi dziennej
+tabeli sum zbiorczych; jeśli potrzebujesz historii dłuższej niż retencja,
+eksportuj `GET /api/staff/report.csv?date=RRRR-MM-DD` przed upływem
+terminu. Usunięcie zamówień jest nieodwracalne poza backupem.
+
+Sprawdzenie harmonogramu i ostatniego przebiegu:
+
+```bash
+sudo journalctl -u zsl_order --since today | grep -E 'retencja|Retencja'
+```
 
 ## 5. Pierwsze uruchomienie
 

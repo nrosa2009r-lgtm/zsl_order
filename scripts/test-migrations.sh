@@ -67,9 +67,15 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "4" ] \
-  && pass "pusta baza: 4 migracje zastosowane" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "5" ] \
+  && pass "pusta baza: 5 migracji zastosowanych" \
   || fail "pusta baza: brak migracji"
+
+for index in orders_created_idx orders_idempotency_created_idx; do
+  [ "$(sqlite3 "$empty_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='$index';")" = "1" ] \
+    && pass "pusta baza: indeks $index" \
+    || fail "pusta baza: brak indeksu $index"
+done
 
 for table in users sessions menu_items orders order_items settings audit_log; do
   [ "$(sqlite3 "$empty_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$table';")" = "1" ] \

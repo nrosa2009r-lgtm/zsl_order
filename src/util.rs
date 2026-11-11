@@ -1,4 +1,4 @@
-use chrono::{DateTime, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, LocalResult, NaiveDate, TimeZone, Utc};
 use chrono_tz::Europe::Warsaw;
 use chrono_tz::Tz;
 
@@ -60,6 +60,37 @@ pub fn local_hour(timestamp: i64) -> Option<u32> {
         .map(|value| value.with_timezone(&APP_TZ).hour())
 }
 
+/// Najbliższe wystąpienie godziny `hour:minute` w strefie szkoły, ściśle
+/// po `now`. Funkcja obsługuje zmianę czasu: wybiera wcześniejszy wariant
+/// godziny niejednoznacznej i pomija godzinę, która nie istnieje.
+pub fn next_daily_run(now: DateTime<Tz>, hour: u32, minute: u32) -> DateTime<Tz> {
+    let today = now.date_naive();
+    for offset in 0..3 {
+        let date = today + ChronoDuration::days(offset);
+        let Some(naive) = date.and_hms_opt(hour, minute, 0) else {
+            continue;
+        };
+        let candidate = match APP_TZ.from_local_datetime(&naive) {
+            LocalResult::Single(value) => value,
+            LocalResult::Ambiguous(earliest, _) => earliest,
+            LocalResult::None => continue,
+        };
+        if candidate > now {
+            return candidate;
+        }
+    }
+    now + ChronoDuration::hours(24)
+}
+
+/// Czas do najbliższego uruchomienia zadania o `hour:minute` czasu szkoły.
+pub fn duration_until_next_daily_run(hour: u32, minute: u32) -> std::time::Duration {
+    let now = warsaw_now();
+    let next = next_daily_run(now, hour, minute);
+    (next - now)
+        .to_std()
+        .unwrap_or(std::time::Duration::from_secs(60))
+}
+
 /// Data i godzina `RRRR-MM-DD HH:MM` w strefie szkoły.
 pub fn format_local_datetime(timestamp: i64) -> String {
     Utc.timestamp_opt(timestamp, 0)
@@ -100,6 +131,20 @@ mod tests {
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("poprawna data")
+    }
+
+    #[test]
+    fn next_daily_run_is_strictly_in_the_future() {
+        let before = APP_TZ.with_ymd_and_hms(2026, 11, 11, 2, 0, 0).unwrap();
+        let next = next_daily_run(before, 3, 30);
+        assert_eq!(local_date(next.timestamp()), Some(date(2026, 11, 11)));
+        assert_eq!(format_local_datetime(next.timestamp()), "2026-11-11 03:30");
+        assert!(next > before);
+
+        let after = APP_TZ.with_ymd_and_hms(2026, 11, 11, 4, 0, 0).unwrap();
+        let next = next_daily_run(after, 3, 30);
+        assert_eq!(local_date(next.timestamp()), Some(date(2026, 11, 12)));
+        assert_eq!(format_local_datetime(next.timestamp()), "2026-11-12 03:30");
     }
 
     #[test]

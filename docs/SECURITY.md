@@ -388,7 +388,10 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 - [ ] Backup SQLite co najmniej dziennie + test odtworzenia.
 - [ ] Monitoring procesu, portu, miejsca na dysku i błędów w journalu.
 - [ ] Procedura aktualizacji z backupem i testem na kopii.
-- [ ] Polityka retencji zamówień i audytu.
+- [ ] Polityka retencji zamówień, kluczy idempotencji i audytu;
+      `RETENTION_ORDERS_DAYS=0` oznacza brak retencji zamówień i generuje
+      ostrzeżenie przy starcie — ustaw świadomie i sprawdź, czy raporty z
+      usuniętych dni mogą być puste.
 - [ ] Kontakt do odpowiedzialnego za system i procedura incydentu.
 
 ## 12. Zgłaszanie podatności

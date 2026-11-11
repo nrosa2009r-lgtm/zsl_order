@@ -21,6 +21,7 @@ mod error;
 mod guard;
 mod handlers;
 mod logging;
+mod retention;
 mod security;
 mod state;
 mod util;
@@ -99,6 +100,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         trusted_proxies = config.trusted_proxies.len(),
         "Wczytano konfigurację"
     );
+    if config.retention_orders_days == 0 {
+        tracing::warn!(
+            "RETENTION_ORDERS_DAYS=0 — automatyczne usuwanie starych zamówień jest wyłączone. \
+             Baza będzie rosła bez ograniczenia. Ustaw liczbę dni w .env/config.json \
+             i sprawdź checklistę wdrożenia w docs/DEPLOYMENT.md."
+        );
+    }
 
     println!("Inicjalizacja bazy danych...");
     let pool = db::init(&config).await?;
@@ -132,6 +140,36 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ticker.tick().await;
             if let Err(error) = handlers::orders::mark_uncollected(&background_state).await {
                 tracing::error!("Nie udało się oznaczyć nieodebranych zamówień: {error}");
+            }
+        }
+    });
+
+    // Retencja działa wyłącznie o stałej porze nocnej (domyślnie 03:30
+    // czasu szkoły), nigdy przy starcie. Porcje po 1000 rekordów ograniczają
+    // czas blokady bazy.
+    let retention_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            let delay = util::duration_until_next_daily_run(
+                retention_state.cfg.retention_hour,
+                retention_state.cfg.retention_minute,
+            );
+            tracing::info!(
+                hour = retention_state.cfg.retention_hour,
+                minute = retention_state.cfg.retention_minute,
+                seconds = delay.as_secs(),
+                "Zaplanowano nocną retencję"
+            );
+            tokio::time::sleep(delay).await;
+            match retention::cleanup(&retention_state.db, &retention_state.cfg).await {
+                Ok(summary) => tracing::info!(
+                    orders = summary.orders,
+                    sessions = summary.sessions,
+                    idempotency_keys = summary.idempotency_keys,
+                    audit_log = summary.audit_log,
+                    "Retencja zakończona"
+                ),
+                Err(error) => tracing::error!("Retencja nie powiodła się: {error}"),
             }
         }
     });

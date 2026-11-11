@@ -254,6 +254,11 @@ pub struct Config {
     pub session_hours: i64,
     pub backup_dir: String,
     pub backup_keep_days: i64,
+    pub retention_orders_days: i64,
+    pub retention_idempotency_days: i64,
+    pub retention_audit_days: i64,
+    pub retention_hour: u32,
+    pub retention_minute: u32,
     pub login_max_failures: u32,
     pub login_ip_max_failures: u32,
     pub login_window_minutes: i64,
@@ -278,6 +283,11 @@ impl Default for Config {
             session_hours: 12,
             backup_dir: "backups".to_string(),
             backup_keep_days: 30,
+            retention_orders_days: 0,
+            retention_idempotency_days: 7,
+            retention_audit_days: 90,
+            retention_hour: 3,
+            retention_minute: 30,
             login_max_failures: 10,
             login_ip_max_failures: 300,
             login_window_minutes: 10,
@@ -384,6 +394,32 @@ impl Config {
                 })?,
             None => file.backup_keep_days,
         };
+        let retention_orders_days = parse_env_i64(
+            "RETENTION_ORDERS_DAYS",
+            env.retention_orders_days,
+            file.retention_orders_days,
+            0,
+            3650,
+        )?;
+        let retention_idempotency_days = parse_env_i64(
+            "RETENTION_IDEMPOTENCY_DAYS",
+            env.retention_idempotency_days,
+            file.retention_idempotency_days,
+            0,
+            3650,
+        )?;
+        let retention_audit_days = parse_env_i64(
+            "RETENTION_AUDIT_DAYS",
+            env.retention_audit_days,
+            file.retention_audit_days,
+            0,
+            3650,
+        )?;
+        let (retention_hour, retention_minute) = parse_retention_time(
+            env.retention_run_at
+                .as_deref()
+                .unwrap_or(&file.retention_run_at),
+        )?;
 
         Ok(Self {
             db_url: file.db_url,
@@ -391,6 +427,11 @@ impl Config {
             session_hours: file.session_hours,
             backup_dir,
             backup_keep_days,
+            retention_orders_days,
+            retention_idempotency_days,
+            retention_audit_days,
+            retention_hour,
+            retention_minute,
             login_max_failures: file.login_max_failures,
             login_ip_max_failures: file.login_ip_max_failures,
             login_window_minutes: file.login_window_minutes,
@@ -497,6 +538,10 @@ pub struct FileConfig {
     session_hours: i64,
     backup_dir: String,
     backup_keep_days: i64,
+    retention_orders_days: i64,
+    retention_idempotency_days: i64,
+    retention_audit_days: i64,
+    retention_run_at: String,
     login_max_failures: u32,
     login_ip_max_failures: u32,
     login_window_minutes: i64,
@@ -518,6 +563,10 @@ impl Default for FileConfig {
             session_hours: 12,
             backup_dir: "backups".to_string(),
             backup_keep_days: 30,
+            retention_orders_days: 0,
+            retention_idempotency_days: 7,
+            retention_audit_days: 90,
+            retention_run_at: "03:30".to_string(),
             login_max_failures: 10,
             login_ip_max_failures: 300,
             login_window_minutes: 10,
@@ -568,6 +617,28 @@ impl FileConfig {
                 0,
                 3650,
             ),
+            retention_orders_days: get_i64_bounded(
+                value,
+                "retention_orders_days",
+                defaults.retention_orders_days,
+                0,
+                3650,
+            ),
+            retention_idempotency_days: get_i64_bounded(
+                value,
+                "retention_idempotency_days",
+                defaults.retention_idempotency_days,
+                0,
+                3650,
+            ),
+            retention_audit_days: get_i64_bounded(
+                value,
+                "retention_audit_days",
+                defaults.retention_audit_days,
+                0,
+                3650,
+            ),
+            retention_run_at: get_string(value, "retention_run_at", &defaults.retention_run_at),
             login_max_failures: get_u32_bounded(
                 value,
                 "login_max_failures",
@@ -639,6 +710,10 @@ impl FileConfig {
             "session_hours": self.session_hours,
             "backup_dir": self.backup_dir,
             "backup_keep_days": self.backup_keep_days,
+            "retention_orders_days": self.retention_orders_days,
+            "retention_idempotency_days": self.retention_idempotency_days,
+            "retention_audit_days": self.retention_audit_days,
+            "retention_run_at": self.retention_run_at,
             "login_max_failures": self.login_max_failures,
             "login_ip_max_failures": self.login_ip_max_failures,
             "login_window_minutes": self.login_window_minutes,
@@ -660,6 +735,10 @@ pub struct EnvConfig {
     pub cookie_secure: Option<String>,
     pub backup_dir: Option<String>,
     pub backup_keep_days: Option<String>,
+    pub retention_orders_days: Option<String>,
+    pub retention_idempotency_days: Option<String>,
+    pub retention_audit_days: Option<String>,
+    pub retention_run_at: Option<String>,
 }
 
 impl EnvConfig {
@@ -672,6 +751,10 @@ impl EnvConfig {
             cookie_secure: env_value("COOKIE_SECURE"),
             backup_dir: env_value("BACKUP_DIR"),
             backup_keep_days: env_value("BACKUP_KEEP_DAYS"),
+            retention_orders_days: env_value("RETENTION_ORDERS_DAYS"),
+            retention_idempotency_days: env_value("RETENTION_IDEMPOTENCY_DAYS"),
+            retention_audit_days: env_value("RETENTION_AUDIT_DAYS"),
+            retention_run_at: env_value("RETENTION_RUN_AT"),
         }
     }
 }
@@ -714,6 +797,56 @@ fn get_i64_bounded(value: &Value, key: &str, default: i64, min: u64, max: u64) -
         .unwrap_or(default)
 }
 
+fn parse_env_i64(
+    name: &str,
+    raw: Option<String>,
+    default: i64,
+    min: i64,
+    max: i64,
+) -> Result<i64, Box<dyn Error>> {
+    match raw {
+        Some(raw) => raw
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|value| (min..=max).contains(value))
+            .ok_or_else(|| {
+                format!("Nieprawidłowy {name} „{raw}”. Podaj liczbę od {min} do {max}.").into()
+            }),
+        None => Ok(default),
+    }
+}
+
+fn parse_retention_time(raw: &str) -> Result<(u32, u32), Box<dyn Error>> {
+    let raw = raw.trim();
+    let bytes = raw.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return Err(format!(
+            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Użyj formatu HH:MM, np. 03:30."
+        )
+        .into());
+    }
+    let hour_raw = &raw[0..2];
+    let minute_raw = &raw[3..5];
+    if !hour_raw.bytes().all(|byte| byte.is_ascii_digit())
+        || !minute_raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!(
+            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Użyj formatu HH:MM, np. 03:30."
+        )
+        .into());
+    }
+    let hour = hour_raw.parse::<u32>().unwrap_or(24);
+    let minute = minute_raw.parse::<u32>().unwrap_or(60);
+    if hour >= 24 || minute >= 60 {
+        return Err(format!(
+            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Godzina musi być 00–23, minuta 00–59."
+        )
+        .into());
+    }
+    Ok((hour, minute))
+}
+
 fn get_bool(value: &Value, key: &str, default: bool) -> bool {
     match value.get(key) {
         Some(Value::Bool(value)) => *value,
@@ -747,8 +880,7 @@ mod tests {
             trusted_proxies: None,
             public_url: public_url.map(str::to_string),
             cookie_secure: Some(cookie_secure.to_string()),
-            backup_dir: None,
-            backup_keep_days: None,
+            ..EnvConfig::default()
         }
     }
 
@@ -782,6 +914,39 @@ mod tests {
 
         let error = Config::from_file_and_env(file_config(), env).unwrap_err();
         assert!(error.to_string().contains("BACKUP_KEEP_DAYS"));
+    }
+
+    #[test]
+    fn retention_defaults_are_safe() {
+        let config = Config::default();
+        assert_eq!(config.retention_orders_days, 0);
+        assert_eq!(config.retention_idempotency_days, 7);
+        assert_eq!(config.retention_audit_days, 90);
+        assert_eq!((config.retention_hour, config.retention_minute), (3, 30));
+    }
+
+    #[test]
+    fn retention_settings_can_be_overridden_from_env() {
+        let mut env = env_with("local", "0.0.0.0:3000", None, "false");
+        env.retention_orders_days = Some("30".to_string());
+        env.retention_idempotency_days = Some("3".to_string());
+        env.retention_audit_days = Some("120".to_string());
+        env.retention_run_at = Some("04:05".to_string());
+
+        let config = Config::from_file_and_env(file_config(), env).unwrap();
+        assert_eq!(config.retention_orders_days, 30);
+        assert_eq!(config.retention_idempotency_days, 3);
+        assert_eq!(config.retention_audit_days, 120);
+        assert_eq!((config.retention_hour, config.retention_minute), (4, 5));
+    }
+
+    #[test]
+    fn invalid_retention_time_is_rejected() {
+        let mut env = env_with("local", "0.0.0.0:3000", None, "false");
+        env.retention_run_at = Some("25:00".to_string());
+
+        let error = Config::from_file_and_env(file_config(), env).unwrap_err();
+        assert!(error.to_string().contains("RETENTION_RUN_AT"));
     }
 
     #[test]

@@ -610,6 +610,11 @@ podział na gotówkę i kartę:
 - `cash.*` + `card.*` = wartości łączne,
 - nieprawidłowa data → `400`.
 
+Jeśli zamówienia z danego dnia zostały usunięte przez nocną retencję
+(`RETENTION_ORDERS_DAYS`), raport zwraca dla tego dnia zera — aplikacja
+nie przechowuje dziennych sum zbiorczych. Raport CSV należy wyeksportować
+przed upływem retencji, jeśli historia ma być dłuższa.
+
 ### `GET /api/staff/report.csv?date=RRRR-MM-DD`
 
 Ten sam raport jako CSV (`text/csv; charset=utf-8`, BOM, separator `;`,

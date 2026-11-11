@@ -12,7 +12,7 @@ use std::time::Duration;
 /// Migracje wbudowane w binarkę. `sqlx::migrate!` czyta katalog
 /// `migrations/` w czasie kompilacji, więc wdrożenie nie wymaga obecności
 /// plików SQL na serwerze. Wersje są zapisywane w `_sqlx_migrations`.
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub async fn init(cfg: &Config) -> Result<SqlitePool, Box<dyn Error>> {
     let db_url = cfg.sqlite_url();
@@ -34,7 +34,6 @@ pub async fn init(cfg: &Config) -> Result<SqlitePool, Box<dyn Error>> {
 
     seed_settings(&pool).await?;
     seed_menu(&pool).await?;
-    cleanup(&pool).await?;
     ensure_initial_admin(&pool).await?;
 
     Ok(pool)
@@ -135,20 +134,6 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await?;
     }
 
-    Ok(())
-}
-
-async fn cleanup(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let now = util::now();
-    sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
-        .bind(now)
-        .execute(pool)
-        .await?;
-    // Dziennik zdarzeń nie jest danymi osobowymi, ale nie rośnie bez końca.
-    sqlx::query("DELETE FROM audit_log WHERE created_at < ?")
-        .bind(now - 90 * 24 * 60 * 60)
-        .execute(pool)
-        .await?;
     Ok(())
 }
 
@@ -376,7 +361,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 4);
+        assert_eq!(applied, 5);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")
