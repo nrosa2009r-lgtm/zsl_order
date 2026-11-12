@@ -392,10 +392,10 @@ fn print_help() {
         "ZSL Order — kopie zapasowe bazy SQLite
 
 Użycie:
-  zsl_order backup                     utwórz kopię i zastosuj retencję
-  zsl_order backup --keep-days DNI     nadpisz backup_keep_days z konfiguracji
-  zsl_order backup --verify PLIK       sprawdź integralność istniejącej kopii
-  zsl_order backup --help              pokaż tę pomoc
+  zsl-order backup                     utwórz kopię i zastosuj retencję
+  zsl-order backup --keep-days DNI     nadpisz backup_keep_days z konfiguracji
+  zsl-order backup --verify PLIK       sprawdź integralność istniejącej kopii
+  zsl-order backup --help              pokaż tę pomoc
 
 Kopia jest tworzona przez VACUUM INTO do pliku tymczasowego, sprawdzana
 przez PRAGMA integrity_check, ustawiana na 0600 i atomowo przenoszona do

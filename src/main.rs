@@ -67,10 +67,10 @@ fn print_usage() {
         "ZSL Order — system stołówki szkolnej
 
 Użycie:
-  zsl_order                 uruchom serwer
-  zsl_order backup          utwórz kopię bazy i zastosuj retencję
-  zsl_order backup --help   opcje kopii zapasowej
-  zsl_order --help          pokaż tę pomoc"
+  zsl-order                 uruchom serwer
+  zsl-order backup          utwórz kopię bazy i zastosuj retencję
+  zsl-order backup --help   opcje kopii zapasowej
+  zsl-order --help          pokaż tę pomoc"
     );
 }
 

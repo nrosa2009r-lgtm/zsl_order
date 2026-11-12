@@ -7,7 +7,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-BIN="$ROOT/target/debug/zsl_order"
+BIN="$ROOT/target/debug/zsl-order"
 BASE="/tmp/opencode/zsl-section2"
 TMP="$BASE/tmp"
 HOSTADDR="127.0.0.1:38191"

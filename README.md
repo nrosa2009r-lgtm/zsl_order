@@ -140,8 +140,8 @@ Szczegóły warstw, kolejności middleware i przepływów opisuje
 ### Uruchomienie lokalne
 
 ```bash
-git clone https://github.com/nrosa2009r-lgtm/zsl_order.git
-cd zsl_order
+git clone https://github.com/nrosa2009r-lgtm/zsl-order.git
+cd zsl-order
 
 # opcjonalnie: konfiguracja bazy i sesji
 cp config.example.json config.json
@@ -197,7 +197,7 @@ Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
   żadnego konta z rolą `admin`.
 - Login i hasło są losowe (hasło 18 znaków, gwarantowana litera i cyfra).
 - Plik `admin_start.txt` ma uprawnienia `0600` (tylko właściciel), leży w
-  katalogu `data/` poza serwowanym `frontend/` (HTTP zwraca `404`) i jest
+  katalogu `/var/lib/zsl-order` poza serwowanym `frontend/` (HTTP zwraca `404`) i jest
   usuwany po zmianie hasła przez administratora. Usuń go także ręcznie,
   jeśli zmiana hasła się nie powiedzie.
 - Nowe konta (`student`, `kitchen`, `admin`) generuje administrator.
@@ -435,14 +435,14 @@ prawdziwej instancji.
 Minimalny, bezpieczny scenariusz:
 
 1. Zbuduj release: `cargo build --release`.
-2. Utwórz dedykowanego użytkownika systemowego i katalog `/opt/zsl_order`.
+2. Utwórz dedykowanego użytkownika systemowego i katalog `/opt/zsl-order`.
 3. Skopiuj binarkę, `frontend/` i `config.example.json` → `config.json`.
 4. Ustaw `ip: 127.0.0.1`, `secure_cookies: true`, uruchom za Nginx/Caddy
    z TLS.
 5. Uruchom jako usługa systemd z `UMask=0077`, `NoNewPrivileges=yes`,
    `ProtectSystem=strict`.
 6. Odbierz dane startowego admina, zaloguj się, zmień hasło (plik zniknie).
-7. Skonfiguruj `zsl_order backup` i timer systemd
+7. Skonfiguruj `zsl-order backup` i timer systemd
    (`deploy/systemd/zsl-order-backup.timer`), a kopie wysyłaj poza serwer.
 
 Gotowe przykłady systemd i Nginx, backup, aktualizacja i checklista:
@@ -451,7 +451,7 @@ Gotowe przykłady systemd i Nginx, backup, aktualizacja i checklista:
 ## Struktura projektu
 
 ```text
-zsl_order/
+zsl-order/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── config.example.json

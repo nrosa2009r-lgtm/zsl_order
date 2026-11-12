@@ -22,7 +22,7 @@ Na maszynie deweloperskiej lub w CI:
 cargo build --release --locked
 ```
 
-Binarka: `target/release/zsl_order`. Profil release ma LTO, `strip`,
+Binarka: `target/release/zsl-order`. Profil release ma LTO, `strip`,
 `panic = "abort"` i optymalizację `opt-level = 3`.
 
 Testy przed wdrożeniem:
@@ -35,58 +35,67 @@ cargo clippy --all-targets
 ## 3. Układ katalogów
 
 ```text
-/opt/zsl_order/
-├── zsl_order              # binarka (0755, root:root)
-├── frontend/              # statyczne HTML/CSS/JS (0755, root:root)
-└── data/                  # katalog roboczy usługi (0700, zsl:zsl)
-    ├── config.json        # 0600
-    ├── baza.db            # 0600
-    ├── baza.db-wal        # tworzone przez SQLite, 0600
-    ├── baza.db-shm
-    ├── jwt.key            # sekret HMAC JWT, 0600, tworzony przy starcie
-    ├── backups/           # kopie bazy, 0700 i 0600, tworzone przez `backup`
-    └── admin_start.txt    # tylko przy pierwszym uruchomieniu, 0600
+/opt/zsl-order/            # kod i statyczne pliki, tylko do odczytu
+├── zsl-order              # binarka (0755, root:root)
+├── config.example.json
+├── .env.example
+├── docs/
+└── frontend/              # statyczne HTML/CSS/JS (0755, root:root)
+
+/var/lib/zsl-order/        # katalog roboczy usługi (0700, zsl-order:zsl-order)
+├── config.json            # 0600
+├── baza.db                # 0600
+├── baza.db-wal            # tworzone przez SQLite, 0600
+├── baza.db-shm
+├── jwt.key                # sekret HMAC JWT, 0600, tworzony przy starcie
+├── backups/               # kopie bazy, 0700 i 0600, tworzone przez `backup`
+├── frontend -> /opt/zsl-order/frontend
+└── admin_start.txt        # tylko przy pierwszym uruchomieniu, 0600
+
+/etc/zsl-order/
+└── zsl-order.env          # konfiguracja wdrożeniowa, root:zsl-order, 0640
 ```
 
 Aplikacja **nie tworzy katalogu `logs/`**. Logi trafiają jako JSON na
 stdout, a systemd przekazuje je do journald (patrz rozdział 6.2).
 
-Konfiguracja wdrożeniowa `.env` nie leży w `data/`. Znajduje się w
+Konfiguracja wdrożeniowa `.env` nie leży w `/var/lib/zsl-order`. Znajduje się w
 `/etc/zsl-order/zsl-order.env` (`root:zsl-order`, `0640`) i jest
 wczytywana przez systemd jako `EnvironmentFile`. Dzięki temu katalog
 roboczy aplikacji nie musi zawierać pliku ze zmiennymi środowiskowymi.
 
 Aplikacja używa **ścieżek względnych** (`config.json`, `baza.db`,
 `jwt.key`, `backups/`, `admin_start.txt`, `frontend/`) wobec
-katalogu roboczego. Dlatego `WorkingDirectory` musi wskazywać `data/`, a
-`frontend/` musi być dostępny względem tego katalogu. Można użyć
-symlinku:
+katalogu roboczego. Dlatego `WorkingDirectory` musi wskazywać
+`/var/lib/zsl-order`, a `frontend/` musi być dostępny względem tego
+katalogu. Można użyć symlinku:
 
 ```bash
-ln -s /opt/zsl_order/frontend /opt/zsl_order/data/frontend
+ln -s /opt/zsl-order/frontend /var/lib/zsl-order/frontend
 ```
 
-albo skopiować `frontend/` do `data/`. Symlink jest wygodniejszy przy
+albo skopiować `frontend/` do `/var/lib/zsl-order`. Symlink jest wygodniejszy przy
 aktualizacjach.
 
 ### Instalacja
 
 ```bash
-sudo useradd --system --home /opt/zsl_order --shell /usr/sbin/nologin zsl
 sudo groupadd --system zsl-order
-sudo usermod -aG zsl-order zsl
-sudo install -d -o zsl -g zsl -m 0700 /opt/zsl_order/data
+sudo useradd --system --gid zsl-order --home-dir /var/lib/zsl-order \
+  --shell /usr/sbin/nologin zsl-order
+sudo install -d -o zsl-order -g zsl-order -m 0700 /var/lib/zsl-order
 sudo install -d -o root -g zsl-order -m 0750 /etc/zsl-order
-sudo install -o root -g root -m 0755 target/release/zsl_order /opt/zsl_order/zsl_order
-sudo cp -r frontend /opt/zsl_order/frontend
-sudo chown -R root:root /opt/zsl_order/frontend
-sudo ln -s /opt/zsl_order/frontend /opt/zsl_order/data/frontend
+sudo install -d -o root -g root -m 0755 /opt/zsl-order
+sudo install -o root -g root -m 0755 target/release/zsl-order /opt/zsl-order/zsl-order
+sudo cp -r frontend /opt/zsl-order/frontend
+sudo chown -R root:root /opt/zsl-order/frontend
+sudo ln -s /opt/zsl-order/frontend /var/lib/zsl-order/frontend
 ```
 
 Grupa `zsl-order` daje usłudze tylko odczyt plików konfiguracji
 wdrożeniowej. Nie dodawaj do niej innych kont.
 
-Przy pierwszym starcie aplikacja tworzy w `data/`:
+Przy pierwszym starcie aplikacja tworzy w `/var/lib/zsl-order`:
 
 - `baza.db` i pliki WAL (aplikacja wymusza `0600` na pliku bazy),
 - `jwt.key` (sekret HMAC do tokenów JWT, `0600`),
@@ -113,11 +122,11 @@ zmienna środowiskowa ma pierwszeństwo.
 Wariant dla sieci szkolnej, bez tunelu i bez publicznego adresu.
 
 ```bash
-cd /opt/zsl_order/data
-sudo -u zsl cp /opt/zsl_order/config.example.json config.json
+cd /var/lib/zsl-order
+sudo -u zsl-order cp /opt/zsl-order/config.example.json config.json
 sudo chmod 600 config.json
 sudo install -o root -g zsl-order -m 0640 \
-  /opt/zsl_order/.env.example /etc/zsl-order/zsl-order.env
+  /opt/zsl-order/.env.example /etc/zsl-order/zsl-order.env
 sudoedit /etc/zsl-order/zsl-order.env
 ```
 
@@ -127,7 +136,7 @@ Przykładowy `/etc/zsl-order/zsl-order.env`:
 DEPLOY_MODE=local
 BIND_ADDR=0.0.0.0:8080
 TRUSTED_PROXIES=127.0.0.1,::1
-PUBLIC_URL=http://192.168.1.10:8080
+PUBLIC_URL=http://<adres-serwera>:8080
 COOKIE_SECURE=false
 ```
 
@@ -144,7 +153,7 @@ COOKIE_SECURE=false
 Po zmianie `/etc/zsl-order/zsl-order.env` zrestartuj usługę:
 
 ```bash
-sudo systemctl restart zsl_order
+sudo systemctl restart zsl-order
 ```
 
 ### 4.2. Dołączenie Cloudflare Tunnel
@@ -232,7 +241,7 @@ przebudowy binarki i bez zmian w bazie:
 
 ```bash
 sudoedit /etc/zsl-order/zsl-order.env
-sudo systemctl restart zsl_order
+sudo systemctl restart zsl-order
 ```
 
 Po zmianie trybu użytkownicy mogą zostać wylogowani, jeśli zmieni się
@@ -280,7 +289,7 @@ terminu. Usunięcie zamówień jest nieodwracalne poza backupem.
 Sprawdzenie harmonogramu i ostatniego przebiegu:
 
 ```bash
-sudo journalctl -u zsl_order --since today | grep -E 'retencja|Retencja'
+sudo journalctl -u zsl-order --since today | grep -E 'retencja|Retencja'
 ```
 
 ## 5. Pierwsze uruchomienie
@@ -289,14 +298,14 @@ Najbezpieczniej uruchomić aplikację raz w konsoli jako użytkownik usługi,
 odebrać dane admina i od razu przejść na usługę:
 
 ```bash
-cd /opt/zsl_order/data
-sudo -u zsl /opt/zsl_order/zsl_order
+cd /var/lib/zsl-order
+sudo -u zsl-order /opt/zsl-order/zsl-order
 ```
 
 W konsoli **nie są wypisywane** login ani hasło. Startowe dane trafiają
-wyłącznie do pliku `admin_start.txt` (`0600`) w katalogu `data/`, a w
+wyłącznie do pliku `admin_start.txt` (`0600`) w katalogu `/var/lib/zsl-order`, a w
 journalu pojawia się tylko informacja o utworzeniu konta. Odczytaj plik
-lokalnie (np. `sudo -u zsl cat /opt/zsl_order/data/admin_start.txt`):
+lokalnie (np. `sudo -u zsl-order cat /var/lib/zsl-order/admin_start.txt`):
 
 1. Zatrzymaj proces (`Ctrl+C`).
 2. Uruchom usługę systemd.
@@ -305,13 +314,13 @@ lokalnie (np. `sudo -u zsl cat /opt/zsl_order/data/admin_start.txt`):
 5. Wygeneruj konta uczniów/kuchni i przekaż hasła bezpiecznym kanałem.
 
 Jeśli uruchomisz od razu usługę, dane również znajdziesz wyłącznie w
-`/opt/zsl_order/data/admin_start.txt`. Nie ma ich w `journalctl`.
+`/var/lib/zsl-order/admin_start.txt`. Nie ma ich w `journalctl`.
 
-Plik leży w katalogu roboczym `data/`, a nie w `frontend/`, więc **nie jest
+Plik leży w katalogu roboczym `/var/lib/zsl-order`, a nie w `frontend/`, więc **nie jest
 serwowany przez HTTP** — żądanie `/admin_start.txt` kończy się `404`.
 Po odczytaniu danych i zmianie hasła plik jest usuwany automatycznie.
 Jeśli zmiana hasła się nie powiedzie, usuń go ręcznie:
-`sudo -u zsl rm /opt/zsl_order/data/admin_start.txt`. Nie kopiuj go do
+`sudo -u zsl-order rm /var/lib/zsl-order/admin_start.txt`. Nie kopiuj go do
 `frontend/`, nie wysyłaj e-mailem i nie zostawiaj na serwerze po pierwszym
 logowaniu.
 
@@ -328,12 +337,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=zsl
-Group=zsl
-SupplementaryGroups=zsl-order
-WorkingDirectory=/opt/zsl_order/data
+User=zsl-order
+Group=zsl-order
+WorkingDirectory=/var/lib/zsl-order
+StateDirectory=zsl-order
+StateDirectoryMode=0700
 EnvironmentFile=/etc/zsl-order/zsl-order.env
-ExecStart=/opt/zsl_order/zsl_order
+ExecStart=/opt/zsl-order/zsl-order
 Restart=on-failure
 RestartSec=3
 
@@ -364,7 +374,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/opt/zsl_order/data
+ReadWritePaths=/var/lib/zsl-order
 
 [Install]
 WantedBy=multi-user.target
@@ -376,16 +386,16 @@ Przygotuj go raz, przed pierwszym startem:
 ```bash
 sudo install -d -o root -g zsl-order -m 0750 /etc/zsl-order
 sudo install -o root -g zsl-order -m 0640 \
-  /opt/zsl_order/.env.example /etc/zsl-order/zsl-order.env
+  /opt/zsl-order/.env.example /etc/zsl-order/zsl-order.env
 sudoedit /etc/zsl-order/zsl-order.env
 ```
 
-Jeśli w starszym wdrożeniu plik `.env` leżał w `data/`, po przeniesieniu
+Jeśli w starszym wdrożeniu plik `.env` leżał w katalogu danych, po przeniesieniu
 ustawień odsuń go, aby uniknąć dwóch źródeł prawdy:
 
 ```bash
-sudo mv /opt/zsl_order/data/.env /opt/zsl_order/data/.env.stare
-sudo chmod 600 /opt/zsl_order/data/.env.stare
+sudo mv /var/lib/zsl-order/.env /var/lib/zsl-order/.env.stare
+sudo chmod 600 /var/lib/zsl-order/.env.stare
 ```
 
 `SystemCallArchitectures=native` blokuje wywołania systemowe z obcych
@@ -396,13 +406,13 @@ nieuprzywilejowanym i nie potrzebuje żadnych.
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now zsl_order
-sudo systemctl status zsl_order
-sudo journalctl -u zsl_order -f
+sudo systemctl enable --now zsl-order
+sudo systemctl status zsl-order
+sudo journalctl -u zsl-order -f
 ```
 
 `ProtectSystem=strict` czyni system plików tylko do odczytu poza
-`ReadWritePaths`; dlatego katalog `data/` musi być zapisywalny dla `zsl`.
+`ReadWritePaths`; dlatego katalog `/var/lib/zsl-order` musi być zapisywalny dla `zsl-order`.
 
 SQLite działa w trybie WAL z `synchronous=NORMAL`, `busy_timeout=5 s` i
 włączonymi kluczami obcymi. Przy starcie aplikacja wymusza `0600` na
@@ -414,14 +424,14 @@ pliku bazy i istniejących plikach `-wal`/`-shm`; nowe pliki chroni
 Po uruchomieniu usługi sprawdź wynik:
 
 ```bash
-sudo systemd-analyze security zsl_order
+sudo systemd-analyze security zsl-order
 ```
 
 Przykładowy wynik na systemd 262 (wynik zależy od wersji systemd i
 jądra):
 
 ```text
-→ Overall exposure level for zsl_order.service: 1.7 OK 🙂
+→ Overall exposure level for zsl-order.service: 1.7 OK 🙂
 
 ```
 
@@ -468,10 +478,10 @@ do ruchu i polityki szkoły; 30 dni to wartość zgodna z
 Podgląd i filtrowanie:
 
 ```bash
-sudo journalctl -u zsl_order -f
-sudo journalctl -u zsl_order -o cat | jq .
-sudo journalctl -u zsl_order -o cat | jq 'select(.fields.event == "login_failed")'
-sudo journalctl -u zsl_order --since "2026-11-01" --until "2026-11-02" -o cat | jq .
+sudo journalctl -u zsl-order -f
+sudo journalctl -u zsl-order -o cat | jq .
+sudo journalctl -u zsl-order -o cat | jq 'select(.fields.event == "login_failed")'
+sudo journalctl -u zsl-order --since "2026-11-01" --until "2026-11-02" -o cat | jq .
 ```
 
 `-o cat` usuwa prefiks journald, dzięki czemu każda linia jest czystym
@@ -483,7 +493,7 @@ pól aplikacji — to format journald, nie JSON aplikacji.
 Przykład dla `zsl.example.edu`:
 
 ```nginx
-# /etc/nginx/sites-available/zsl_order
+# /etc/nginx/sites-available/zsl-order
 server {
     listen 80;
     listen [::]:80;
@@ -529,7 +539,7 @@ server {
 ```
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/zsl_order /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/zsl-order /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -575,25 +585,25 @@ Kopia ma nazwę `zsl-order-RRRRMMDD-HHMMSS.db` (czas `Europe/Warsaw`).
 Nie zawiera plików `-wal` ani `-shm`; jest spójnym, samodzielnym plikiem
 SQLite.
 
-Ręczne wykonanie (katalogiem roboczym musi być `data/`):
+Ręczne wykonanie (katalogiem roboczym musi być `/var/lib/zsl-order`):
 
 ```bash
-sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup'
-sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --keep-days 14'
-sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify backups/zsl-order-20261111-031500.db'
+sudo -u zsl-order sh -c 'cd /var/lib/zsl-order && /opt/zsl-order/zsl-order backup'
+sudo -u zsl-order sh -c 'cd /var/lib/zsl-order && /opt/zsl-order/zsl-order backup --keep-days 14'
+sudo -u zsl-order sh -c 'cd /var/lib/zsl-order && /opt/zsl-order/zsl-order backup --verify backups/zsl-order-20261111-031500.db'
 ```
 
 `--keep-days` nadpisuje konfigurację tylko dla tego uruchomienia.
 `--verify` otwiera istniejącą kopię tylko do odczytu i uruchamia
 `PRAGMA integrity_check`; nie tworzy ani nie zmienia plików. Pełna pomoc:
-`zsl_order backup --help`.
+`zsl-order backup --help`.
 
 Konfiguracja (`/etc/zsl-order/zsl-order.env` ma pierwszeństwo nad
 `config.json`):
 
 | `config.json` | `.env` | Domyślnie | Znaczenie |
 | --- | --- | --- | --- |
-| `backup_dir` | `BACKUP_DIR` | `backups` | katalog kopii, względny wobec `data/` lub absolutny |
+| `backup_dir` | `BACKUP_DIR` | `backups` | katalog kopii, względny wobec `/var/lib/zsl-order` lub absolutny |
 | `backup_keep_days` | `BACKUP_KEEP_DAYS` | `30` | wiek kopii w dniach; `0` oznacza „zostaw tylko 7 najnowszych” |
 
 Retencja opiera się na czasie modyfikacji pliku. Kopie spoza wzorca
@@ -610,19 +620,20 @@ do `/etc/systemd/system/` albo utwórz ręcznie:
 ```ini
 [Unit]
 Description=ZSL Order - kopia zapasowa bazy danych
-Documentation=file:/opt/zsl_order/docs/DEPLOYMENT.md
+Documentation=file:/opt/zsl-order/docs/DEPLOYMENT.md
 After=zsl-order.service
 Wants=zsl-order.service
 OnFailure=zsl-order-backup-failed.service
 
 [Service]
 Type=oneshot
-User=zsl
-Group=zsl
-SupplementaryGroups=zsl-order
-WorkingDirectory=/opt/zsl_order/data
+User=zsl-order
+Group=zsl-order
+WorkingDirectory=/var/lib/zsl-order
+StateDirectory=zsl-order
+StateDirectoryMode=0700
 EnvironmentFile=/etc/zsl-order/zsl-order.env
-ExecStart=/opt/zsl_order/zsl_order backup
+ExecStart=/opt/zsl-order/zsl-order backup
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -649,7 +660,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/opt/zsl_order/data
+ReadWritePaths=/var/lib/zsl-order
 ```
 
 `/etc/systemd/system/zsl-order-backup.timer`:
@@ -716,12 +727,12 @@ urządzenie przez `rsync` po SSH:
 
 ```bash
 # Jednorazowo: klucz SSH dla użytkownika zsl i katalog docelowy.
-sudo -u zsl ssh-keygen -t ed25519 -N '' -f /opt/zsl_order/data/.ssh-backup
-sudo -u zsl ssh-copy-id -i /opt/zsl_order/data/.ssh-backup.pub backup@backup-host
+sudo -u zsl-order ssh-keygen -t ed25519 -N '' -f /var/lib/zsl-order/.ssh-backup
+sudo -u zsl-order ssh-copy-id -i /var/lib/zsl-order/.ssh-backup.pub backup@backup-host
 
-sudo -u zsl rsync -a --delete \
-  -e 'ssh -i /opt/zsl_order/data/.ssh-backup -o IdentitiesOnly=yes' \
-  /opt/zsl_order/data/backups/ backup@backup-host:/srv/backup/zsl/
+sudo -u zsl-order rsync -a --delete \
+  -e 'ssh -i /var/lib/zsl-order/.ssh-backup -o IdentitiesOnly=yes' \
+  /var/lib/zsl-order/backups/ backup@backup-host:/srv/backup/zsl/
 ```
 
 `--delete` powoduje, że zdalny katalog jest lustrem lokalnego — po
@@ -732,7 +743,7 @@ na urządzeniu docelowym.
 Przykładowy cron użytkownika `zsl` (kopiowanie o 03:45, po backupie):
 
 ```cron
-45 3 * * * rsync -a --delete -e 'ssh -i /opt/zsl_order/data/.ssh-backup -o IdentitiesOnly=yes' /opt/zsl_order/data/backups/ backup@backup-host:/srv/backup/zsl/ >> /opt/zsl_order/data/rsync-backup.log 2>&1
+45 3 * * * rsync -a --delete -e 'ssh -i /var/lib/zsl-order/.ssh-backup -o IdentitiesOnly=yes' /var/lib/zsl-order/backups/ backup@backup-host:/srv/backup/zsl/ >> /var/lib/zsl-order/rsync-backup.log 2>&1
 ```
 
 Zadbaj, aby drugie urządzenie miało szyfrowany dysk, ograniczony dostęp
@@ -752,11 +763,11 @@ age-keygen -o zsl-backup-age.key
 
 # Na serwerze, po utworzeniu kopii:
 age -r age1... -o /var/backups/zsl-out/zsl-order-20261111-031500.db.age \
-  /opt/zsl_order/data/backups/zsl-order-20261111-031500.db
+  /var/lib/zsl-order/backups/zsl-order-20261111-031500.db
 
 # Odszyfrowanie na potrzeby testu odtworzenia (na osobnym hoście):
 age -d -i zsl-backup-age.key -o kopia.db kopia.db.age
-/opt/zsl_order/zsl_order backup --verify kopia.db
+/opt/zsl-order/zsl-order backup --verify kopia.db
 ```
 
 Szyfruj zwłaszcza kopie opuszczające serwer. Nie umieszczaj klucza
@@ -771,35 +782,35 @@ procedurą ręczną, wykonywaną przy zatrzymanej usłudze:
 1. Zatrzymaj usługę i zweryfikuj wybraną kopię:
 
    ```bash
-   sudo systemctl stop zsl_order
-   sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify backups/zsl-order-20261111-031500.db'
+   sudo systemctl stop zsl-order
+   sudo -u zsl-order sh -c 'cd /var/lib/zsl-order && /opt/zsl-order/zsl-order backup --verify backups/zsl-order-20261111-031500.db'
    ```
 
 2. Odsuń obecną bazę i pliki WAL (nie usuwaj ich od razu — mogą być
    potrzebne do analizy):
 
    ```bash
-   cd /opt/zsl_order/data
-   sudo -u zsl mkdir -p restore-old
-   sudo -u zsl mv baza.db "restore-old/baza.db.$(date +%F-%H%M%S)"
+   cd /var/lib/zsl-order
+   sudo -u zsl-order mkdir -p restore-old
+   sudo -u zsl-order mv baza.db "restore-old/baza.db.$(date +%F-%H%M%S)"
    for plik in baza.db-wal baza.db-shm; do
-     [ -e "$plik" ] && sudo -u zsl mv "$plik" "restore-old/$plik.$(date +%F-%H%M%S)"
+     [ -e "$plik" ] && sudo -u zsl-order mv "$plik" "restore-old/$plik.$(date +%F-%H%M%S)"
    done
    ```
 
 3. Wstaw kopię i ustaw uprawnienia:
 
    ```bash
-   sudo -u zsl cp backups/zsl-order-20261111-031500.db baza.db
-   sudo -u zsl chmod 600 baza.db
+   sudo -u zsl-order cp backups/zsl-order-20261111-031500.db baza.db
+   sudo -u zsl-order chmod 600 baza.db
    ```
 
 4. Uruchom aplikację i sprawdź integralność oraz działanie:
 
    ```bash
-   sudo systemctl start zsl_order
-   sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify baza.db'
-   sudo journalctl -u zsl_order -n 50 --no-pager
+   sudo systemctl start zsl-order
+   sudo -u zsl-order sh -c 'cd /var/lib/zsl-order && /opt/zsl-order/zsl-order backup --verify baza.db'
+   sudo journalctl -u zsl-order -n 50 --no-pager
    curl -fsS http://127.0.0.1:3000/api/healthz
    ```
 
@@ -827,7 +838,7 @@ wszystkie tokeny (sesje ciasteczkowe nadal działają).
       `systemctl list-timers`.
 - [ ] Ręczne `systemctl start zsl-order-backup.service` kończy się
       sukcesem, a `journalctl` nie zawiera błędów.
-- [ ] `zsl_order backup --verify` przechodzi dla najnowszej kopii.
+- [ ] `zsl-order backup --verify` przechodzi dla najnowszej kopii.
 - [ ] Retencja zachowuje co najmniej 7 najnowszych kopii.
 - [ ] Kopie są regularnie wysyłane poza serwer (`rsync`) i zdalny katalog
       jest sprawdzany.
@@ -848,15 +859,15 @@ sudo systemctl start zsl-order-backup.service
 sudo journalctl -u zsl-order-backup.service -n 20 --no-pager
 
 # 2. Zatrzymanie
-sudo systemctl stop zsl_order
+sudo systemctl stop zsl-order
 
 # 3. Nowa binarka i frontend
-sudo install -o root -g root -m 0755 target/release/zsl_order /opt/zsl_order/zsl_order
-sudo rsync -a --delete frontend/ /opt/zsl_order/frontend/
+sudo install -o root -g root -m 0755 target/release/zsl-order /opt/zsl-order/zsl-order
+sudo rsync -a --delete frontend/ /opt/zsl-order/frontend/
 
 # 4. Start i weryfikacja
-sudo systemctl start zsl_order
-sudo systemctl status zsl_order
+sudo systemctl start zsl-order
+sudo systemctl status zsl-order
 curl -fsS https://zsl.example.edu/api/healthz >/dev/null && echo OK
 ```
 
@@ -871,7 +882,7 @@ danych.
 
 ```bash
 sudo systemctl start zsl-order-backup.service
-sudo -u zsl sh -c 'cd /opt/zsl_order/data && /opt/zsl_order/zsl_order backup --verify $(ls -1t backups/zsl-order-*.db | head -n1)'
+sudo -u zsl-order sh -c 'cd /var/lib/zsl-order && /opt/zsl-order/zsl-order backup --verify $(ls -1t backups/zsl-order-*.db | head -n1)'
 ```
 
 Kopię wykonuj przy zatrzymanej aplikacji albo przez wbudowane `backup`
@@ -890,11 +901,11 @@ przenoszenia ani rotacji.
 
 Minimum:
 
-- proces i port: `systemctl status zsl_order`, `ss -ltnp | grep 3000`,
+- proces i port: `systemctl status zsl-order`, `ss -ltnp | grep 3000`,
 - health check: `GET /api/healthz` → 200 (sprawdza też bazę),
 - miejsce na dysku (baza + WAL + `backups/` + journald; sprawdź
   `journalctl --disk-usage`),
-- błędy w `journalctl -u zsl_order`,
+- błędy w `journalctl -u zsl-order`,
 - `systemctl list-timers zsl-order-backup.timer` oraz
   `journalctl -u zsl-order-backup.service` (ostatnia kopia, błędy),
 - zdarzenia bezpieczeństwa w journald:
@@ -946,7 +957,7 @@ Test dymny na izolowanej kopii (nie na produkcji):
 ```bash
 mkdir -p /tmp/zsl-test
 cd /tmp/zsl-test
-ln -sf /opt/zsl_order/frontend frontend
+ln -sf /opt/zsl-order/frontend frontend
 cat > config.json <<'JSON'
 {
   "ip": "127.0.0.1",
@@ -957,7 +968,7 @@ cat > config.json <<'JSON'
   "secure_cookies": false
 }
 JSON
-/opt/zsl_order/zsl_order > server.log 2>&1 &
+/opt/zsl-order/zsl-order > server.log 2>&1 &
 sleep 2
 cat admin_start.txt
 
@@ -1018,8 +1029,8 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 | 403 `password_change_required` | konto ma hasło startowe | zmień hasło przez `/api/auth/change-password` |
 | 401 po restarcie | sesja wygasła lub użytkownik dezaktywowany | zaloguj ponownie |
 | 401 na tokenie JWT | token wygasł (15 min), został unieważniony przez logout/zmianę hasła/dezaktywację, usunięto `jwt.key` lub baza nie ma wiersza sesji JWT | pobierz nowy token przez `/api/auth/token`; nie próbuj „naprawiać” tokenu |
-| `jwt.key` należy do roota lub usługa nie może go odczytać | plik utworzony przez innego użytkownika | `chown zsl:zsl jwt.key && chmod 600 jwt.key`, restart (aplikacja sama wymusza tryb 0600, ale nie właściciela) |
-| brak logów w `journalctl -u zsl_order` | usługa nie startuje lub `StandardOutput` nadpisany | sprawdź `systemctl status zsl_order` i `journalctl -u zsl_order -n 100`; aplikacja pisze JSON na stdout, nie tworzy `logs/` |
+| `jwt.key` należy do roota lub usługa nie może go odczytać | plik utworzony przez innego użytkownika | `chown zsl-order:zsl-order jwt.key && chmod 600 jwt.key`, restart (aplikacja sama wymusza tryb 0600, ale nie właściciela) |
+| brak logów w `journalctl -u zsl-order` | usługa nie startuje lub `StandardOutput` nadpisany | sprawdź `systemctl status zsl-order` i `journalctl -u zsl-order -n 100`; aplikacja pisze JSON na stdout, nie tworzy `logs/` |
 | brak stron/404 na CSS/JS | brak `frontend/` w katalogu roboczym | symlink lub kopia `frontend/` |
 | `database is locked` | zbyt wiele zapisów / inne połączenie | zwiększ `busy_timeout` (w kodzie 5 s), ogranicz `max_connections`, sprawdź inne procesy |
 | brak danych startowego admina | admin już istnieje | użyj istniejącego konta lub procedury awaryjnej przez DB |

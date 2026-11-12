@@ -3,6 +3,11 @@ name = "zsl_order"
 version = "1.0.0"
 edition = "2024"
 description = "System zamawiania posiłków dla stołówki szkolnej ZSŁ (bez danych osobowych)"
+autobins = false
+
+[[bin]]
+name = "zsl-order"
+path = "src/main.rs"
 
 [dependencies]
 axum = "0.7.9"

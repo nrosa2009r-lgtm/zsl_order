@@ -5,12 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=zsl
-Group=zsl
-SupplementaryGroups=zsl-order
-WorkingDirectory=/opt/zsl_order/data
+User=zsl-order
+Group=zsl-order
+WorkingDirectory=/var/lib/zsl-order
+StateDirectory=zsl-order
+StateDirectoryMode=0700
 EnvironmentFile=/etc/zsl-order/zsl-order.env
-ExecStart=/opt/zsl_order/zsl_order
+ExecStart=/opt/zsl-order/zsl-order
 Restart=on-failure
 RestartSec=3
 
@@ -41,7 +42,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/opt/zsl_order/data
+ReadWritePaths=/var/lib/zsl-order
 
 [Install]
 WantedBy=multi-user.target

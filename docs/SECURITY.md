@@ -39,7 +39,7 @@ denial-of-service na warstwie sieci.
 - Hasła nigdy nie są przechowywane jawnie i nigdy nie są logowane.
 - Startowe hasło admina **nie jest wypisywane w konsoli ani w logach**;
   trafia wyłącznie do `admin_start.txt` z uprawnieniami `0600`. Plik leży
-  w katalogu roboczym `data/`, poza serwowanym `frontend/`, więc nie jest
+  w katalogu roboczym `/var/lib/zsl-order`, poza serwowanym `frontend/`, więc nie jest
   dostępny przez HTTP. Usuń go po pierwszym logowaniu i zmianie hasła
   (aplikacja robi to automatycznie; w razie błędu usuń ręcznie).
 - Wymuszona zmiana hasła (`must_change_password`) blokuje całe API poza
@@ -390,7 +390,7 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
       Bearer bez CSRF; logout Bearer unieważnia token (401).
 - [ ] `jwt.key` istnieje, ma `0600` i należy do użytkownika usługi.
 - [ ] Journald ma ustawione `SystemMaxUse` i `MaxRetentionSec` (np. 30
-      dni); `journalctl -u zsl_order -o cat | jq .` zwraca poprawny JSON.
+      dni); `journalctl -u zsl-order -o cat | jq .` zwraca poprawny JSON.
 
 ### Operacje
 
