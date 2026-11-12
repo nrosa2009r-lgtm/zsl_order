@@ -568,6 +568,41 @@ zsl.example.edu {
 }
 ```
 
+### 7.1. Kamera QR a bezpieczny kontekst
+
+Przeglądarki udostępniają kamerę (`getUserMedia`) **tylko w bezpiecznym
+kontekście**: przez HTTPS albo z `http://localhost` / `http://127.0.0.1`
+na tym samym komputerze. W typowym wdrożeniu `local` aplikacja nasłuchuje
+na `http://<adres-serwera>:3000`, a kuchnia otwiera panel na innym
+urządzeniu (tablet, telefon). Taki adres **nie jest** bezpiecznym
+kontekstem — przycisk kamery nie zadziała, nawet jeśli serwer i kamera
+działają poprawnie.
+
+Panel kuchni wykrywa to i zamiast przycisku skanowania pokazuje
+komunikat z odesłaniem do wpisania kodu ręcznie. Ten sam komunikat
+pojawia się, gdy przeglądarka nie ma `navigator.mediaDevices` albo nie
+obsługuje `BarcodeDetector`.
+
+Dostępne rozwiązania, od najprostszego:
+
+1. **Czytnik USB/Bluetooth (klawiaturowy)** — najbardziej niezawodny
+   w kuchni. Czytnik wpisuje kod do pola z fokusem, a `Enter` uruchamia
+   wyszukanie. Nie wymaga HTTPS, kamery ani uprawnień przeglądarki.
+   Pole `Kod odbioru` ma fokus po wejściu w zakładkę i po każdym
+   wydaniu, więc kolejne skany nie wymagają klikania.
+2. **HTTPS w sieci lokalnej** — np. Nginx/Caddy z certyfikatem
+   wewnętrznym (`mkcert`, własne CA w zaufanych certyfikatach tabletów)
+   albo certyfikatem z Let's Encrypt dla nazwy wewnętrznej. Po HTTPS
+   kamera działa na każdym urządzeniu w sieci.
+3. **Tryb `tunnel` (Cloudflare Tunnel)** — daje publiczny adres HTTPS
+   bez otwierania portów. To rozwiązanie awaryjne/zdalne: ruch wychodzi
+   poza sieć lokalną, więc włącz Cloudflare Access i stosuj zasadę
+   minimalnych uprawnień (rozdział 9).
+
+Konfiguracja trybu `tunnel` i nagłówków bezpieczeństwa jest opisana
+w rozdziałach 4.2 i 4.3. W trybie `local` po HTTP **nie** obiecuj
+kucharzom skanowania kamerą — przygotuj czytnik USB albo HTTPS.
+
 ## 8. Backup i odtwarzanie
 
 ### 8.1. Wbudowana kopia zapasowa
@@ -1012,7 +1047,8 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 - przejście statusów do `completed`, `paid_at`/`paid_by` i sprawdzenie
   raportu dziennego oraz CSV (gotówka/karta),
 - automatyczne oznaczenie nieodebranego i blokadę po `max_uncollected`,
-- pobranie QR i pickup po kodzie oraz `ZSL:<token>`,
+- pobranie QR i pickup po kodzie oraz tokenie (opcjonalnie z prefiksem
+  `ZSL:`), w tym kod nieistniejący, z innego dnia i już wydany,
 - próbę dostępu ucznia do `/api/admin/*` (403),
 - żądanie bez CSRF (403) i z obcym `Origin` (403),
 - wydanie tokenu JWT, żądanie Bearer bez CSRF, logout i ponowne żądanie

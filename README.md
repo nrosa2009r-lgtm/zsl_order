@@ -46,8 +46,10 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 - **Zero rejestracji i zero danych osobowych**: konta zakłada administrator,
   loginy i hasła są generowane losowo.
 - **Kody QR do odbioru**: każde zamówienie ma krótki kod (`K7M2QP`) oraz
-  token QR (`ZSL:<48 znaków hex>`). Kuchnia może zeskanować QR kamerą,
-  użyć czytnika USB albo wpisać kod ręcznie.
+  nieprzejrzysty token QR (48 znaków hex) bez danych osobowych. Kuchnia
+  może zeskanować QR kamerą, użyć czytnika USB albo wpisać kod ręcznie.
+  QR działa tylko dla dzisiejszego zamówienia w statusie `ready` i tylko
+  raz — po wydaniu skan zwraca błąd.
 - **Bezpieczne sesje**: tokeny 256-bit, w bazie tylko skrót SHA-256,
   ciasteczka `HttpOnly` + `SameSite=Strict`, opcjonalnie `Secure`.
 - **Tokeny API JWT**: krótkotrwałe tokeny HS256 (15 min) dla klientów

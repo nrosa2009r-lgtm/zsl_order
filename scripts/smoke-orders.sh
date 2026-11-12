@@ -289,16 +289,78 @@ request PATCH "/api/staff/orders/$ORDER3" "$ADMIN_JAR" "$ADMIN_CSRF" '{"payment_
 [ "$STATUS" = "200" ] && pass "płatność: admin przywraca opłacenie" \
   || fail "płatność: przywrócenie -> $STATUS ($BODY)"
 
+# ---------------------------------------------------------------- odbiór QR
+create_order cash smoke-idem-qr-0001
+QR_ORDER=$(printf '%s' "$BODY" | jq -r '.id // empty')
+[ "$STATUS" = "201" ] && pass "QR: zamówienie testowe" || fail "QR: create $STATUS ($BODY)"
+request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
+request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"ready"}'
+[ "$STATUS" = "200" ] && pass "QR: zamówienie gotowe do wydania" || fail "QR: ready $STATUS"
+
+QR_TOKEN=$(db_scalar "SELECT qr_token FROM orders WHERE id=$QR_ORDER;")
+printf '%s' "$QR_TOKEN" | grep -Eq '^[0-9a-f]{48}$' \
+  && pass "QR: token to 48 hex (bez danych osobowych)" \
+  || fail "QR: nieoczekiwany token '$QR_TOKEN'"
+
+request GET "/api/student/orders/$QR_ORDER/qr.svg" "$S1_JAR" "" ""
+[ "$STATUS" = "200" ] && pass "QR: uczeń pobiera własny kod" || fail "QR: qr.svg $STATUS"
+
+request POST /api/staff/pickup "$K_JAR" "$K_CSRF" "{\"code\":\"$QR_TOKEN\"}"
+PICKED_ID=$(printf '%s' "$BODY" | jq -r '.order.id // empty')
+PICKED_TOTAL=$(printf '%s' "$BODY" | jq -r '.order.total_cents // empty')
+PICKED_PAYMENT=$(printf '%s' "$BODY" | jq -r '.order.payment_method // empty')
+PICKED_STATUS=$(printf '%s' "$BODY" | jq -r '.order.payment_status // empty')
+[ "$STATUS" = "200" ] && [ "$PICKED_ID" = "$QR_ORDER" ] \
+  && [ "$PICKED_TOTAL" = "$ITEM_PRICE" ] && [ "$PICKED_PAYMENT" = "cash" ] \
+  && [ "$PICKED_STATUS" = "unpaid" ] \
+  && pass "QR: skan zwraca kwotę, płatność i status" \
+  || fail "QR: skan $STATUS id=$PICKED_ID total=$PICKED_TOTAL payment=$PICKED_PAYMENT/$PICKED_STATUS"
+
+# Endpoint skanowania wymaga konta kuchni lub admina.
+request POST /api/staff/pickup "$S1_JAR" "$S1_CSRF" "{\"code\":\"$QR_TOKEN\"}"
+[ "$STATUS" = "403" ] && pass "QR: uczeń nie może skanować (403)" \
+  || fail "QR: uczeń skanuje -> $STATUS ($BODY)"
+
+request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"completed"}'
+[ "$STATUS" = "200" ] && pass "QR: wydanie zamyka zamówienie" || fail "QR: wydanie $STATUS ($BODY)"
+request POST /api/staff/pickup "$K_JAR" "$K_CSRF" "{\"code\":\"$QR_TOKEN\"}"
+[ "$STATUS" = "409" ] && pass "QR: kod już wydany przestaje działać (409)" \
+  || fail "QR: ponowny skan wydanego -> $STATUS ($BODY)"
+
+request POST /api/staff/pickup "$K_JAR" "$K_CSRF" '{"code":"NIE000"}'
+[ "$STATUS" = "404" ] && pass "QR: nieistniejący kod (404)" \
+  || fail "QR: nieistniejący kod -> $STATUS ($BODY)"
+
 # ---------------------------------------------------------------- inny dzień
 S1_ID=$(db_scalar "SELECT id FROM users WHERE login='$S1_LOGIN';")
 YDAY=$(TZ=Europe/Warsaw date -d 'yesterday 12:00' +%s)
-OLD_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at) VALUES ($S1_ID,'OLD999','oldtoken999','new','cash','unpaid',$ITEM_PRICE,'12:00',$YDAY,$YDAY); SELECT last_insert_rowid();")
+OLD_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at) VALUES ($S1_ID,'OLD999','oldtoken999','ready','cash','unpaid',$ITEM_PRICE,'12:00',$YDAY,$YDAY); SELECT last_insert_rowid();")
 request PATCH "/api/staff/orders/$OLD_ID" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
 OLD_STATUS=$(db_scalar "SELECT status FROM orders WHERE id=$OLD_ID;")
-[ "$STATUS" = "403" ] && [ "$OLD_STATUS" = "new" ] \
+[ "$STATUS" = "403" ] && [ "$OLD_STATUS" = "ready" ] \
   && pass "kuchnia: nie zmienia zamówień z innych dni (403)" \
   || fail "kuchnia: inny dzień -> $STATUS/$OLD_STATUS"
+request POST /api/staff/pickup "$K_JAR" "$K_CSRF" '{"code":"oldtoken999"}'
+[ "$STATUS" = "409" ] && pass "QR: kod z innego dnia odrzucony (409)" \
+  || fail "QR: kod z innego dnia -> $STATUS ($BODY)"
 db_scalar "DELETE FROM orders WHERE id=$OLD_ID;" >/dev/null
+
+# Limit prób: seria nieistniejących kodów musi w końcu zwrócić 429.
+LIMITED=0
+for attempt in $(seq 1 20); do
+  request POST /api/staff/pickup "$K_JAR" "$K_CSRF" "{\"code\":\"BRAK$attempt\"}"
+  if [ "$STATUS" = "429" ]; then
+    LIMITED=1
+    break
+  fi
+done
+[ "$LIMITED" = "1" ] && pass "QR: limit nieudanych prób zwraca 429" \
+  || fail "QR: limiter nie zadziałał po $attempt próbach (ostatni $STATUS)"
+
+# Po zablokowaniu nawet poprawny kod jest odrzucany przez limiter.
+request POST /api/staff/pickup "$K_JAR" "$K_CSRF" "{\"code\":\"$QR_TOKEN\"}"
+[ "$STATUS" = "429" ] && pass "QR: blokada limitera obejmuje też poprawny kod" \
+  || fail "QR: po blokadzie -> $STATUS ($BODY)"
 
 # ---------------------------------------------------------------- termin anulowania
 request PUT /api/admin/settings "$ADMIN_JAR" "$ADMIN_CSRF" '{"cancel_window_minutes":1}'

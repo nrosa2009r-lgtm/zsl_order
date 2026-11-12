@@ -439,16 +439,18 @@ przy dwóch równoczesnych anulowaniach jedno kończy się `200`, drugie
 
 ### `GET /api/student/orders/:id/qr.svg`
 
-Zwraca SVG z kodem QR dla **własnego**, nieanulowanego zamówienia.
+Zwraca SVG z kodem QR dla **własnego**, aktywnego i dzisiejszego
+zamówienia.
 
 ```http
 Content-Type: image/svg+xml; charset=utf-8
 Cache-Control: no-store
 ```
 
-Zawartość QR: `ZSL:<48 znaków hex>` (token 24 bajtów). QR nie zawiera
-loginu, kodu ucznia ani żadnych danych osobowych. Zamówienie innego
-użytkownika lub anulowane → `404` / `409`.
+Zawartość QR: wyłącznie 48 znaków hex (token 24 bajtów). QR nie zawiera
+loginu, kodu ucznia, ID konta, ceny, URL ani tokenu sesji. Zamówienie
+innego użytkownika → `404`; anulowane, wydane, nieodebrane albo z innego
+dnia → `409`.
 
 ## Kuchnia i administrator
 
@@ -544,7 +546,10 @@ zamówienia → `404`.
 
 ### `POST /api/staff/pickup`
 
-Wyszukuje zamówienie po krótkim kodzie lub tokenie QR. Nie zmienia statusu.
+Wyszukuje zamówienie po krótkim kodzie lub tokenie QR. Nie zmienia
+statusu. Wymaga zalogowanego konta `kitchen` lub `admin`; uczeń otrzymuje
+`403`. Zwraca wyłącznie zamówienie **z dzisiejszego dnia w statusie
+`ready`** — kod jest ważny do wydania i po `completed` przestaje działać.
 
 ```json
 {"code": "K7M2QP"}
@@ -553,8 +558,12 @@ Wyszukuje zamówienie po krótkim kodzie lub tokenie QR. Nie zmienia statusu.
 Akceptowane postacie:
 
 - `K7M2QP` — krótki kod (wielkość liter bez znaczenia),
-- `ZSL:<48 znaków hex>` — pełna zawartość QR,
-- `<48 znaków hex>` — sam token QR.
+- `<48 znaków hex>` — pełna zawartość QR,
+- `ZSL:<48 znaków hex>` — starszy wariant z prefiksem (zgodność wstecz).
+
+Błędy: nieistniejący kod → `404`; zamówienie z innego dnia, jeszcze
+niegotowe (`new`/`preparing`), już wydane, anulowane lub nieodebrane →
+`409`; przekroczenie limitu prób → `429`.
 
 **Odpowiedź 200**
 

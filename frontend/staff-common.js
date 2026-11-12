@@ -515,16 +515,81 @@
         return { refresh: refresh };
     }
 
-    function renderPickupResult(container, order, onUpdated) {
+    function renderPickupResult(container, order, onIssued) {
         App.clear(container);
-        container.append(
-            orderCard(order, {
-                role: "kitchen",
-                onUpdated: async function () {
-                    if (onUpdated) await onUpdated();
-                },
-            })
+
+        const card = App.h("article", { class: "pickup-card pickup-" + order.status });
+        const head = App.h("div", { class: "pickup-head" });
+        head.append(
+            App.h("div", {}, [
+                App.h("p", { class: "muted tiny", text: "Znaleziono zamówienie" }),
+                App.h("h3", { text: order.code }),
+            ]),
+            App.h("div", { class: "badge-row" }, [
+                App.statusBadge(order.status),
+                App.paymentBadge(order.payment_status),
+            ])
         );
+
+        const meta = App.h("dl", { class: "pickup-meta" });
+        [
+            ["Uczeń (kod)", order.student_code || "—"],
+            ["Złożono", App.fmtDate(order.created_at)],
+            ["Odbiór", order.pickup_time || "Bez godziny"],
+            ["Płatność", App.paymentLabels[order.payment_method] || order.payment_method],
+        ].forEach(function (pair) {
+            const wrapper = App.h("div");
+            wrapper.append(App.h("dt", { text: pair[0] }), App.h("dd", { text: pair[1] }));
+            meta.append(wrapper);
+        });
+
+        const items = App.h("ul", { class: "order-items" });
+        order.items.forEach(function (item) {
+            items.append(
+                App.h("li", {}, [
+                    App.h("span", { text: item.quantity + " × " + item.name }),
+                    App.h("span", { class: "muted", text: App.fmtPLN(item.price_cents * item.quantity) }),
+                ])
+            );
+        });
+
+        const total = App.h("div", { class: "pickup-total" }, [
+            App.h("span", {
+                text: order.payment_status === "unpaid" ? "Do zapłaty" : "Opłacone",
+            }),
+            App.h("strong", { text: App.fmtPLN(order.total_cents) }),
+        ]);
+
+        const note = App.h("p", {
+            class: "pickup-note",
+            text: order.payment_status === "unpaid"
+                ? "Przy wydaniu płatność zostanie automatycznie oznaczona jako opłacona."
+                : "Zamówienie jest już opłacone.",
+        });
+
+        const issue = App.h("button", {
+            class: "btn btn-success btn-large pickup-issue",
+            text: "Wydaj",
+            attrs: { type: "button" },
+            on: {
+                click: async function () {
+                    App.setBusy(issue, true, "Wydawanie…");
+                    try {
+                        await App.api.patch("/api/staff/orders/" + order.id, {
+                            status: "completed",
+                        });
+                        App.toast("Zamówienie wydane.", "success");
+                        if (onIssued) await onIssued();
+                    } catch (error) {
+                        App.toast(error.message, "error");
+                        App.setBusy(issue, false, "Wydaj");
+                    }
+                },
+            },
+        });
+
+        card.append(head, meta, items, total, note, issue);
+        container.append(card);
     }
 
     window.StaffUI = {

@@ -178,13 +178,19 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 ### 5.4. QR i odbiór
 
 - QR generuje serwer w `GET /api/student/orders/:id/qr.svg` na podstawie
-  `qr_token`; w obrazie jest `ZSL:<token>`, bez danych ucznia.
+  `qr_token`; w obrazie jest wyłącznie nieprzejrzysty token, bez loginu,
+  kodu ucznia, ID konta, ceny, URL i tokenu sesji.
 - Kuchnia skanuje QR (`BarcodeDetector` + `getUserMedia`) albo wpisuje
-  kod. `POST /api/staff/pickup` normalizuje krótki kod do wielkich liter,
-  opcjonalnie usuwa prefiks `ZSL:` i szuka po `qr_token` lub `code`.
-- Pickup **nie zmienia** statusu — służy do identyfikacji zamówienia.
-  Wydanie następuje przez `PATCH /api/staff/orders/:id`.
-- Każde wyszukanie trafia do audytu.
+  kod lub używa czytnika USB działającego jak klawiatura (Enter =
+  szukaj). `POST /api/staff/pickup` normalizuje krótki kod do wielkich
+  liter, opcjonalnie usuwa starszy prefiks `ZSL:` i szuka po `qr_token`
+  lub `code`.
+- Pickup akceptuje tylko zamówienie z dzisiejszego dnia w statusie
+  `ready`; po `completed` kod jest jednorazowo zużyty. Pickup **nie
+  zmienia** statusu — wydanie następuje przez
+  `PATCH /api/staff/orders/:id`.
+- Każde udane wyszukanie trafia do audytu; nieudane próby zasilają
+  `PickupLimiter`.
 
 ### 5.5. Zmiana statusu i płatności
 

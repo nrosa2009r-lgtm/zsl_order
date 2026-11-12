@@ -6,9 +6,9 @@
     let menuUi = null;
     let reportUi = null;
     let pickupContainer = null;
-    let lastPickupCode = "";
     let scannerStream = null;
     let scannerTimer = null;
+    let audioContext = null;
 
     App.bootPage("kitchen", async function () {
         pickupContainer = App.$("#pickupResult");
@@ -58,6 +58,9 @@
         App.$('.tab[data-tab="orders"]').addEventListener("click", function () {
             ordersUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
         });
+        App.$('.tab[data-tab="pickup"]').addEventListener("click", function () {
+            focusPickupInput();
+        });
         App.$('.tab[data-tab="menu"]').addEventListener("click", function () {
             menuUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
         });
@@ -78,6 +81,7 @@
             const code = App.$("#pickupCode").value.trim();
             if (!code) {
                 App.toast("Wpisz kod odbioru.", "error");
+                focusPickupInput();
                 return;
             }
             await lookup(code);
@@ -95,19 +99,28 @@
         }, 8000);
     });
 
-    async function lookup(code, silent) {
+    function focusPickupInput() {
+        const input = App.$("#pickupCode");
+        if (!input) return;
+        input.focus();
+        input.select();
+    }
+
+    async function lookup(code) {
         const button = pickupFormButton();
+        const input = App.$("#pickupCode");
         App.setBusy(button, true, "Sprawdzanie…");
         try {
             const data = await App.api.post("/api/staff/pickup", { code: code });
-            lastPickupCode = code;
             renderPickup(data.order);
-            if (!silent) App.$("#pickupCode").value = "";
+            feedback(true);
+            input.value = "";
+            focusPickupInput();
         } catch (error) {
-            if (!silent) {
-                App.clear(pickupContainer);
-                App.toast(error.message, "error");
-            }
+            showPickupError(error.message);
+            feedback(false);
+            input.select();
+            input.focus();
         } finally {
             App.setBusy(button, false);
         }
@@ -120,9 +133,48 @@
 
     function renderPickup(order) {
         StaffUI.renderPickupResult(pickupContainer, order, async function () {
-            if (lastPickupCode) await lookup(lastPickupCode, true);
+            App.clear(pickupContainer);
+            App.$("#pickupCode").value = "";
+            focusPickupInput();
             if (ordersUi) await ordersUi.refresh();
         });
+    }
+
+    function showPickupError(message) {
+        App.clear(pickupContainer);
+        pickupContainer.append(
+            App.h("div", { class: "pickup-card pickup-error", attrs: { role: "alert" } }, [
+                App.h("h3", { text: "Nie wydano zamówienia" }),
+                App.h("p", { text: message }),
+                App.h("p", {
+                    class: "muted small",
+                    text: "Popraw kod i spróbuj ponownie albo zeskanuj następny QR.",
+                }),
+            ])
+        );
+    }
+
+    function feedback(ok) {
+        try {
+            const AudioCtor = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtor) {
+                audioContext = audioContext || new AudioCtor();
+                const oscillator = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                oscillator.type = "sine";
+                oscillator.frequency.value = ok ? 880 : 220;
+                gain.gain.value = 0.07;
+                oscillator.connect(gain);
+                gain.connect(audioContext.destination);
+                oscillator.start();
+                window.setTimeout(function () { oscillator.stop(); }, ok ? 120 : 320);
+            }
+        } catch (error) {
+            // Dźwięk jest dodatkiem — brak AudioContext nie blokuje odbioru.
+        }
+        if (navigator.vibrate) {
+            navigator.vibrate(ok ? 80 : [80, 60, 80]);
+        }
     }
 
     function setupScanner() {
@@ -131,12 +183,27 @@
         const video = App.$("#scannerVideo");
         const status = App.$("#scannerStatus");
 
-        const supported = ("BarcodeDetector" in window)
-            && navigator.mediaDevices
-            && typeof navigator.mediaDevices.getUserMedia === "function";
+        const secure = window.isSecureContext;
+        const hasMedia = !!(navigator.mediaDevices &&
+            typeof navigator.mediaDevices.getUserMedia === "function");
+        const hasDetector = "BarcodeDetector" in window;
 
-        if (!supported) {
-            status.textContent = "Skaner kamery nie jest dostępny w tej przeglądarce. Użyj kodu lub czytnika USB.";
+        if (!secure) {
+            status.textContent =
+                "Kamera wymaga HTTPS lub połączenia z localhost. " +
+                "W sieci lokalnej po HTTP użyj czytnika USB albo wpisz kod ręcznie. " +
+                "Alternatywy: HTTPS w sieci lokalnej lub tryb tunnel.";
+            return;
+        }
+        if (!hasMedia) {
+            status.textContent =
+                "Ta przeglądarka nie udostępnia kamery. Wpisz kod ręcznie albo użyj czytnika USB.";
+            return;
+        }
+        if (!hasDetector) {
+            status.textContent =
+                "Ta przeglądarka nie obsługuje BarcodeDetector. " +
+                "Wpisz kod ręcznie albo użyj czytnika USB (działa jak klawiatura).";
             return;
         }
 
@@ -173,14 +240,24 @@
                 }, 350);
             } catch (error) {
                 stopScanner();
-                status.textContent = "Nie udało się uruchomić kamery. Użyj kodu lub czytnika USB.";
-                App.toast("Kamera wymaga HTTPS lub połączenia z localhost.", "error");
+                if (error && error.name === "NotAllowedError") {
+                    status.textContent =
+                        "Brak zgody na kamerę. Zezwól na dostęp w przeglądarce " +
+                        "albo wpisz kod ręcznie / użyj czytnika USB.";
+                } else {
+                    status.textContent =
+                        "Nie udało się uruchomić kamery. Wpisz kod ręcznie " +
+                        "albo użyj czytnika USB.";
+                }
+                App.toast("Kamera wymaga HTTPS lub localhost.", "error");
+                focusPickupInput();
             }
         });
 
         stopButton.addEventListener("click", function () {
             stopScanner();
             status.textContent = "Skanowanie zatrzymane.";
+            focusPickupInput();
         });
 
         function stopScanner() {

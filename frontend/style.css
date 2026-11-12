@@ -1340,6 +1340,84 @@ textarea {
     }
 }
 
+/* Odbiór QR — duży, czytelny wynik skanu. */
+.pickup-card {
+    border: 2px solid var(--line);
+    border-left: 8px solid var(--muted);
+    border-radius: 14px;
+    padding: 18px;
+    background: var(--surface);
+    margin-bottom: 16px;
+}
+
+.pickup-ready { border-left-color: var(--success); }
+.pickup-error {
+    border-left-color: var(--danger);
+    background: var(--danger-soft);
+}
+
+.pickup-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.pickup-head h3 {
+    margin: 2px 0 0;
+    font-size: 1.6rem;
+    letter-spacing: 0.08em;
+}
+
+.pickup-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px 18px;
+    margin: 14px 0;
+}
+
+.pickup-meta dt {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+}
+
+.pickup-meta dd {
+    margin: 2px 0 0;
+    font-weight: 600;
+}
+
+.pickup-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-top: 1px dashed var(--line);
+    padding-top: 12px;
+    margin-top: 12px;
+}
+
+.pickup-total strong {
+    font-size: 1.8rem;
+}
+
+.pickup-note {
+    color: var(--muted);
+    margin: 6px 0 0;
+}
+
+.btn-large {
+    min-height: 56px;
+    font-size: 1.1rem;
+    padding: 14px 24px;
+}
+
+.pickup-issue {
+    width: 100%;
+    margin-top: 14px;
+}
+
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

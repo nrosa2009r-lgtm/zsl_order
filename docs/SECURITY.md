@@ -282,15 +282,19 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 ## 8. Kody QR i odbiór
 
 - Token QR: 24 losowe bajty → 48 znaków hex (192 bity).
-- Zawartość QR: `ZSL:<token>` — bez loginu, kodu ucznia i innych danych.
+- Zawartość QR: wyłącznie token — bez loginu, kodu ucznia, ID konta,
+  ceny, URL i tokenu sesji.
 - Krótki kod: 6 liter z 24-znakowego alfabetu (bez cyfr i znaków
   mylonych), unikalny w bazie; ok. 28 bitów entropii.
 - Krótki kod **nie jest publicznym sekretem** — jego użycie wymaga
   zalogowanego pracownika (`kitchen`/`admin`) i przechodzi przez CSRF.
 - QR jest generowany tylko dla właściciela zamówienia; inny uczeń dostaje
   `404`.
-- Anulowane zamówienie nie generuje QR (`409`).
-- Pickup nie zmienia statusu; wydanie jest osobną akcją personelu.
+- Anulowane, wydane i nieodebrane zamówienie nie generuje QR (`409`).
+- Pickup wymaga `kitchen`/`admin`; uczeń dostaje `403`. Akceptuje tylko
+  dzisiejsze zamówienie w statusie `ready` — po wydaniu kod jest
+  jednorazowo zużyty. Pickup nie zmienia statusu; wydanie jest osobną
+  akcją personelu.
 - Token QR jest przechowywany jawnie w bazie (konieczny do generowania
   obrazu). Ochrona bazy = ochrona kodów odbioru.
 

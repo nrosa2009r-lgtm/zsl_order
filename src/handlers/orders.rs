@@ -533,19 +533,30 @@ pub async fn order_qr(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT qr_token, status FROM orders WHERE id = ? AND user_id = ?")
-            .bind(id)
-            .bind(user.id)
-            .fetch_optional(&state.db)
-            .await?;
+    let row: Option<(String, String, i64)> = sqlx::query_as(
+        "SELECT qr_token, status, created_at FROM orders WHERE id = ? AND user_id = ?",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await?;
 
-    let (token, status) = row.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
-    if status == "cancelled" {
-        return Err(AppError::conflict("Zamówienie zostało anulowane."));
+    let (token, status, created_at) =
+        row.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
+    if matches!(status.as_str(), "cancelled" | "completed" | "uncollected") {
+        return Err(AppError::conflict(
+            "To zamówienie jest już zamknięte — kod QR nie jest aktywny.",
+        ));
+    }
+    if created_at < util::start_of_today() {
+        return Err(AppError::conflict(
+            "Kod QR jest aktywny tylko dla dzisiejszych zamówień.",
+        ));
     }
 
-    let qr = QrCode::new(format!("ZSL:{token}").as_bytes())
+    // QR zawiera wyłącznie nieprzejrzysty token odbioru: bez loginu, kodu
+    // ucznia, ID konta, ceny, URL ani tokenu sesji.
+    let qr = QrCode::new(token.as_bytes())
         .map_err(|error| AppError::internal(format!("QR: {error}")))?;
     let svg = qr
         .render::<svg::Color>()
@@ -623,7 +634,7 @@ pub async fn staff_pickup(
         return Err(AppError::bad("Wpisz kod odbioru lub zeskanuj kod QR."));
     }
 
-    let token = raw.strip_prefix("ZSL:").unwrap_or(raw).trim();
+    let token = pickup_token(raw);
     let normalized_code = token.to_uppercase();
 
     let id: Option<i64> =
@@ -634,28 +645,20 @@ pub async fn staff_pickup(
             .await?;
 
     let Some(id) = id else {
-        state.pickup_limiter.failure(user.id, client.0);
-        if let Err(retry_after) = state.pickup_limiter.check(user.id, client.0) {
-            tracing::warn!(
-                event = "pickup_locked",
-                account_id = user.id,
-                ip = %client.0,
-                retry_after,
-                "Odczyt kodu odbioru zablokowany po nieudanej próbie"
-            );
-            return Err(AppError::TooManyRequests {
-                retry_after,
-                message: "Zbyt wiele nieudanych prób odczytu kodu. Odczekaj chwilę.".to_string(),
-            });
-        }
-        return Err(AppError::not_found(
-            "Nie znaleziono zamówienia o tym kodzie.",
+        return Err(pickup_failure(
+            &state,
+            user.id,
+            client.0,
+            AppError::not_found("Nie znaleziono zamówienia o tym kodzie."),
         ));
     };
 
-    state.pickup_limiter.success(user.id, client.0);
     let order = load_order(&state, id).await?;
+    if let Some(error) = pickup_rejection(&order) {
+        return Err(pickup_failure(&state, user.id, client.0, error));
+    }
 
+    state.pickup_limiter.success(user.id, client.0);
     db::audit(
         &state.db,
         Some(user.id),
@@ -664,13 +667,63 @@ pub async fn staff_pickup(
     )
     .await;
 
-    if order.status == "cancelled" || order.status == "uncollected" {
-        return Err(AppError::conflict(
-            "To zamówienie zostało anulowane lub nieodebrane.",
-        ));
-    }
-
     Ok(Json(serde_json::json!({ "order": order })))
+}
+
+/// Akceptuje sam token QR oraz starszy wariant z prefiksem `ZSL:`.
+fn pickup_token(raw: &str) -> &str {
+    let raw = raw.trim();
+    raw.strip_prefix("ZSL:").unwrap_or(raw).trim()
+}
+
+/// Odmowa wydania z czytelnym komunikatem. Kod QR jest jednorazowy:
+/// po `completed` nie działa ponownie, a kod z innego dnia nie jest ważny.
+fn pickup_rejection(order: &OrderView) -> Option<AppError> {
+    match order.status.as_str() {
+        "completed" => Some(AppError::conflict(
+            "To zamówienie zostało już wydane — kod jest jednorazowy.",
+        )),
+        "cancelled" | "uncollected" => Some(AppError::conflict(
+            "To zamówienie zostało anulowane lub nieodebrane.",
+        )),
+        "new" | "preparing" => Some(AppError::conflict(
+            "Zamówienie nie jest jeszcze gotowe do wydania.",
+        )),
+        "ready" => {
+            if order.created_at < util::start_of_today() {
+                Some(AppError::conflict("Kod dotyczy zamówienia z innego dnia."))
+            } else {
+                None
+            }
+        }
+        _ => Some(AppError::conflict(
+            "Zamówienie nie może zostać wydane w tym stanie.",
+        )),
+    }
+}
+
+/// Rejestruje nieudaną próbę i zamienia ją na 429, jeśli limiter jest pełny.
+fn pickup_failure(
+    state: &AppState,
+    user_id: i64,
+    ip: std::net::IpAddr,
+    error: AppError,
+) -> AppError {
+    state.pickup_limiter.failure(user_id, ip);
+    if let Err(retry_after) = state.pickup_limiter.check(user_id, ip) {
+        tracing::warn!(
+            event = "pickup_locked",
+            account_id = user_id,
+            ip = %ip,
+            retry_after,
+            "Odczyt kodu odbioru zablokowany po nieudanej próbie"
+        );
+        return AppError::TooManyRequests {
+            retry_after,
+            message: "Zbyt wiele nieudanych prób odczytu kodu. Odczekaj chwilę.".to_string(),
+        };
+    }
+    error
 }
 
 pub async fn staff_update_order(
@@ -1318,5 +1371,46 @@ mod tests {
         assert_eq!(csv_cell("+51"), "\"'+51\"");
         assert_eq!(csv_cell("-1"), "\"'-1\"");
         assert_eq!(csv_cell("@x"), "\"'@x\"");
+    }
+
+    fn order_with(status: &str, created_at: i64) -> OrderView {
+        OrderView {
+            id: 1,
+            code: "K7M2QP".to_string(),
+            status: status.to_string(),
+            payment_method: "cash".to_string(),
+            payment_status: "unpaid".to_string(),
+            total_cents: 1200,
+            pickup_time: "12:30".to_string(),
+            created_at,
+            updated_at: created_at,
+            paid_at: None,
+            paid_by: None,
+            uncollected_at: None,
+            student: "s-test".to_string(),
+            student_code: "UCZ-TEST".to_string(),
+            items: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pickup_accepts_only_ready_order_from_today() {
+        assert!(pickup_rejection(&order_with("ready", util::now())).is_none());
+
+        let yesterday = util::start_of_today() - 60;
+        assert!(pickup_rejection(&order_with("ready", yesterday)).is_some());
+        assert!(pickup_rejection(&order_with("completed", util::now())).is_some());
+        assert!(pickup_rejection(&order_with("cancelled", util::now())).is_some());
+        assert!(pickup_rejection(&order_with("uncollected", util::now())).is_some());
+        assert!(pickup_rejection(&order_with("new", util::now())).is_some());
+        assert!(pickup_rejection(&order_with("preparing", util::now())).is_some());
+    }
+
+    #[test]
+    fn pickup_token_accepts_plain_and_legacy_prefix() {
+        assert_eq!(pickup_token("abcdef123456"), "abcdef123456");
+        assert_eq!(pickup_token("ZSL:abcdef123456"), "abcdef123456");
+        assert_eq!(pickup_token("  ZSL:abcdef123456  "), "abcdef123456");
+        assert_eq!(pickup_token("  K7M2QP  "), "K7M2QP");
     }
 }
