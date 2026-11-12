@@ -15,6 +15,10 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 > [wdrożenie](docs/DEPLOYMENT.md) ·
 > [baza danych](docs/DATABASE.md) ·
 > [prywatność i RODO](docs/PRIVACY.md)
+>
+> Obsługa: [instrukcja](docs/INSTRUKCJA.md) ·
+> [ściągawka ucznia](docs/SCIAGAWKA-UCZEN.md) ·
+> [ściągawka kuchni](docs/SCIAGAWKA-KUCHNIA.md)
 
 ---
 
@@ -508,6 +512,9 @@ uruchomieniu z uprawnieniami `0600`.
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | systemd, Nginx/TLS, backup, aktualizacje, monitoring |
 | [docs/DATABASE.md](docs/DATABASE.md) | schemat SQL, indeksy, ustawienia, zapytania operacyjne |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | zakres danych, pseudonimizacja, retencja, RODO |
+| [docs/INSTRUKCJA.md](docs/INSTRUKCJA.md) | pełna instrukcja obsługi: instalacja, konfiguracja, konta, kuchnia, admin, backup, Cloudflare, FAQ, checklista |
+| [docs/SCIAGAWKA-UCZEN.md](docs/SCIAGAWKA-UCZEN.md) | jednostronicowa ściągawka dla ucznia do wydruku |
+| [docs/SCIAGAWKA-KUCHNIA.md](docs/SCIAGAWKA-KUCHNIA.md) | jednostronicowa ściągawka dla kuchni do wydruku |
 
 ## Ograniczenia i dalszy rozwój
 
