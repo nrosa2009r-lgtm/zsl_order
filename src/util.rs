@@ -136,15 +136,15 @@ mod tests {
     #[test]
     fn next_daily_run_is_strictly_in_the_future() {
         let before = APP_TZ.with_ymd_and_hms(2026, 11, 11, 2, 0, 0).unwrap();
-        let next = next_daily_run(before, 3, 30);
+        let next = next_daily_run(before, 4, 0);
         assert_eq!(local_date(next.timestamp()), Some(date(2026, 11, 11)));
-        assert_eq!(format_local_datetime(next.timestamp()), "2026-11-11 03:30");
+        assert_eq!(format_local_datetime(next.timestamp()), "2026-11-11 04:00");
         assert!(next > before);
 
-        let after = APP_TZ.with_ymd_and_hms(2026, 11, 11, 4, 0, 0).unwrap();
-        let next = next_daily_run(after, 3, 30);
+        let after = APP_TZ.with_ymd_and_hms(2026, 11, 11, 5, 0, 0).unwrap();
+        let next = next_daily_run(after, 4, 0);
         assert_eq!(local_date(next.timestamp()), Some(date(2026, 11, 12)));
-        assert_eq!(format_local_datetime(next.timestamp()), "2026-11-12 03:30");
+        assert_eq!(format_local_datetime(next.timestamp()), "2026-11-12 04:00");
     }
 
     #[test]

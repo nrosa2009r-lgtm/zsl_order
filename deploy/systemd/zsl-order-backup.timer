@@ -5,6 +5,7 @@ Description=ZSL Order - codzienna kopia zapasowa
 OnCalendar=*-*-* 03:15:00
 Persistent=true
 AccuracySec=1min
+RandomizedDelaySec=15min
 Unit=zsl-order-backup.service
 
 [Install]

@@ -141,7 +141,7 @@ podmiotom trzecim ani sprzedaży danych.
 
 ## 6. Retencja
 
-System ma wbudowane nocne czyszczenie (domyślnie o 03:30 czasu szkoły,
+System ma wbudowane nocne czyszczenie (domyślnie o 04:00 czasu szkoły,
 nigdy przy starcie; porcje po 1000 rekordów):
 
 - wygasłe sesje (ciasteczkowe i JWT) — zawsze,

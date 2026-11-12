@@ -305,7 +305,7 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   dane kontaktowe.
 - Retencja: wpisy starsze niż `RETENTION_AUDIT_DAYS` (domyślnie 90 dni)
   są usuwane przez nocne zadanie retencji o `RETENTION_RUN_AT`
-  (domyślnie 03:30), porcjami po 1000 rekordów.
+  (domyślnie 04:00), porcjami po 1000 rekordów.
 - Logi techniczne: `tracing` pisze **JSON na stdout**, a systemd przekazuje
   je do journald. Aplikacja nie tworzy ani nie rotuje plików `logs/`.
 - Middleware `request_log` zapisuje wyłącznie metodę, ścieżkę **bez

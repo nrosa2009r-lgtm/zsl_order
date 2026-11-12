@@ -245,7 +245,7 @@ osobnego pola konfiguracyjnego.
 ### 4.4. Retencja danych
 
 Czyszczenie odbywa się **wyłącznie raz na dobę** o godzinie
-`retention_run_at` w strefie `Europe/Warsaw` (domyślnie `03:30`). Nie
+`retention_run_at` w strefie `Europe/Warsaw` (domyślnie `04:00`). Nie
 uruchamia się przy starcie aplikacji. Każda porcja ma maksymalnie 1000
 rekordów, więc pojedyncza transakcja nie blokuje zapisów na długo.
 
@@ -254,7 +254,7 @@ rekordów, więc pojedyncza transakcja nie blokuje zapisów na długo.
 | `retention_orders_days` | `RETENTION_ORDERS_DAYS` | `0` | usuwanie całych dni zamówień starszych niż N; `0` = wyłączone |
 | `retention_idempotency_days` | `RETENTION_IDEMPOTENCY_DAYS` | `7` | zerowanie starych `orders.idempotency_key`; `0` = wyłączone |
 | `retention_audit_days` | `RETENTION_AUDIT_DAYS` | `90` | usuwanie wpisów audytu starszych niż N; `0` = wyłączone |
-| `retention_run_at` | `RETENTION_RUN_AT` | `03:30` | stała pora dobowa w formacie `HH:MM` |
+| `retention_run_at` | `RETENTION_RUN_AT` | `04:00` | stała pora dobowa w formacie `HH:MM` |
 
 Domyślne `RETENTION_ORDERS_DAYS=0` oznacza, że **stare zamówienia nie są
 usuwane**. Przy starcie pojawia się wtedy ostrzeżenie w logu:
@@ -654,6 +654,7 @@ Description=ZSL Order - codzienna kopia zapasowa
 OnCalendar=*-*-* 03:15:00
 Persistent=true
 AccuracySec=1min
+RandomizedDelaySec=15min
 Unit=zsl-order-backup.service
 
 [Install]
@@ -690,6 +691,14 @@ sudo journalctl -u zsl-order-backup.service -n 50 --no-pager
 godzina 03:15 koliduje z innymi zadaniami, zmień `OnCalendar` i wykonaj
 `systemctl daemon-reload`. Kopia działa niezależnie od tego, czy
 aplikacja jest uruchomiona; `VACUUM INTO` jest bezpieczne dla WAL.
+
+Kopia startuje o **03:15**, a `RandomizedDelaySec=15min` może ją opóźnić
+najpóźniej do **03:30**. Nocna retencja startuje o **04:00**, więc nawet
+z 15-minutowym opóźnieniem kopii zostaje co najmniej 30 minut na jej
+zakończenie — czyszczenie nigdy nie usuwa danych, zanim powstanie kopia.
+Jeśli baza jest duża, zmierz czas `systemctl start zsl-order-backup.service`
+i zachowaj margines; nie ustawiaj `RETENTION_RUN_AT` wcześniej niż typowy
+czas zakończenia kopii.
 
 ### 8.3. Kopiowanie poza serwer
 

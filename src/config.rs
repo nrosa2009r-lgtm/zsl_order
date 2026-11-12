@@ -286,8 +286,8 @@ impl Default for Config {
             retention_orders_days: 0,
             retention_idempotency_days: 7,
             retention_audit_days: 90,
-            retention_hour: 3,
-            retention_minute: 30,
+            retention_hour: 4,
+            retention_minute: 0,
             login_max_failures: 10,
             login_ip_max_failures: 300,
             login_window_minutes: 10,
@@ -566,7 +566,7 @@ impl Default for FileConfig {
             retention_orders_days: 0,
             retention_idempotency_days: 7,
             retention_audit_days: 90,
-            retention_run_at: "03:30".to_string(),
+            retention_run_at: "04:00".to_string(),
             login_max_failures: 10,
             login_ip_max_failures: 300,
             login_window_minutes: 10,
@@ -822,7 +822,7 @@ fn parse_retention_time(raw: &str) -> Result<(u32, u32), Box<dyn Error>> {
     let bytes = raw.as_bytes();
     if bytes.len() != 5 || bytes[2] != b':' {
         return Err(format!(
-            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Użyj formatu HH:MM, np. 03:30."
+            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Użyj formatu HH:MM, np. 04:00."
         )
         .into());
     }
@@ -832,7 +832,7 @@ fn parse_retention_time(raw: &str) -> Result<(u32, u32), Box<dyn Error>> {
         || !minute_raw.bytes().all(|byte| byte.is_ascii_digit())
     {
         return Err(format!(
-            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Użyj formatu HH:MM, np. 03:30."
+            "Nieprawidłowy RETENTION_RUN_AT „{raw}”. Użyj formatu HH:MM, np. 04:00."
         )
         .into());
     }
@@ -922,7 +922,7 @@ mod tests {
         assert_eq!(config.retention_orders_days, 0);
         assert_eq!(config.retention_idempotency_days, 7);
         assert_eq!(config.retention_audit_days, 90);
-        assert_eq!((config.retention_hour, config.retention_minute), (3, 30));
+        assert_eq!((config.retention_hour, config.retention_minute), (4, 0));
     }
 
     #[test]

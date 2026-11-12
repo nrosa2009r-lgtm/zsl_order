@@ -141,7 +141,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Retencja działa wyłącznie o stałej porze nocnej (domyślnie 03:30
+    // Retencja działa wyłącznie o stałej porze nocnej (domyślnie 04:00
     // czasu szkoły), nigdy przy starcie. Porcje po 1000 rekordów ograniczają
     // czas blokady bazy.
     let retention_state = state.clone();
