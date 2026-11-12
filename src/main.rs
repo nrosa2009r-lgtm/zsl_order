@@ -75,17 +75,16 @@ Użycie:
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let _log_guard = logging::init()?;
+    logging::init()?;
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
+        log_format = "json",
         "Uruchamianie ZSL Order"
     );
 
     let config = Config::load_or_create(CONF_PATH)?;
-    println!("ZSL ORDER — system stołówki szkolnej");
-    println!("Konfiguracja: {} + .env", CONF_PATH);
-    println!("Tryb wdrożenia: {}", config.mode.as_str());
     tracing::info!(
+        config_file = CONF_PATH,
         mode = config.mode.as_str(),
         bind = %config.bind_addr,
         public_url = config
@@ -108,9 +107,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    println!("Inicjalizacja bazy danych...");
     let pool = db::init(&config).await?;
-    println!("Baza danych gotowa.");
     tracing::info!("Baza danych gotowa");
 
     let dummy_hash = security::hash_password("timing-equalization-dummy-password")
@@ -190,15 +187,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let local = listener.local_addr()?;
-    if let Some(public_url) = &config.public_url {
-        println!("Publiczny adres: {}", public_url.origin());
-    }
-    println!("Serwer działa pod adresem: http://{local}");
-    println!("Panel ucznia:  http://{local}/student");
-    println!("Panel kuchni:  http://{local}/kitchen");
-    println!("Panel admina:  http://{local}/admin");
-    println!("Naciśnij Ctrl+C, aby zatrzymać.");
-    tracing::info!(address = %local, "Serwer uruchomiony");
+    tracing::info!(
+        address = %local,
+        public_url = config
+            .public_url
+            .as_ref()
+            .map(|url| url.origin())
+            .unwrap_or("brak"),
+        "Serwer uruchomiony"
+    );
 
     axum::serve(
         listener,

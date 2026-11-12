@@ -89,7 +89,7 @@ fn parse_single_ip(value: &str) -> Option<IpAddr> {
 /// Ostrzega (maks. raz na minutę), gdy w trybie tunnel zaufane proxy nie
 /// przekazało poprawnego adresu klienta. Bez tego wszyscy użytkownicy
 /// trafialiby po cichu do jednego koszyka adresu proxy.
-fn warn_about_broken_forwarding(state: &AppState, peer: IpAddr, resolved: ResolvedClientIp) {
+fn warn_about_broken_forwarding(state: &AppState, resolved: ResolvedClientIp) {
     const WARNING_INTERVAL: Duration = Duration::from_secs(60);
 
     if !state.cfg.is_tunnel()
@@ -113,7 +113,6 @@ fn warn_about_broken_forwarding(state: &AppState, peer: IpAddr, resolved: Resolv
     *last = Some(now);
 
     tracing::warn!(
-        peer = %peer,
         source = ?resolved.source,
         "Tryb tunnel: zaufane proxy nie przekazało poprawnego CF-Connecting-IP. \
          Używam adresu proxy, więc limity per IP będą wspólne. \
@@ -138,7 +137,7 @@ pub async fn client_ip_middleware(
 
     if let Some(peer) = peer {
         let resolved = resolve_client_ip(&state.cfg, peer, request.headers());
-        warn_about_broken_forwarding(&state, peer, resolved);
+        warn_about_broken_forwarding(&state, resolved);
         request.extensions_mut().insert(ClientIp(resolved.ip));
     }
 

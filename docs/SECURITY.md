@@ -37,9 +37,9 @@ denial-of-service na warstwie sieci.
   - alfabet bez znaków mylonych (`0/O`, `1/l/I`), gwarantowana wielka
     litera i cyfra, losowa kolejność (Fisher–Yates).
 - Hasła nigdy nie są przechowywane jawnie i nigdy nie są logowane.
-- Startowe hasło admina jest wypisywane w konsoli i zapisywane do
-  `admin_start.txt` z uprawnieniami `0600`; plik jest usuwany po zmianie
-  hasła.
+- Startowe hasło admina **nie jest wypisywane w konsoli ani w logach**;
+  trafia wyłącznie do `admin_start.txt` z uprawnieniami `0600`. Plik jest
+  usuwany po zmianie hasła.
 - Wymuszona zmiana hasła (`must_change_password`) blokuje całe API poza
   `me`, `logout`, `change-password`.
 - Polityka nowego hasła:
@@ -303,17 +303,23 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   `settings_updated`, `admin_seeded`.
 - `details` zawierają identyfikatory techniczne i statusy, nie imiona ani
   dane kontaktowe.
-- Retencja: wpisy starsze niż 90 dni są usuwane przy starcie.
-- Logi techniczne: `tracing` pisze na stdout oraz do dziennych plików
-  `logs/zsl_order.log.RRRR-MM-DD` (rotacja dzienna, bez wbudowanej
-  retencji — skonfiguruj `logrotate` lub `tmpfiles.d`).
+- Retencja: wpisy starsze niż `RETENTION_AUDIT_DAYS` (domyślnie 90 dni)
+  są usuwane przez nocne zadanie retencji o `RETENTION_RUN_AT`
+  (domyślnie 03:30), porcjami po 1000 rekordów.
+- Logi techniczne: `tracing` pisze **JSON na stdout**, a systemd przekazuje
+  je do journald. Aplikacja nie tworzy ani nie rotuje plików `logs/`.
 - Middleware `request_log` zapisuje wyłącznie metodę, ścieżkę **bez
   query string**, status HTTP i czas odpowiedzi. **Nie** loguje
   nagłówków, ciasteczek, `Authorization`, `X-CSRF-Token`, ciał żądań,
   adresów IP ani tokenów JWT.
-- Logi mogą zawierać identyfikatory techniczne (np. `user_id`), role i
-  komunikaty błędów; nie zawierają haseł ani sekretów. Katalog `logs/`
-  powinien mieć uprawnienia `0700` i należeć do użytkownika usługi.
+- Adres IP trafia do logów **wyłącznie** w zdarzeniach bezpieczeństwa:
+  `login_failed`, `login_locked` i `pickup_locked`. Zamiast loginu
+  zapisywane jest `account_id`, jeśli konto istnieje; nie logujemy
+  istnienia konta ani wprowadzonego loginu.
+- Logi mogą zawierać identyfikatory techniczne (np. `account_id`), role i
+  komunikaty błędów; nie zawierają haseł ani sekretów. Journald ogranicz
+  przez `SystemMaxUse` i `MaxRetentionSec` (np. 30 dni) — szczegóły w
+  [DEPLOYMENT.md](DEPLOYMENT.md).
 - Audyt nie jest niezmienny — administrator z dostępem do bazy może go
   modyfikować. Dla silniejszego reżimu należy wysyłać kopię do
   zewnętrznego, append-only systemu.
@@ -334,7 +340,7 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 | QR | bearer token w bazie i na ekranie | nie publikować QR; traktować jak bilet |
 | Krótki kod | ~28 bitów | tylko personel; nie używać jako publicznego linku |
 | Zależności | brak automatycznego audytu w CI | uruchamiać `cargo audit`, aktualizować zależności |
-| Logi HTTP | pliki dzienne bez wbudowanej retencji | `logrotate`/`tmpfiles.d`, katalog `logs/` 0700; nie logować nagłówków i ciał |
+| Logi HTTP | JSON w journald bez wbudowanego limitu rozmiaru | `SystemMaxUse` i `MaxRetentionSec` w journald; IP tylko w zdarzeniach bezpieczeństwa; nie logować nagłówków i ciał |
 | Tokeny JWT | 15 min, brak refresh tokenów; wymagają bezpiecznego przechowywania u klienta | HTTPS, pamięć/bezpieczny magazyn, nie logować; po podejrzeniu wycieku usunąć sesje JWT i `jwt.key` |
 | Sekret `jwt.key` | leży na dysku obok bazy | `0600`, właściciel usługi, backup tylko szyfrowany; rotacja = usunięcie pliku i restart (unieważnia wszystkie tokeny) |
 | Plik `admin_start.txt` | może pozostać, jeśli hasło nie zostanie zmienione | jak najszybciej zmienić hasło; plik ma `0600` |
@@ -380,8 +386,9 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 - [ ] Sprawdzone składanie i wydanie zamówienia oraz QR.
 - [ ] Sprawdzone wydanie tokenu JWT (`POST /api/auth/token`) i żądanie
       Bearer bez CSRF; logout Bearer unieważnia token (401).
-- [ ] `jwt.key` istnieje, ma `0600` i należy do użytkownika usługi;
-      `logs/` ma `0700`.
+- [ ] `jwt.key` istnieje, ma `0600` i należy do użytkownika usługi.
+- [ ] Journald ma ustawione `SystemMaxUse` i `MaxRetentionSec` (np. 30
+      dni); `journalctl -u zsl_order -o cat | jq .` zwraca poprawny JSON.
 
 ### Operacje
 

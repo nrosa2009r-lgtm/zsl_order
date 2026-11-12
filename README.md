@@ -63,7 +63,8 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 - **Walidacja wejścia i parametryzowany SQL** (`sqlx`), limit ciała żądania
   64 KiB, limit prób logowania.
 - **Dziennik zdarzeń** (audyt) z automatycznym czyszczeniem po 90 dniach
-  oraz techniczne logi dzienne w `logs/` (bez haseł, tokenów i adresów IP).
+  oraz techniczne logi JSON w journald (bez haseł, tokenów i adresów IP
+  poza zdarzeniami bezpieczeństwa).
 - **Statystyki i wykresy aktywności**: zamówienia dziennie, utarg, rozkład
   godzinowy, statusy i najczęściej zamawiane pozycje — rysowane na canvasie
   bez zewnętrznych bibliotek.
@@ -158,9 +159,9 @@ Aby ograniczyć dostęp do tego samego komputera, ustaw w `.env`:
 BIND_ADDR=127.0.0.1:3000
 ```
 
-Aplikacja wypisze adres, np. `http://127.0.0.1:3000`, oraz **jednorazowe
-dane startowego administratora**. Te same dane trafią do pliku
-`admin_start.txt` z uprawnieniami `0600`.
+Aplikacja wypisze adres, np. `http://127.0.0.1:3000`. **Jednorazowe dane
+startowego administratora nie są wypisywane w konsoli ani w logach** —
+trafiają wyłącznie do pliku `admin_start.txt` z uprawnieniami `0600`:
 
 ```text
 ==============================================
@@ -176,7 +177,7 @@ Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
 
 ### Pierwsze kroki
 
-1. Zaloguj się do `/admin` danymi z konsoli/pliku.
+1. Zaloguj się do `/admin` danymi z `admin_start.txt`.
 2. Zmień hasło startowe (system wymusi to przed dostępem do panelu).
 3. W zakładce **Konta** wygeneruj konta uczniów i kuchni albo zaimportuj
    uczniów z CSV (`klasa;liczba`, np. `1A;30`). Import nie przyjmuje imion
@@ -382,8 +383,10 @@ konkretną osobę, to po stronie szkoły mogą powstać dane osobowe.
   znaczniki czasu.
 - QR zawiera wyłącznie losowy token — bez loginu i danych ucznia.
 - Adresy IP nie są zapisywane w bazie; limiter logowania działa w pamięci.
-- Logi techniczne (`logs/`) zawierają metodę, ścieżkę, status i czas
-  odpowiedzi — bez IP, nagłówków, ciasteczek, tokenów i ciał żądań.
+- Logi techniczne to JSON w journald (metoda, ścieżka, status i czas
+  odpowiedzi) — bez nagłówków, ciasteczek, tokenów i ciał żądań. IP
+  występuje tylko w zdarzeniach bezpieczeństwa (nieudane logowanie,
+  blokada limitera), a zamiast loginu zapisywane jest ID konta.
 - Audyt zawiera identyfikator konta, typ zdarzenia i techniczny opis.
 
 Przed wdrożeniem szkoła powinna określić podstawę prawną, okres
@@ -474,7 +477,7 @@ zsl_order/
     ├── db.rs              # schemat, seed, audyt, bootstrap admina
     ├── auth.rs            # sesje cookie, JWT, CSRF, role, limiter
     ├── security.rs        # Argon2, tokeny, kody, sekret jwt.key
-    ├── logging.rs         # tracing + dzienne logi w logs/
+    ├── logging.rs         # tracing JSON na stdout (journald)
     ├── util.rs            # czas, walidacje
     ├── error.rs           # spójne błędy JSON
     └── handlers/
@@ -485,8 +488,10 @@ zsl_order/
         └── admin.rs
 ```
 
-Katalog `logs/` powstaje automatycznie przy starcie i nie jest wersjonowany.
-Podobnie `jwt.key` — sekret HMAC do tokenów JWT, tworzony przy pierwszym
+Aplikacja nie tworzy katalogu `logs/`. Logi to JSON na stdout, który
+systemd zapisuje w journald; ogranicz go przez `SystemMaxUse` i
+`MaxRetentionSec` (przykład w [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+`jwt.key` — sekret HMAC do tokenów JWT — powstaje przy pierwszym
 uruchomieniu z uprawnieniami `0600`.
 
 ## Dokumentacja
@@ -522,9 +527,11 @@ uruchomieniu z uprawnieniami `0600`.
 - Hasła nie są odzyskiwalne z bazy (tylko Argon2id); eksport CSV zawiera
   wyłącznie metadane kont. Ewentualny plik z hasłami trzeba zabezpieczyć
   i zniszczyć po przekazaniu uczniom.
-- Logi techniczne w `logs/` nie mają wbudowanej retencji — administrator
-  powinien okresowo je usuwać lub skonfigurować `logrotate`. Nie zawierają
-  haseł, tokenów sesji, ciasteczek, ciał żądań ani adresów IP.
+- Logi techniczne w journald nie mają wbudowanego limitu rozmiaru po
+  stronie aplikacji — administrator ustawia `SystemMaxUse` i
+  `MaxRetentionSec` w journald (np. 30 dni). Logi nie zawierają haseł,
+  tokenów sesji, ciasteczek ani ciał żądań; IP pojawia się wyłącznie w
+  zdarzeniach bezpieczeństwa.
 
 ## Licencja
 

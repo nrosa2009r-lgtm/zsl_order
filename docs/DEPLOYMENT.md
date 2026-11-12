@@ -44,11 +44,12 @@ cargo clippy --all-targets
     ├── baza.db-wal        # tworzone przez SQLite, 0600
     ├── baza.db-shm
     ├── jwt.key            # sekret HMAC JWT, 0600, tworzony przy starcie
-    ├── logs/              # dzienne logi, 0700, tworzone przy starcie
-    │   └── zsl_order.log.RRRR-MM-DD
     ├── backups/           # kopie bazy, 0700 i 0600, tworzone przez `backup`
     └── admin_start.txt    # tylko przy pierwszym uruchomieniu, 0600
 ```
+
+Aplikacja **nie tworzy katalogu `logs/`**. Logi trafiają jako JSON na
+stdout, a systemd przekazuje je do journald (patrz rozdział 6.2).
 
 Konfiguracja wdrożeniowa `.env` nie leży w `data/`. Znajduje się w
 `/etc/zsl-order/zsl-order.env` (`root:zsl-order`, `0640`) i jest
@@ -56,7 +57,7 @@ wczytywana przez systemd jako `EnvironmentFile`. Dzięki temu katalog
 roboczy aplikacji nie musi zawierać pliku ze zmiennymi środowiskowymi.
 
 Aplikacja używa **ścieżek względnych** (`config.json`, `baza.db`,
-`jwt.key`, `logs/`, `backups/`, `admin_start.txt`, `frontend/`) wobec
+`jwt.key`, `backups/`, `admin_start.txt`, `frontend/`) wobec
 katalogu roboczego. Dlatego `WorkingDirectory` musi wskazywać `data/`, a
 `frontend/` musi być dostępny względem tego katalogu. Można użyć
 symlinku:
@@ -89,7 +90,6 @@ Przy pierwszym starcie aplikacja tworzy w `data/`:
 
 - `baza.db` i pliki WAL (aplikacja wymusza `0600` na pliku bazy),
 - `jwt.key` (sekret HMAC do tokenów JWT, `0600`),
-- `logs/` (`0700`) z dziennymi plikami logów,
 - `admin_start.txt` (`0600`) tylko raz, gdy nie ma żadnego admina.
 
 `sudo install -d` i `UMask=0077` w systemd zapewniają, że nowe pliki nie
@@ -293,17 +293,19 @@ cd /opt/zsl_order/data
 sudo -u zsl /opt/zsl_order/zsl_order
 ```
 
-W konsoli pojawią się login i hasło startowego administratora. Te same
-dane są w `admin_start.txt` (`0600`). Następnie:
+W konsoli **nie są wypisywane** login ani hasło. Startowe dane trafiają
+wyłącznie do pliku `admin_start.txt` (`0600`) w katalogu `data/`, a w
+journalu pojawia się tylko informacja o utworzeniu konta. Odczytaj plik
+lokalnie (np. `sudo -u zsl cat /opt/zsl_order/data/admin_start.txt`):
 
 1. Zatrzymaj proces (`Ctrl+C`).
 2. Uruchom usługę systemd.
-3. Zaloguj się do `/admin` danymi startowymi.
+3. Zaloguj się do `/admin` danymi z `admin_start.txt`.
 4. Zmień hasło — plik `admin_start.txt` zostanie usunięty.
 5. Wygeneruj konta uczniów/kuchni i przekaż hasła bezpiecznym kanałem.
 
-Jeśli uruchomisz od razu usługę, dane znajdziesz w
-`/opt/zsl_order/data/admin_start.txt` oraz w `journalctl -u zsl_order`.
+Jeśli uruchomisz od razu usługę, dane również znajdziesz wyłącznie w
+`/opt/zsl_order/data/admin_start.txt`. Nie ma ich w `journalctl`.
 
 ## 6. Usługa systemd
 
@@ -421,25 +423,52 @@ przeglądu. `systemd-analyze` pokazuje też pojedyncze sugestie (np.
 aplikacji; nie wyłączaj jednak `ProtectSystem`, `NoNewPrivileges` ani
 `SystemCallArchitectures`.
 
-Aplikacja rotuje logi dziennie (`logs/zsl_order.log.RRRR-MM-DD`), ale nie
-usuwa starych plików. Dodaj `logrotate` (albo `tmpfiles.d`), np.
-`/etc/logrotate.d/zsl_order`:
+### 6.2. Logi JSON w journald
 
-```text
-/opt/zsl_order/data/logs/zsl_order.log.* {
-    daily
-    rotate 30
-    missingok
-    notifempty
-    compress
-    delaycompress
-    copytruncate
-    su zsl zsl
-}
+Aplikacja pisze logi wyłącznie jako **JSON na stdout**. Pod systemd
+stdout trafia do journald, więc nie powstaje katalog `logs/` ani pliki
+do rotacji. Nie konfiguruj `logrotate` dla tej aplikacji.
+
+Każdy wpis ma pola `timestamp`, `level` i `fields` (np. `event`,
+`method`, `path`, `status`, `latency_ms`). Żądania HTTP mają
+`event = "http_request"` i nie zawierają adresu IP, nagłówków, ciasteczek,
+tokenów ani ciał. Adres IP występuje wyłącznie w zdarzeniach
+bezpieczeństwa (`login_failed`, `login_locked`, `pickup_locked`); zamiast
+loginu zapisywane jest `account_id`, jeśli konto istnieje.
+
+Ogranicz rozmiar i czas przechowywania journalu:
+
+`/etc/systemd/journald.conf.d/zsl-order.conf`:
+
+```ini
+[Journal]
+SystemMaxUse=500M
+SystemMaxFileSize=50M
+MaxRetentionSec=30day
 ```
 
-Katalog `logs/` powinien mieć `0700`; pliki nie zawierają haseł ani
-tokenów, ale mogą ujawniać strukturę ruchu i identyfikatory techniczne.
+```bash
+sudo systemctl restart systemd-journald
+journalctl --disk-usage
+```
+
+`SystemMaxUse` ogranicza całkowity rozmiar journalu, a
+`MaxRetentionSec=30day` usuwa wpisy starsze niż 30 dni. Wartości dobierz
+do ruchu i polityki szkoły; 30 dni to wartość zgodna z
+[PRIVACY.md](PRIVACY.md).
+
+Podgląd i filtrowanie:
+
+```bash
+sudo journalctl -u zsl_order -f
+sudo journalctl -u zsl_order -o cat | jq .
+sudo journalctl -u zsl_order -o cat | jq 'select(.fields.event == "login_failed")'
+sudo journalctl -u zsl_order --since "2026-11-01" --until "2026-11-02" -o cat | jq .
+```
+
+`-o cat` usuwa prefiks journald, dzięki czemu każda linia jest czystym
+JSON-em. Nie używaj `journalctl -o json` i `jq` jednocześnie do filtrowania
+pól aplikacji — to format journald, nie JSON aplikacji.
 
 ## 7. Nginx + TLS
 
@@ -834,10 +863,11 @@ Kopię wykonuj przy zatrzymanej aplikacji albo przez wbudowane `backup`
 zmiany usuwające kolumny nadal wymagają ręcznej procedury i testu na
 kopii.
 
-Aktualizacja **nie usuwa** `jwt.key`, `logs/` ani bazy. Nowa binarka
+Aktualizacja **nie usuwa** `jwt.key` ani bazy. Nowa binarka
 może wymagać restartu, aby wczytać nowe trasy; nie usuwaj `jwt.key`,
 jeśli chcesz zachować ważność wydanych tokenów (i tak wygasają po 15
-minutach).
+minutach). Logi pozostają w journald — nie ma katalogu `logs/` do
+przenoszenia ani rotacji.
 
 ## 10. Monitoring
 
@@ -845,11 +875,13 @@ Minimum:
 
 - proces i port: `systemctl status zsl_order`, `ss -ltnp | grep 3000`,
 - health check: `GET /api/healthz` → 200 (sprawdza też bazę),
-- miejsce na dysku (baza + WAL + `logs/` + `backups/`),
+- miejsce na dysku (baza + WAL + `backups/` + journald; sprawdź
+  `journalctl --disk-usage`),
 - błędy w `journalctl -u zsl_order`,
 - `systemctl list-timers zsl-order-backup.timer` oraz
   `journalctl -u zsl-order-backup.service` (ostatnia kopia, błędy),
-- dzienne logi w `/opt/zsl_order/data/logs/` (rotacja i retencja),
+- zdarzenia bezpieczeństwa w journald:
+  `jq 'select(.fields.event != null and (.fields.event | startswith("login_") or . == "pickup_locked"))'`,
 - poprawność TLS (`openssl s_client`, certyfikaty),
 - czas systemowy (NTP).
 
@@ -861,11 +893,13 @@ oczekiwany status: 200
 oczekiwany content-type: application/json
 ```
 
-Aplikacja prowadzi własne logi techniczne (`logs/zsl_order.log.*`) z
-metodą, ścieżką, statusem i czasem odpowiedzi — **bez** ciasteczek,
-nagłówka `Authorization`/`X-CSRF-Token`, ciał żądań i adresów IP. Jeśli
-potrzebujesz logów dostępowych z IP, włącz je w Nginx, ale nie loguj
-ciastek, tokenów ani ciał żądań. Ustaw retencję i dostęp do logów.
+Aplikacja prowadzi logi techniczne wyłącznie w journald (JSON) z metodą,
+ścieżką, statusem i czasem odpowiedzi — **bez** ciasteczek, nagłówka
+`Authorization`/`X-CSRF-Token`, ciał żądań i adresów IP. Adres IP pojawia
+się tylko w zdarzeniach bezpieczeństwa (nieudane logowanie, blokada
+limitera). Jeśli potrzebujesz access logów z IP na poziomie proxy, włącz
+je w Nginx, ale nie loguj ciasteczek, tokenów ani ciał żądań. Ustaw
+retencję i dostęp do logów proxy.
 
 ## 11. Testy i smoke test
 
@@ -931,9 +965,10 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H "Authorization: Bearer $TOKEN" http://127.0.0.1:38080/api/auth/me
 
-# Uprawnienia plików i logi
-stat -c '%a %n' jwt.key logs admin_start.txt 2>/dev/null
-ls -l logs/
+# Uprawnienia plików i logi JSON na stdout (bez katalogu logs/)
+stat -c '%a %n' jwt.key admin_start.txt 2>/dev/null
+[ ! -e logs ] && echo "OK: brak katalogu logs"
+tail -n 5 server.log | jq -c .
 ```
 
 Po testach zatrzymaj proces i usuń katalog testowy, aby produkcyjna baza
@@ -967,7 +1002,7 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 | 401 po restarcie | sesja wygasła lub użytkownik dezaktywowany | zaloguj ponownie |
 | 401 na tokenie JWT | token wygasł (15 min), został unieważniony przez logout/zmianę hasła/dezaktywację, usunięto `jwt.key` lub baza nie ma wiersza sesji JWT | pobierz nowy token przez `/api/auth/token`; nie próbuj „naprawiać” tokenu |
 | `jwt.key` należy do roota lub usługa nie może go odczytać | plik utworzony przez innego użytkownika | `chown zsl:zsl jwt.key && chmod 600 jwt.key`, restart (aplikacja sama wymusza tryb 0600, ale nie właściciela) |
-| brak katalogu `logs/` lub brak zapisu | `ProtectSystem`/właściciel katalogu | upewnij się, że `data/` jest w `ReadWritePaths` i należy do `zsl`; katalog `logs/` tworzy aplikacja |
+| brak logów w `journalctl -u zsl_order` | usługa nie startuje lub `StandardOutput` nadpisany | sprawdź `systemctl status zsl_order` i `journalctl -u zsl_order -n 100`; aplikacja pisze JSON na stdout, nie tworzy `logs/` |
 | brak stron/404 na CSS/JS | brak `frontend/` w katalogu roboczym | symlink lub kopia `frontend/` |
 | `database is locked` | zbyt wiele zapisów / inne połączenie | zwiększ `busy_timeout` (w kodzie 5 s), ogranicz `max_connections`, sprawdź inne procesy |
 | brak danych startowego admina | admin już istnieje | użyj istniejącego konta lub procedury awaryjnej przez DB |

@@ -61,7 +61,7 @@ rozdzielanie usług.
 | `src/db.rs` | schemat, indeksy, seed ustawień i menu, czyszczenie, bootstrap admina, audyt, ustawienia |
 | `src/auth.rs` | sesje cookie i Bearer, JWT (claims, podpis, weryfikacja), CSRF, guardy ról, limiter logowania |
 | `src/security.rs` | Argon2id, generatory loginów/haseł/kodów, SHA-256 tokenów, sekret `jwt.key`, porównanie w czasie stałym |
-| `src/logging.rs` | inicjalizacja `tracing` (stdout + dzienne pliki `logs/`), middleware logujące żądania bez danych wrażliwych |
+| `src/logging.rs` | inicjalizacja `tracing` (JSON na stdout, journald), middleware logujące żądania bez danych wrażliwych |
 | `src/util.rs` | czas UTC, doba i godziny w `Europe/Warsaw`, formatowanie dat, walidacja `HH:MM` |
 | `src/error.rs` | `AppError`, spójne odpowiedzi JSON, mapowanie błędów SQL/Argon2/IO, logowanie błędów wewnętrznych |
 | `src/handlers/auth.rs` | login, wydanie tokenu JWT, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
@@ -253,18 +253,22 @@ hasła — **nie zawiera hasła**. System nie przechowuje haseł jawnych.
 
 ### 5.9. Logowanie techniczne
 
-- `logging::init()` tworzy `logs/` i dzienne pliki
-  `logs/zsl_order.log.RRRR-MM-DD` (`tracing-appender`).
+- `logging::init()` konfiguruje `tracing` do zapisu **JSON na stdout**.
+  Aplikacja nie tworzy plików ani katalogu `logs/`; pod systemd stdout
+  trafia do journald.
 - Domyślny filtr: `info,sqlx=warn,hyper=warn,axum=warn`; można nadpisać
   przez `RUST_LOG`.
-- Logi trafiają równolegle na stdout i do pliku.
-- Zdarzenia: start/konfiguracja/baza/serwer, logowania (sukces, brak konta,
-  błędne hasło, limiter), wydanie tokenu JWT, zmiany haseł,
+- Każdy wpis ma `timestamp`, `level` i `fields` (m.in. `event`, `method`,
+  `path`, `status`, `latency_ms`).
+- Zdarzenia: start/konfiguracja/baza/serwer, logowania (sukces,
+  `login_failed`, `login_locked`), wydanie tokenu JWT, zmiany haseł,
   generowanie/aktualizacja/usuwanie kont, reset hasła, eksport CSV, błędy
   wewnętrzne i błędy zapisu audytu.
 - **Nigdy** nie logujemy haseł, tokenów sesji/CSRF/JWT, sekretu `jwt.key`,
-  ciasteczek, ciał żądań ani adresów IP. Logowanie żądań nie zapisuje też
-  parametrów zapytania.
+  ciasteczek ani ciał żądań. Logowanie żądań nie zapisuje parametrów
+  zapytania. Adres IP występuje wyłącznie w zdarzeniach bezpieczeństwa
+  (`login_failed`, `login_locked`, `pickup_locked`), a zamiast loginu
+  zapisywane jest `account_id`.
 
 ## 6. Model danych (skrót)
 
@@ -336,7 +340,7 @@ Kluczowe decyzje:
 
 ```text
 main()
-  → logging::init() (stdout + logs/)
+  → logging::init() (JSON na stdout / journald)
   → Config::load_or_create("config.json" + .env)
       → walidacja DEPLOY_MODE, BIND_ADDR, TRUSTED_PROXIES, PUBLIC_URL
       → w tunnel: loopback + PUBLIC_URL wymagane, COOKIE_SECURE=true

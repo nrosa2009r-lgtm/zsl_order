@@ -23,8 +23,7 @@ ipnet = "2"
 jsonwebtoken = "9"
 tower-http = { version = "0.5", features = ["fs", "limit"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
-tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "time"] }
 
 [profile.release]
 opt-level = 3       # Maksymalna optymalizacja pod kątem szybkości kodu

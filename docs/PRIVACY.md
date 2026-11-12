@@ -141,19 +141,24 @@ podmiotom trzecim ani sprzedaży danych.
 
 ## 6. Retencja
 
-System ma wbudowane:
+System ma wbudowane nocne czyszczenie (domyślnie o 03:30 czasu szkoły,
+nigdy przy starcie; porcje po 1000 rekordów):
 
-- sesje: usuwane po wygaśnięciu (przy logowaniu/starcie),
-- audyt: usuwany po 90 dniach (przy starcie).
+- wygasłe sesje (ciasteczkowe i JWT) — zawsze,
+- klucze idempotencji starsze niż `RETENTION_IDEMPOTENCY_DAYS`
+  (domyślnie 7 dni) są zerowane, ale same zamówienia zostają,
+- audyt starszy niż `RETENTION_AUDIT_DAYS` (domyślnie 90 dni),
+- zamówienia starsze niż `RETENTION_ORDERS_DAYS`; **domyślnie 0, czyli
+  wyłączone** — przy starcie pojawia się wtedy ostrzeżenie w logu.
 
-Poza tym **nie ma automatycznej retencji zamówień i kont**. Szkoła musi
+Poza tym **nie ma automatycznej retencji kont**. Szkoła musi
 ustalić politykę, np.:
 
 | Dane | Rekomendacja |
 | --- | --- |
-| sesje | maks. `session_hours` (domyślnie 12 h) |
-| audyt | 90 dni (wbudowane) |
-| zamówienia i pozycje | rok szkolny lub krócej; następnie usuń lub zanonimizuj |
+| sesje | maks. `session_hours` (domyślnie 12 h); JWT 15 min |
+| audyt | 90 dni (`RETENTION_AUDIT_DAYS`) |
+| zamówienia i pozycje | `RETENTION_ORDERS_DAYS` (domyślnie 0 = brak usuwania); rok szkolny lub krócej |
 | konta uczniów | do końca roku szkolnego; potem dezaktywuj i usuń |
 | konta kuchni/admina | przez okres zatrudnienia/umowy |
 | backupy | krótko, zgodnie z polityką; szyfrowane i ograniczone |
@@ -217,8 +222,14 @@ administratora i dostęp do bazy, z zachowaniem backupu i audytu.
 
 - QR: `ZSL:<48 hex>` — losowy token, bez danych ucznia. Traktuj jak bilet.
 - Krótki kod: 6 liter, wygoda personelu; nie publikuj.
-- Logi aplikacji: błędy na stderr (journal). Nie loguj ciasteczek, CSRF,
-  haseł ani tokenów QR.
+- Logi aplikacji: **JSON w journald**, bez plików `logs/`. Zawierają
+  metodę, ścieżkę bez query, status i czas odpowiedzi oraz techniczne
+  komunikaty (np. `account_id`, rola). **Nie** zawierają nagłówków,
+  ciasteczek, tokenów JWT/CSRF, haseł ani ciał żądań. Adres IP występuje
+  wyłącznie w zdarzeniach bezpieczeństwa (nieudane logowanie, blokada
+  limitera); zamiast loginu zapisywane jest ID konta. Ustaw retencję
+  journald na 30 dni (`MaxRetentionSec=30day`) i limit rozmiaru
+  (`SystemMaxUse`), zgodnie z [DEPLOYMENT.md](DEPLOYMENT.md).
 - Logi proxy (jeśli włączone): zawierają IP i ścieżki — ustal retencję,
   ogranicz dostęp, nie loguj ciał żądań.
 - Audyt: techniczny, 90 dni; może być kopiowany do systemu append-only.

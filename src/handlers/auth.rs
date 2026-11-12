@@ -85,7 +85,12 @@ async fn authenticate(
     let limiter_login: String = login.chars().take(64).collect();
 
     if let Err(retry_after) = state.login_limiter.check(ip, &limiter_login) {
-        tracing::warn!(login = %limiter_login, retry_after, "Logowanie zablokowane przez limiter");
+        tracing::warn!(
+            event = "login_locked",
+            ip = %ip,
+            retry_after,
+            "Logowanie zablokowane przez limiter"
+        );
         return Err(AppError::TooManyRequests {
             retry_after,
             message: "Zbyt wiele prób logowania. Spróbuj ponownie później.".to_string(),
@@ -94,7 +99,12 @@ async fn authenticate(
 
     if login.is_empty() || login.len() > 64 || password.is_empty() || password.len() > 256 {
         state.login_limiter.failure(ip, &limiter_login);
-        tracing::warn!(login = %limiter_login, "Nieudane logowanie: nieprawidłowe dane wejściowe");
+        tracing::warn!(
+            event = "login_failed",
+            ip = %ip,
+            reason = "invalid_input",
+            "Nieudane logowanie: nieprawidłowe dane wejściowe"
+        );
         return Err(AppError::unauthorized("Nieprawidłowy login lub hasło."));
     }
 
@@ -110,14 +120,26 @@ async fn authenticate(
         // Ten sam koszt obliczeniowy co dla istniejącego konta.
         let _ = verify_password_async(password.to_string(), state.dummy_hash.clone()).await;
         state.login_limiter.failure(ip, &limiter_login);
-        tracing::warn!(login = %limiter_login, "Nieudane logowanie: konto nie istnieje");
+        tracing::warn!(
+            event = "login_failed",
+            ip = %ip,
+            reason = "unknown_account",
+            "Nieudane logowanie: konto nie istnieje"
+        );
         return Err(AppError::unauthorized("Nieprawidłowy login lub hasło."));
     };
 
     let valid = verify_password_async(password.to_string(), row.password_hash.clone()).await;
     if !valid || !row.active {
         state.login_limiter.failure(ip, &limiter_login);
-        tracing::warn!(login = %limiter_login, active = row.active, "Nieudane logowanie: błędne hasło lub konto nieaktywne");
+        tracing::warn!(
+            event = "login_failed",
+            ip = %ip,
+            account_id = row.id,
+            active = row.active,
+            reason = if valid { "inactive" } else { "bad_password" },
+            "Nieudane logowanie: błędne hasło lub konto nieaktywne"
+        );
         return Err(AppError::unauthorized("Nieprawidłowy login lub hasło."));
     }
 

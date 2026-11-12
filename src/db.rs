@@ -224,7 +224,8 @@ async fn ensure_initial_admin(pool: &SqlitePool) -> Result<(), Box<dyn Error>> {
          ==============================================\n"
     );
 
-    if let Ok(()) = fs::write("admin_start.txt", &content) {
+    let saved = fs::write("admin_start.txt", &content).is_ok();
+    if saved {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -240,8 +241,17 @@ async fn ensure_initial_admin(pool: &SqlitePool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await;
 
-    println!("\n{content}");
-    println!("Dane zapisano również w pliku admin_start.txt (tylko właściciel).\n");
+    if saved {
+        tracing::warn!(
+            file = "admin_start.txt",
+            "Utworzono startowe konto administratora. Login i hasło są tylko w pliku admin_start.txt (0600) — odbierz je lokalnie i zmień hasło po pierwszym logowaniu."
+        );
+    } else {
+        tracing::error!(
+            file = "admin_start.txt",
+            "Utworzono startowe konto administratora, ale nie udało się zapisać danych do pliku. Użyj procedury awaryjnej resetu hasła z docs/DEPLOYMENT.md."
+        );
+    }
 
     Ok(())
 }

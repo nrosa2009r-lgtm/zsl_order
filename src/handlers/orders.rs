@@ -606,7 +606,9 @@ pub async fn staff_pickup(
 ) -> Result<Json<serde_json::Value>, AppError> {
     if let Err(retry_after) = state.pickup_limiter.check(user.id, client.0) {
         tracing::warn!(
-            user_id = user.id,
+            event = "pickup_locked",
+            account_id = user.id,
+            ip = %client.0,
             retry_after,
             "Odczyt kodu odbioru zablokowany przez limiter"
         );
@@ -634,6 +636,13 @@ pub async fn staff_pickup(
     let Some(id) = id else {
         state.pickup_limiter.failure(user.id, client.0);
         if let Err(retry_after) = state.pickup_limiter.check(user.id, client.0) {
+            tracing::warn!(
+                event = "pickup_locked",
+                account_id = user.id,
+                ip = %client.0,
+                retry_after,
+                "Odczyt kodu odbioru zablokowany po nieudanej próbie"
+            );
             return Err(AppError::TooManyRequests {
                 retry_after,
                 message: "Zbyt wiele nieudanych prób odczytu kodu. Odczekaj chwilę.".to_string(),
