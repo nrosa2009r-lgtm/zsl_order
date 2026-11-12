@@ -163,6 +163,12 @@ ustalić politykę, np.:
 | konta kuchni/admina | przez okres zatrudnienia/umowy |
 | backupy | krótko, zgodnie z polityką; szyfrowane i ograniczone |
 
+**Kopie zapasowe zawierają dane starsze niż okres retencji.** Backup jest
+migawką stanu z chwili jego wykonania, więc zamówienia, sesje lub wpisy
+audytu usunięte później przez nocne czyszczenie nadal mogą znajdować się
+w starszych kopiach. Usunięcie danych z bazy nie usuwa ich z backupów —
+retencja i szyfrowanie kopii muszą być częścią tej samej polityki.
+
 Przykładowe zapytania retencji: [DATABASE.md](DATABASE.md#6-retencja-i-porządki).
 
 ## 7. Prawa osób
