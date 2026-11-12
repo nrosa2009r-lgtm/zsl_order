@@ -196,8 +196,10 @@ Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
 - Startowe konto administratora powstaje **tylko wtedy**, gdy w bazie nie ma
   żadnego konta z rolą `admin`.
 - Login i hasło są losowe (hasło 18 znaków, gwarantowana litera i cyfra).
-- Plik `admin_start.txt` ma uprawnienia `0600` (tylko właściciel) i jest
-  usuwany po zmianie hasła przez administratora.
+- Plik `admin_start.txt` ma uprawnienia `0600` (tylko właściciel), leży w
+  katalogu `data/` poza serwowanym `frontend/` (HTTP zwraca `404`) i jest
+  usuwany po zmianie hasła przez administratora. Usuń go także ręcznie,
+  jeśli zmiana hasła się nie powiedzie.
 - Nowe konta (`student`, `kitchen`, `admin`) generuje administrator.
   Hasła są zwracane **tylko raz** w odpowiedzi API i nigdy nie są zapisywane
   jawnie.

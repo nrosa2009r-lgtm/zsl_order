@@ -182,9 +182,43 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Zapisuje dane startowe administratora do pliku `admin_start.txt`.
+///
+/// Plik powstaje od razu z uprawnieniami `0600` (na systemach unix), a nie
+/// dopiero po zapisie — dzięki temu nawet krótkie okno między utworzeniem
+/// a `chmod` nie ujawnia hasła innym użytkownikom hosta.
+fn write_admin_start_file(content: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let opened = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open("admin_start.txt");
+        match opened {
+            Ok(mut file) => {
+                // `mode` działa tylko przy tworzeniu; wymuś 0600 także dla
+                // pliku, który pozostał po wcześniejszym nieudanym starcie.
+                let _ = fs::set_permissions("admin_start.txt", fs::Permissions::from_mode(0o600));
+                file.write_all(content.as_bytes()).is_ok()
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write("admin_start.txt", content).is_ok()
+    }
+}
+
 /// Tworzy pierwsze konto administratora tylko wtedy, gdy nie ma żadnego.
-/// Dane startowe są losowe, wypisywane w konsoli i zapisywane do pliku
-/// `admin_start.txt` z uprawnieniami 0600. Plik jest usuwany po zmianie hasła.
+/// Dane startowe są losowe i trafiają wyłącznie do pliku `admin_start.txt`
+/// z uprawnieniami 0600 (nie do konsoli ani journald). Plik jest usuwany po
+/// zmianie hasła.
 async fn ensure_initial_admin(pool: &SqlitePool) -> Result<(), Box<dyn Error>> {
     let admins: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
         .fetch_one(pool)
@@ -224,14 +258,7 @@ async fn ensure_initial_admin(pool: &SqlitePool) -> Result<(), Box<dyn Error>> {
          ==============================================\n"
     );
 
-    let saved = fs::write("admin_start.txt", &content).is_ok();
-    if saved {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions("admin_start.txt", fs::Permissions::from_mode(0o600));
-        }
-    }
+    let saved = write_admin_start_file(&content);
 
     let _ = sqlx::query(
         "INSERT INTO audit_log (actor_id, action, details, created_at)

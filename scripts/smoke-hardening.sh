@@ -92,6 +92,21 @@ done
 ADMIN_LOGIN=$(sed -n 's/^Login:  //p' "$BASE/admin_start.txt" | head -n1)
 ADMIN_PASS=$(sed -n 's/^Hasło:  //p' "$BASE/admin_start.txt" | head -n1)
 
+MODE=$(stat -c '%a' "$BASE/admin_start.txt" 2>/dev/null)
+[ "$MODE" = "600" ] && pass "admin: admin_start.txt ma 0600" \
+  || fail "admin: admin_start.txt ma ${MODE:-brak} zamiast 600"
+
+if git -C "$ROOT" check-ignore -q admin_start.txt; then
+  pass "admin: admin_start.txt jest w .gitignore"
+else
+  fail "admin: admin_start.txt nie jest w .gitignore"
+fi
+
+# Plik leży w katalogu roboczym, nie w serwowanym frontend/.
+request GET /admin_start.txt "" "" ""
+[ "$STATUS" = "404" ] && pass "admin: admin_start.txt nie jest serwowany (404)" \
+  || fail "admin: admin_start.txt dostępny przez HTTP ($STATUS)"
+
 # ---------------------------------------------------------------- healthz
 request GET /api/healthz "" "" ""
 [ "$STATUS" = "200" ] && pass "healthz: /api/healthz 200" || fail "healthz: /api/healthz $STATUS"
@@ -103,6 +118,12 @@ ADMIN_JAR="$TMP/admin.jar"
 login "$ADMIN_LOGIN" "$ADMIN_PASS" "$ADMIN_JAR"
 [ "$STATUS" = "200" ] && pass "admin: logowanie startowe" || fail "admin: logowanie $STATUS"
 ADMIN_CSRF="$CSRF"
+
+request GET /api/admin/users "$ADMIN_JAR" "" ""
+CODE=$(printf '%s' "$BODY" | jq -r '.code // empty' 2>/dev/null)
+[ "$STATUS" = "403" ] && [ "$CODE" = "password_change_required" ] \
+  && pass "admin: pierwsze logowanie wymusza zmianę hasła" \
+  || fail "admin: brak wymuszonej zmiany hasła ($STATUS/$CODE)"
 
 request POST /api/auth/change-password "$ADMIN_JAR" "$ADMIN_CSRF" \
   '{"current_password":"'"$ADMIN_PASS"'","new_password":"abcdefghijk"}' 
@@ -120,6 +141,12 @@ ADMIN_NEW="NoweAdmin#2026x"
 request POST /api/auth/change-password "$ADMIN_JAR" "$ADMIN_CSRF" \
   '{"current_password":"'"$ADMIN_PASS"'","new_password":"'"$ADMIN_NEW"'"}'
 [ "$STATUS" = "200" ] && pass "hasło: poprawne 15 znaków przyjęte" || fail "hasło: poprawne -> $STATUS ($BODY)"
+[ ! -f "$BASE/admin_start.txt" ] && pass "admin: admin_start.txt usunięty po zmianie hasła" \
+  || fail "admin: admin_start.txt nadal istnieje po zmianie hasła"
+
+request GET /api/admin/users "$ADMIN_JAR" "" ""
+[ "$STATUS" = "200" ] && pass "admin: po zmianie hasła panel dostępny" \
+  || fail "admin: po zmianie hasła panel -> $STATUS ($BODY)"
 
 # ---------------------------------------------------------------- CSV import
 IMPORT_OK=$'klasa;liczba\n1A;2\n2B;1\n'

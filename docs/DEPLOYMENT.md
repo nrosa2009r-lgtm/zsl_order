@@ -307,6 +307,14 @@ lokalnie (np. `sudo -u zsl cat /opt/zsl_order/data/admin_start.txt`):
 Jeśli uruchomisz od razu usługę, dane również znajdziesz wyłącznie w
 `/opt/zsl_order/data/admin_start.txt`. Nie ma ich w `journalctl`.
 
+Plik leży w katalogu roboczym `data/`, a nie w `frontend/`, więc **nie jest
+serwowany przez HTTP** — żądanie `/admin_start.txt` kończy się `404`.
+Po odczytaniu danych i zmianie hasła plik jest usuwany automatycznie.
+Jeśli zmiana hasła się nie powiedzie, usuń go ręcznie:
+`sudo -u zsl rm /opt/zsl_order/data/admin_start.txt`. Nie kopiuj go do
+`frontend/`, nie wysyłaj e-mailem i nie zostawiaj na serwerze po pierwszym
+logowaniu.
+
 ## 6. Usługa systemd
 
 Jednostka jest w repozytorium jako `deploy/systemd/zsl-order.service`.

@@ -38,8 +38,10 @@ denial-of-service na warstwie sieci.
     litera i cyfra, losowa kolejność (Fisher–Yates).
 - Hasła nigdy nie są przechowywane jawnie i nigdy nie są logowane.
 - Startowe hasło admina **nie jest wypisywane w konsoli ani w logach**;
-  trafia wyłącznie do `admin_start.txt` z uprawnieniami `0600`. Plik jest
-  usuwany po zmianie hasła.
+  trafia wyłącznie do `admin_start.txt` z uprawnieniami `0600`. Plik leży
+  w katalogu roboczym `data/`, poza serwowanym `frontend/`, więc nie jest
+  dostępny przez HTTP. Usuń go po pierwszym logowaniu i zmianie hasła
+  (aplikacja robi to automatycznie; w razie błędu usuń ręcznie).
 - Wymuszona zmiana hasła (`must_change_password`) blokuje całe API poza
   `me`, `logout`, `change-password`.
 - Polityka nowego hasła:
