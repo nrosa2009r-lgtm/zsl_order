@@ -23,7 +23,7 @@ BODY=""
 request() {
   local method=$1 path=$2 jar=$3 csrf=$4 data=$5 ctype=${6:-application/json}
   local args=(-s --noproxy '*' -X "$method" -H "Host: $HOSTADDR" -H "Origin: $ORIGIN"
-    -o "$TMP/body" -w '%{http_code}')
+    -D "$TMP/headers" -o "$TMP/body" -w '%{http_code}')
   [ -n "$jar" ] && args+=(-b "$jar")
   [ -n "$csrf" ] && args+=(-H "X-CSRF-Token: $csrf")
   if [ -n "$data" ]; then
@@ -40,6 +40,10 @@ login() {
     -d "{\"login\":\"$user\",\"password\":\"$pw\"}" "http://$HOSTADDR/api/auth/login")
   BODY=$(cat "$TMP/body")
   CSRF=$(printf '%s' "$BODY" | jq -r '.csrf_token // empty')
+}
+
+response_header() {
+  tr -d '\r' <"$TMP/headers" | grep -i "^$1:" | tail -n1 | cut -d' ' -f2-
 }
 
 PIDS=()
@@ -136,6 +140,22 @@ if grep -qF 'jsQR v1.4.0' "$TMP/jsqr.js" 2>/dev/null; then
   pass "jsQR: plik serwowany lokalnie z nagłówkiem wersji"
 else
   fail "jsQR: brak pliku lub nagłówka wersji"
+fi
+
+# ---------------------------------------------------------------- hasła startowe (frontend)
+ADMIN_JS="$ROOT/frontend/admin.js"
+if grep -Eq 'localStorage|sessionStorage|indexedDB' "$ADMIN_JS"; then
+  fail "hasła: admin.js używa trwałego magazynu przeglądarki"
+else
+  pass "hasła: admin.js nie używa localStorage/sessionStorage/IndexedDB"
+fi
+if grep -qF 'Hasła nie będą dostępne po wyjściu' "$ADMIN_JS" \
+  && grep -qF 'konta-start-' "$ADMIN_JS" \
+  && grep -qF 'klasa/grupa' "$ADMIN_JS" \
+  && grep -qF 'URL.revokeObjectURL' "$ADMIN_JS"; then
+  pass "hasła: ostrzeżenie, nazwa pliku, nagłówek CSV i revoke URL obecne"
+else
+  fail "hasła: brak ostrzeżenia, nazwy pliku, nagłówka CSV lub revoke URL"
 fi
 
 # ---------------------------------------------------------------- admin login + policy
@@ -251,6 +271,9 @@ fi
 
 # ---------------------------------------------------------------- RBAC matrix
 request POST /api/admin/users/generate "$ADMIN_JAR" "$ADMIN_CSRF" '{"role":"kitchen","count":1}'
+GEN_CACHE=$(response_header Cache-Control)
+[ "$GEN_CACHE" = "no-store" ] && pass "generate: Cache-Control no-store" \
+  || fail "generate: Cache-Control=${GEN_CACHE:-brak}"
 K_LOGIN=$(printf '%s' "$BODY" | jq -r '.accounts[0].login')
 K_PASS=$(printf '%s' "$BODY" | jq -r '.accounts[0].password')
 K_JAR="$TMP/kitchen.jar"
@@ -301,13 +324,35 @@ for entry in "${STAFF_ROUTES[@]}"; do
   expect_forbidden "$S1_JAR" "$S1_CSRF" "uczeń" ${entry%% *} ${entry#* }
 done
 
-# Audyt importu: kto, ile kont, bez haseł.
+# Audyt importu/generowania: kto, ile kont, bez haseł.
 request GET /api/admin/audit "$ADMIN_JAR" "" ""
 AUDIT_HIT=$(printf '%s' "$BODY" | jq '[.[] | select(.action == "users_imported")] | length')
 [ "$AUDIT_HIT" -ge 1 ] && pass "audyt: wpis users_imported obecny" || fail "audyt: brak users_imported"
+GENERATED_HIT=$(printf '%s' "$BODY" | jq '[.[] | select(.action == "users_generated")] | length')
+[ "$GENERATED_HIT" -ge 1 ] && pass "audyt: wpis users_generated obecny" || fail "audyt: brak users_generated"
 printf '%s' "$BODY" | grep -qF -- "$IMPORT_PASS" \
   && fail "audyt: zawiera hasło z importu" \
   || pass "audyt: brak haseł z importu w logu audytu"
+printf '%s' "$BODY" | grep -qF -- "$K_PASS" \
+  && fail "audyt: zawiera wygenerowane hasło" \
+  || pass "audyt: brak wygenerowanych haseł w logu audytu"
+
+# Hasła nie mogą wyciekać w odpowiedziach endpointów innych niż
+# generate/import. Eksport CSV metadanych również ich nie zawiera.
+for endpoint in \
+  "/api/admin/users" \
+  "/api/admin/users/export.csv" \
+  "/api/admin/audit" \
+  "/api/admin/settings" \
+  "/api/admin/stats"; do
+  request GET "$endpoint" "$ADMIN_JAR" "" ""
+  if printf '%s' "$BODY" | grep -qF -- "$IMPORT_PASS" \
+    || printf '%s' "$BODY" | grep -qF -- "$K_PASS"; then
+    fail "wyciek: $endpoint zawiera hasło startowe"
+  else
+    pass "wyciek: $endpoint bez haseł startowych"
+  fi
+done
 
 # ---------------------------------------------------------------- pickup limit
 for i in $(seq 1 8); do
@@ -335,12 +380,15 @@ done
 login "s-nieistnieje" "zle-haslo-11" "$TMP/nieistnieje.jar"
 [ "$STATUS" = "429" ] && pass "login: konto zablokowane po 10 błędach (429)" || fail "login: limit konta -> $STATUS"
 
-# Hasła nie mogą trafić do logów technicznych.
-if grep -rqF -- "$IMPORT_PASS" "$BASE/logs" 2>/dev/null; then
-  fail "logi: zawierają hasło z importu"
-else
-  pass "logi: brak haseł z importu"
-fi
+# Hasła nie mogą trafić do logów technicznych (stdout -> journald
+# w produkcji; w smoke trafia do server.log).
+for password in "$IMPORT_PASS" "$K_PASS"; do
+  if grep -rqF -- "$password" "$BASE/server.log" "$BASE/logs" 2>/dev/null; then
+    fail "logi: zawierają hasło startowe"
+  else
+    pass "logi: brak hasła startowego w logach technicznych"
+  fi
+done
 
 printf '\nWynik: %d błędów\n' "$FAILS"
 exit "$FAILS"

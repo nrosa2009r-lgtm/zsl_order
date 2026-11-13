@@ -506,7 +506,8 @@ pub async fn generate_users(
         secret_headers(),
         Json(serde_json::json!({
             "accounts": accounts,
-            "note": "Hasła są widoczne tylko teraz. Zapisz je i przekaż uczniom w bezpieczny sposób."
+            "generated_at": now,
+            "note": "Hasła są widoczne tylko teraz. Pobierz CSV i przekaż je uczniom w bezpieczny sposób."
         })),
     ))
 }
@@ -731,6 +732,7 @@ pub async fn import_users_csv(
         secret_headers(),
         Json(serde_json::json!({
             "accounts": accounts,
+            "generated_at": now,
             "groups": groups
                 .iter()
                 .map(|group| serde_json::json!({
@@ -738,7 +740,7 @@ pub async fn import_users_csv(
                     "count": group.count,
                 }))
                 .collect::<Vec<_>>(),
-            "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
+            "note": "Hasła są widoczne tylko teraz. Pobierz CSV, wydrukuj karty i przekaż je uczniom w bezpieczny sposób."
         })),
     ))
 }
@@ -1299,6 +1301,35 @@ mod tests {
         assert_eq!(csv_cell("+51"), "\"'+51\"");
         assert_eq!(csv_cell("-1"), "\"'-1\"");
         assert_eq!(csv_cell("@x"), "\"'@x\"");
+    }
+
+    #[test]
+    fn generated_credentials_use_safe_alphabet() {
+        const SPECIAL: &[char] = &['=', '+', '-', '@'];
+        const AMBIGUOUS: &[char] = &['0', 'O', '1', 'l', 'I'];
+
+        for _ in 0..200 {
+            let password = crate::security::random_password(14);
+            let login = crate::security::generate_login("s-1a");
+
+            let first_password = password.chars().next().expect("hasło nie jest puste");
+            let first_login = login.chars().next().expect("login nie jest pusty");
+            assert!(first_password.is_ascii_alphanumeric());
+            assert!(first_login.is_ascii_alphanumeric());
+            assert!(!SPECIAL.contains(&first_password));
+            assert!(!SPECIAL.contains(&first_login));
+
+            for character in password.chars() {
+                assert!(!SPECIAL.contains(&character), "znak specjalny w haśle");
+                assert!(!AMBIGUOUS.contains(&character), "znak mylący w haśle");
+            }
+            assert!(
+                password
+                    .chars()
+                    .any(|character| character.is_ascii_alphabetic())
+            );
+            assert!(password.chars().any(|character| character.is_ascii_digit()));
+        }
     }
 
     #[test]

@@ -390,31 +390,61 @@ Zasady:
 - separatorem może być `;` lub `,`.
 
 W panelu: **Konta → Import CSV**. Po imporcie system pokaże listę kont
-z hasłami **tylko ten jeden raz**. Od razu wydrukuj lub zapisz hasła w
-bezpieczny sposób. Audyt zapisuje tylko liczbę kont i grup — nigdy hasła.
+z hasłami **tylko ten jeden raz** oraz przycisk **Pobierz CSV**.
+Plik powstaje w przeglądarce i nie jest ponownie wysyłany na serwer.
+Ma nazwę `konta-start-RRRR-MM-DD-HHMM.csv`, separator `;`, kodowanie
+UTF-8 z BOM i kolumny:
+
+```text
+klasa/grupa;login;kod konta;hasło startowe;data wygenerowania
+```
+
+Nie zawiera imion ani nazwisk. Audyt zapisuje wyłącznie zdarzenie
+importu (kto, ile kont, jakie grupy) — nigdy hasła i bez licznika
+pobrań pliku.
 
 ### 4.2. Generowanie pojedynczych kont
 
 W panelu **Konta → Wygeneruj** wybierz rolę (`student`, `kitchen`,
 `admin`) i liczbę kont. Hasła są widoczne wyłącznie w odpowiedzi po
-utworzeniu. Nowe konto ma wymuszoną zmianę hasła przy pierwszym logowaniu.
+utworzeniu. Użyj przycisku **Pobierz CSV** — format i nazwa pliku są
+takie same jak przy imporcie, a kolumna `klasa/grupa` pozostaje pusta.
+Nowe konto ma wymuszoną zmianę hasła przy pierwszym logowaniu.
 
-### 4.3. Wydruk kart z hasłami
+### 4.3. Pobranie CSV i wydruk kart z hasłami
 
-Praktyczna procedura:
+Hasła startowe są widoczne **tylko raz** — bezpośrednio po imporcie lub
+generowaniu. Po opuszczeniu zakładki **Użytkownicy** strona czyści je
+z pamięci; ponowne pobranie pliku nie jest możliwe. Jedyną alternatywą
+jest **Reset hasła** dla konkretnego konta.
 
-1. Wydrukuj karty **jednostronnie** — na odwrocie nie może być innej
-   kartki z danymi.
-2. Rozetnij i zabezpiecz kartki (koperta, zaklejony stos, teczka
-   wychowawcy).
-3. Każda karta zawiera login, hasło startowe i adres panelu.
-4. Hasło jest **jednorazowe** — uczeń zmienia je przy pierwszym
-   logowaniu. Karta po wykorzystaniu nie pozwala na ponowne wejście.
-5. Nie wysyłaj haseł e-mailem, na grupowy czat ani do dziennika
-   elektronicznego w treści wiadomości. Jeśli musisz przekazać zdalnie,
-   użyj indywidualnego, bezpiecznego kanału.
-6. Po rozdaniu kart odnotuj, które konta wydano, i zniszcz nadmiarowe
-   wydruki (najlepiej przez zniszczarkę).
+Procedura:
+
+1. Po imporcie/generowaniu kliknij **Pobierz CSV**. Plik
+   `konta-start-RRRR-MM-DD-HHMM.csv` zapisze się w folderze **Pobrane**.
+2. Otwórz plik tylko na komputerze administratora. Nie wysyłaj go
+   e-mailem, komunikatorem, nie wrzucaj do chmury ani na dysk sieciowy.
+3. Wydrukuj karty **jednostronnie w zamkniętym pomieszczeniu** — na
+   odwrocie nie może być innej kartki z danymi. Pilnuj, aby nikt
+   postronny nie widział wydruku ani ekranu.
+4. Natychmiast po wydruku usuń plik CSV z komputera, opróżnij folder
+   **Pobrane** i **kosz**. Nie zostawiaj kopii na pulpicie ani w
+   historii przeglądarki.
+5. Rozetnij karty i przekaż je **wychowawcom klas** w zamkniętej
+   kopercie lub zaklejonym stosie. Każda karta zawiera login, hasło
+   startowe, krótką instrukcję i adres panelu (`PUBLIC_URL`).
+6. Uczeń przy pierwszym logowaniu **musi zmienić hasło** — system tego
+   wymaga. Karta po wykorzystaniu nie pozwala na ponowne wejście.
+7. Po rozdaniu odnotuj, które konta wydano. **Niewydane karty
+   zniszcz** (najlepiej zniszczarką); nie przechowuj ich w szufladzie.
+8. Jeśli hasło zostanie zgubione, nie odtwarzaj starego pliku — zrób
+   **Reset hasła** i przekaż nowe hasło indywidualnie.
+
+Zakaz obejmuje również wysyłanie zdjęcia ekranu z hasłami, wklejanie
+ich do dziennika elektronicznego i udostępnianie pliku przez komunikatory
+szkolne. Audyt rejestruje tylko zdarzenie generowania/importu (kto, ile
+kont, grupy). Pobranie pliku z hasłami nie tworzy dodatkowego wpisu i
+nie jest liczone — plik nie opuszcza przeglądarki administratora.
 
 ### 4.4. Reset hasła
 

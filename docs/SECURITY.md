@@ -309,6 +309,12 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   `settings_updated`, `admin_seeded`.
 - `details` zawierają identyfikatory techniczne i statusy, nie imiona ani
   dane kontaktowe.
+- Jednorazowy plik CSV z hasłami startowymi powstaje w przeglądarce
+  administratora (Blob + `URL.createObjectURL`) i nie jest wysyłany do
+  serwera. Audyt rejestruje tylko `users_generated` / `users_imported`
+  (kto, ile kont, grupy). Pobranie pliku nie tworzy wpisu ani licznika,
+  bo po stronie serwera nie ma takiego żądania; hasła nigdy nie trafiają
+  do audytu, logów, bazy, `localStorage`, `sessionStorage` ani IndexedDB.
 - Retencja: wpisy starsze niż `RETENTION_AUDIT_DAYS` (domyślnie 90 dni)
   są usuwane przez nocne zadanie retencji o `RETENTION_RUN_AT`
   (domyślnie 04:00), porcjami po 1000 rekordów.

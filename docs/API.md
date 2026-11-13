@@ -771,8 +771,14 @@ login;rola;kod;aktywne;haslo_startowe;utworzono;ostatnie_logowanie
 
 **Eksport nie zawiera haseł i nie może ich zawierać** — baza przechowuje
 wyłącznie skróty Argon2id. Hasła są dostępne tylko w odpowiedzi
-`POST /api/admin/users/generate` oraz `POST /api/admin/users/:id/reset-password`.
-Eksport jest zapisywany w audycie jako `users_exported`.
+`POST /api/admin/users/generate`, `POST /api/admin/users/import` oraz
+`POST /api/admin/users/:id/reset-password`. Eksport metadanych jest
+zapisywany w audycie jako `users_exported`.
+
+Plik CSV z hasłami startowymi (`klasa/grupa;login;kod konta;hasło
+startowe;data wygenerowania`) jest budowany wyłącznie w przeglądarce
+administratora z odpowiedzi generate/import. Nie ma osobnego endpointu
+eksportu haseł, więc pobranie nie tworzy żądania HTTP ani wpisu audytu.
 
 ### `POST /api/admin/users/generate`
 
@@ -796,9 +802,14 @@ Eksport jest zapisywany w audycie jako `users_exported`.
       "display_code": "UCZ-AB12C"
     }
   ],
-  "note": "Hasła są widoczne tylko teraz. Zapisz je i przekaż uczniom w bezpieczny sposób."
+  "generated_at": 1762973100,
+  "note": "Hasła są widoczne tylko teraz. Pobierz CSV i przekaż je uczniom w bezpieczny sposób."
 }
 ```
+
+`generated_at` to czas serwera (Unix UTC) użyty w pliku CSV jako
+`data wygenerowania`. Kolumna `klasa/grupa` jest pusta dla kont
+generowanych bez importu.
 
 **Hasła są zwracane wyłącznie w tej odpowiedzi** — nie są przechowywane
 w postaci jawnej. Nowe konta mają `must_change_password = true`.
@@ -839,8 +850,9 @@ Audyt zapisuje `users_imported`.
       "group": "1A"
     }
   ],
+  "generated_at": 1762973100,
   "groups": [{"group": "1A", "count": 30}],
-  "note": "Hasła są widoczne tylko teraz. Wydrukuj lub zapisz je i przekaż uczniom w bezpieczny sposób."
+  "note": "Hasła są widoczne tylko teraz. Pobierz CSV, wydrukuj karty i przekaż je uczniom w bezpieczny sposób."
 }
 ```
 

@@ -6,6 +6,9 @@
     let menuUi = null;
     let reportUi = null;
     let generatedAccounts = [];
+    let generatedAt = 0;
+    let importedAccounts = [];
+    let importedAt = 0;
     let activityData = null;
     let resizeTimer = null;
 
@@ -99,6 +102,45 @@
         });
         App.$('.tab[data-tab="audit"]').addEventListener("click", function () {
             loadAudit().catch(function (error) { App.toast(error.message, "error"); });
+        });
+
+        // Hasła startowe żyją wyłącznie w pamięci tej strony. Wyjście z
+        // zakładki, wylogowanie i zamknięcie karty wymagają świadomego
+        // potwierdzenia, a po nim dane są natychmiast usuwane.
+        const tabsNav = App.$(".tabs");
+        if (tabsNav) {
+            tabsNav.addEventListener("click", function (event) {
+                const tab = event.target.closest(".tab[data-tab]");
+                if (!tab || tab.dataset.tab === "users" || !hasStartPasswords()) return;
+                if (!confirmLeavingStartPasswords()) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    return;
+                }
+                clearStartPasswords();
+            }, true);
+        }
+
+        document.addEventListener("click", function (event) {
+            if (!event.target.closest("#logoutButton") || !hasStartPasswords()) return;
+            if (!confirmLeavingStartPasswords()) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                return;
+            }
+            clearStartPasswords();
+        }, true);
+
+        window.addEventListener("beforeunload", function (event) {
+            if (!hasStartPasswords()) return;
+            event.preventDefault();
+            event.returnValue =
+                "Hasła nie będą dostępne po wyjściu. Pobierz plik CSV przed opuszczeniem strony.";
+            return event.returnValue;
+        });
+
+        window.addEventListener("pagehide", function () {
+            clearStartPasswords();
         });
 
         window.setInterval(function () {
@@ -409,6 +451,7 @@
         try {
             const data = await App.api.post("/api/admin/users/generate", { role: role, count: count });
             generatedAccounts = data.accounts || [];
+            generatedAt = Number(data.generated_at) || Math.floor(Date.now() / 1000);
             renderGeneratedAccounts(data.note);
             await loadUsers();
             App.toast("Wygenerowano " + generatedAccounts.length + " kont.", "success");
@@ -418,8 +461,6 @@
             App.setBusy(button, false, "Generuj");
         }
     }
-
-    let importedAccounts = [];
 
     async function loadImportFile() {
         const input = App.$("#importFile");
@@ -463,7 +504,8 @@
                 throw new Error((data && data.error) || "Nie udało się zaimportować kont.");
             }
             importedAccounts = data.accounts || [];
-            renderAccounts("#importedAccounts", importedAccounts, data.note);
+            importedAt = Number(data.generated_at) || Math.floor(Date.now() / 1000);
+            renderAccounts("#importedAccounts", importedAccounts, data.note, "imported");
             App.$("#importCsv").value = "";
             App.$("#importFile").value = "";
             await loadUsers();
@@ -476,18 +518,22 @@
     }
 
     function renderGeneratedAccounts(note) {
-        renderAccounts("#generatedAccounts", generatedAccounts, note);
+        renderAccounts("#generatedAccounts", generatedAccounts, note, "generated");
     }
 
-    function renderAccounts(selector, accounts, note) {
+    function renderAccounts(selector, accounts, note, kind) {
         const container = App.$(selector);
         App.clear(container);
         container.hidden = false;
 
         const warning = App.h("div", { class: "banner banner-warning" });
         warning.append(
-            App.h("strong", { text: "Zapisz te dane teraz — hasła nie będą ponownie pokazane. " }),
-            App.h("span", { text: note || "" })
+            App.h("strong", { text: "Hasła nie będą dostępne po wyjściu. " }),
+            App.h("span", {
+                text: (note ? note + " " : "") +
+                    "Po opuszczeniu widoku ponowne pobranie nie będzie możliwe — " +
+                    "pozostaje tylko reset hasła konta.",
+            })
         );
 
         const toolbar = App.h("div", { class: "toolbar" });
@@ -503,10 +549,10 @@
                 },
             }),
             App.h("button", {
-                class: "btn btn-ghost btn-small",
+                class: "btn btn-primary btn-small",
                 text: "Pobierz CSV",
                 attrs: { type: "button" },
-                on: { click: function () { downloadCsv(accounts); } },
+                on: { click: function () { downloadStartCsv(kind); } },
             })
         );
 
@@ -550,28 +596,100 @@
         }).join("\n");
     }
 
-    function downloadCsv(accounts) {
-        const header = ["login", "haslo", "rola", "kod"];
-        if (accounts.some(function (account) { return account.group; })) {
-            header.push("grupa");
+    function hasStartPasswords() {
+        return generatedAccounts.length > 0 || importedAccounts.length > 0;
+    }
+
+    function confirmLeavingStartPasswords() {
+        return window.confirm(
+            "Hasła nie będą dostępne po wyjściu. " +
+            "Pobierz plik CSV teraz — po opuszczeniu widoku ponowne pobranie " +
+            "nie będzie możliwe, pozostanie tylko reset hasła konta. Kontynuować?"
+        );
+    }
+
+    function clearStartPasswords() {
+        [generatedAccounts, importedAccounts].forEach(function (accounts) {
+            accounts.forEach(function (account) {
+                account.password = "";
+            });
+        });
+        generatedAccounts = [];
+        importedAccounts = [];
+        generatedAt = 0;
+        importedAt = 0;
+
+        ["#generatedAccounts", "#importedAccounts"].forEach(function (selector) {
+            const container = App.$(selector);
+            if (!container) return;
+            App.clear(container);
+            container.hidden = true;
+        });
+    }
+
+    function downloadStartCsv(kind) {
+        const accounts = kind === "imported" ? importedAccounts : generatedAccounts;
+        const timestamp = kind === "imported" ? importedAt : generatedAt;
+        if (!accounts.length) {
+            App.toast("Hasła nie są już dostępne. Użyj resetu hasła konta.", "error");
+            return;
         }
+
+        const generatedDate = timestamp ? new Date(timestamp * 1000) : new Date();
+        const generatedLabel = formatCsvDateTime(generatedDate);
+        const header = [
+            "klasa/grupa",
+            "login",
+            "kod konta",
+            "hasło startowe",
+            "data wygenerowania",
+        ];
         const lines = [header.join(";")];
         accounts.forEach(function (account) {
-            const cells = [
+            lines.push([
+                csvCell(account.group || ""),
                 csvCell(account.login),
-                csvCell(account.password),
-                csvCell(App.roleLabels[account.role] || account.role),
                 csvCell(account.display_code),
-            ];
-            if (header.length > 4) {
-                cells.push(csvCell(account.group || ""));
-            }
-            lines.push(cells.join(";"));
+                csvCell(account.password),
+                csvCell(generatedLabel),
+            ].join(";"));
         });
 
-        const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-        downloadBlob(blob, "konta-zsl-order-" + new Date().toISOString().slice(0, 10) + ".csv");
-        App.toast("Plik CSV został pobrany. Przechowuj go bezpiecznie.", "success");
+        // Plik powstaje wyłącznie w przeglądarce — bez dodatkowego
+        // żądania do serwera i bez trwałego magazynu przeglądarki.
+        const blob = new Blob(
+            ["\ufeff" + lines.join("\r\n") + "\r\n"],
+            { type: "text/csv;charset=utf-8" }
+        );
+        downloadBlob(blob, startCsvFilename(generatedDate));
+        App.toast(
+            "Plik CSV z hasłami startowymi został pobrany. Usuń go z komputera po wydruku.",
+            "success"
+        );
+    }
+
+    function formatCsvDateTime(date) {
+        const parts = new Intl.DateTimeFormat("pl-PL", {
+            timeZone: "Europe/Warsaw",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+        }).formatToParts(date);
+        const values = {};
+        parts.forEach(function (part) {
+            if (part.type !== "literal") values[part.type] = part.value;
+        });
+        return values.year + "-" + values.month + "-" + values.day +
+            " " + values.hour + ":" + values.minute;
+    }
+
+    function startCsvFilename(date) {
+        const label = formatCsvDateTime(date);
+        return "konta-start-" + label.slice(0, 10) + "-" +
+            label.slice(11, 13) + label.slice(14, 16) + ".csv";
     }
 
     async function exportUsersCsv() {

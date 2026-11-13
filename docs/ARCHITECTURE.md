@@ -329,8 +329,10 @@ Kluczowe decyzje:
   serwera; bez CDN, bez inline JS, bez zmian w CSP. Szczegóły i sumy
   SHA-256: `frontend/vendor/README.md`.
 - `admin.js` — statystyki, wykresy aktywności (7/14/30/90 dni), konta,
-  generowanie, eksport CSV (fetch + blob), reset hasła, usuwanie konta z
-  potwierdzeniem loginu, menu, zamówienia, ustawienia, audyt.
+  generowanie, eksport metadanych CSV (fetch + blob), jednorazowy CSV
+  z hasłami startowymi budowany lokalnie (Blob, bez żądania do serwera),
+  reset hasła, usuwanie konta z potwierdzeniem loginu, menu, zamówienia,
+  ustawienia, audyt.
 - Renderowanie opiera się na `textContent` i tworzeniu węzłów, co ogranicza
   ryzyko XSS; brak `innerHTML`, `eval`, `document.write`.
 
