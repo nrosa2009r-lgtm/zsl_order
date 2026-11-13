@@ -1,0 +1,16 @@
+# Konfiguracja cargo-audit.
+#
+# Wyjątki są świadome i opisane. Nie dodawaj tu nowych wpisów bez analizy.
+[advisories]
+ignore = [
+    # sqlx 0.8/0.9 pozwala na libsqlite3-sys < 0.38, a poprawka jest w
+    # >= 0.39. Nie ma jeszcze wydania sqlx z nowym API SQLite. Baza nie
+    # przyjmuje plików SQLite od użytkowników; SQL jest parametryzowany.
+    # Śledź https://github.com/launchbadge/sqlx i podnieś limit, gdy
+    # pojawi się kompatybilne wydanie.
+    "RUSTSEC-2026-0459",
+    # rsa trafia do Cargo.lock jako opcjonalna zależność sqlx-mysql,
+    # której nie kompilujemy (używamy wyłącznie SQLite). Nie ma jej
+    # w grafie binarki; wpis wycisza fałszywy alarm lockfile'a.
+    "RUSTSEC-2023-0071",
+]

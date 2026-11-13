@@ -35,7 +35,8 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 - [Konfiguracja](#konfiguracja)
 - [Bezpieczeństwo w skrócie](#bezpieczeństwo-w-skrócie)
 - [Prywatność i RODO](#prywatność-i-rodo)
-- [Testy](#testy)
+- [Jak uruchomić testy](#jak-uruchomić-testy)
+- [Jak zgłosić błąd bezpieczeństwa](#jak-zgłosić-błąd-bezpieczeństwa)
 - [Wdrożenie produkcyjne](#wdrożenie-produkcyjne)
 - [Struktura projektu](#struktura-projektu)
 - [Dokumentacja](#dokumentacja)
@@ -402,12 +403,15 @@ przechowywania zamówień, zasady dostępu i ewentualną ocenę skutków dla
 ochrony danych (DPIA). Szczegóły i rekomendacje:
 [docs/PRIVACY.md](docs/PRIVACY.md).
 
-## Testy
+## Jak uruchomić testy
 
 ```bash
-cargo test          # testy jednostkowe (konfiguracja, hasła, tokeny, walidacja)
-cargo clippy        # analiza statyczna
-cargo build --release
+cargo fmt --all --check                  # formatowanie
+cargo clippy --all-targets -- -D warnings # analiza statyczna bez ostrzeżeń
+cargo test --locked                      # testy jednostkowe
+cargo audit                              # podatności w zależnościach
+cargo deny check                         # licencje, źródła, duplikaty
+cargo build --locked                     # binarka do smoke testów
 ```
 
 Testy jednostkowe obejmują m.in. roundtrip hasła Argon2, losowość tokenów,
@@ -424,8 +428,14 @@ cargo build
 scripts/smoke-modes.sh       # tryby local/tunnel, nagłówki, start
 scripts/smoke-hardening.sh   # hasła, import CSV, IDOR, RBAC, limity, sesje
 scripts/test-migrations.sh   # pusta baza + baza legacy, class_group
-scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, raport/CSV
+scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, QR, raport/CSV
+scripts/smoke-backup.sh      # kopia, integralność, retencja
+scripts/smoke-logs.sh        # logi JSON, brak sekretów i danych wrażliwych
 ```
+
+Ten sam zestaw uruchamia GitHub Actions (`.github/workflows/ci.yml`):
+`cargo fmt --check`, `clippy -D warnings`, `cargo test`, wszystkie smoke
+testy, `cargo audit` oraz `cargo deny check` z regułami z `deny.toml`.
 
 Skrypty tworzą izolowaną bazę w `/tmp/opencode`, same generują konta i
 **nie zawierają żadnych prawdziwych danych**. Nie uruchamiaj ich na
@@ -435,6 +445,37 @@ prawdziwej instancji.
 > `admin-test` / testowe hasło) są **wyłącznie testowe**. Nie uruchamiaj
 > tych skryptów na prawdziwej instancji i nigdy nie używaj testowych
 > danych logowania w środowisku produkcyjnym.
+
+## Jak zgłosić błąd bezpieczeństwa
+
+**Nie otwieraj publicznego issue ani nie opisuj podatności w dyskusji.**
+Użyj prywatnego zgłoszenia w zakładce **Security → Report a vulnerability**
+w repozytorium GitHub (GitHub Security Advisories). Jeśli ta funkcja jest
+niedostępna, skontaktuj się z administratorem projektu prywatnym kanałem
+ustalonym przez szkołę.
+
+W zgłoszeniu podaj:
+
+- wersję lub commit (`git rev-parse HEAD`),
+- tryb wdrożenia (`local` / `tunnel`) i sposób dostępu (HTTP/HTTPS),
+- kroki odtworzenia i oczekiwany/rzeczywisty rezultat,
+- wpływ na poufność, integralność i dostępność,
+- minimalny proof-of-concept **bez prawdziwych danych uczniów, haseł,
+  tokenów i adresów**.
+
+Nie wysyłaj sekretów, zrzutów bazy ani danych osobowych. Jeśli musisz
+pokazać log, usuń z niego adresy IP, identyfikatory sesji i tokeny.
+
+Zasady:
+
+- zgłoszenie jest poufne do czasu publikacji poprawki,
+- potwierdzenie przyjęcia i wstępna ocena — w miarę możliwości w ciągu
+  kilku dni roboczych,
+- naprawa trafia do bieżącej gałęzi razem z testem regresyjnym,
+- publiczne ujawnienie szczegółów po wydaniu poprawki, w porozumieniu
+  ze zgłaszającym,
+- w zakresie są błędy w kodzie, konfiguracji i dokumentacji; poza
+  zakresem — problemy infrastruktury szkoły, Cloudflare i przeglądarek.
 
 ## Wdrożenie produkcyjne
 

@@ -2,6 +2,8 @@
 name = "zsl_order"
 version = "1.0.0"
 edition = "2024"
+rust-version = "1.85"
+license = "MIT"
 description = "System zamawiania posiłków dla stołówki szkolnej ZSŁ (bez danych osobowych)"
 autobins = false
 
