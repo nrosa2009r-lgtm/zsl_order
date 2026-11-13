@@ -14,7 +14,8 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 > [bezpieczeństwo](docs/SECURITY.md) ·
 > [wdrożenie](docs/DEPLOYMENT.md) ·
 > [baza danych](docs/DATABASE.md) ·
-> [prywatność i RODO](docs/PRIVACY.md)
+> [prywatność i RODO](docs/PRIVACY.md) ·
+> [checklista wdrożenia](docs/CHECKLISTA-WDROZENIA.md)
 >
 > Obsługa: [instrukcja](docs/INSTRUKCJA.md) ·
 > [ściągawka ucznia](docs/SCIAGAWKA-UCZEN.md) ·
@@ -556,6 +557,7 @@ uruchomieniu z uprawnieniami `0600`.
 | [docs/DATABASE.md](docs/DATABASE.md) | schemat SQL, indeksy, ustawienia, zapytania operacyjne |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | zakres danych, pseudonimizacja, retencja, RODO |
 | [docs/INSTRUKCJA.md](docs/INSTRUKCJA.md) | pełna instrukcja obsługi: instalacja, konfiguracja, konta, kuchnia, admin, backup, Cloudflare, FAQ, checklista |
+| [docs/CHECKLISTA-WDROZENIA.md](docs/CHECKLISTA-WDROZENIA.md) | checklista przed pilotażem, produkcją i włączeniem tunelu |
 | [docs/SCIAGAWKA-UCZEN.md](docs/SCIAGAWKA-UCZEN.md) | jednostronicowa ściągawka dla ucznia do wydruku |
 | [docs/SCIAGAWKA-KUCHNIA.md](docs/SCIAGAWKA-KUCHNIA.md) | jednostronicowa ściągawka dla kuchni do wydruku |
 

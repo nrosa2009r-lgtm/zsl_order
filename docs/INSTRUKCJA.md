@@ -1189,3 +1189,6 @@ potwierdzony przez osobę odpowiedzialną.
 
 > Checklista nie zastępuje testów. Przed produkcją wykonaj pełny
 > `scripts/smoke-*.sh` na izolowanej bazie i test odtworzenia kopii.
+>
+> Pełna, rozbudowana checklista z podziałem na pilotaż na Dellu,
+> produkcję i włączenie tunelu: [CHECKLISTA-WDROZENIA.md](CHECKLISTA-WDROZENIA.md).
