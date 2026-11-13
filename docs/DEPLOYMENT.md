@@ -915,7 +915,8 @@ curl -fsS https://zsl.example.edu/api/healthz >/dev/null && echo OK
 
 Schemat jest zarządzany przez **wbudowane migracje `sqlx`** z katalogu
 `migrations/`. Nowa binarka sama wykonuje brakujące migracje przy starcie
-i zapisuje wersje w tabeli `_sqlx_migrations`. Migracja bazowa używa
+i zapisuje wersje w tabeli `_sqlx_migrations`. Pełna procedura wydania,
+tagowania i rollbacku: [`RELEASE.md`](RELEASE.md). Migracja bazowa używa
 `CREATE TABLE/INDEX IF NOT EXISTS`, więc działa też na bazie utworzonej
 przez starszą wersję aplikacji (bez `_sqlx_migrations`) i nie usuwa
 danych.

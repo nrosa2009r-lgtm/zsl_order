@@ -9,6 +9,9 @@ Uczniowie otrzymują wyłącznie losowe loginy i hasła. W systemie występują 
 pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 (gotówka lub karta), więc aplikacja nie dotyka danych kart płatniczych.
 
+**Wersja 1.0.0** · **Autor:** natan-rosa ·
+[historia zmian](CHANGELOG.md) · [procedura wydania](docs/RELEASE.md)
+
 > Dokumentacja techniczna: [API](docs/API.md) ·
 > [architektura](docs/ARCHITECTURE.md) ·
 > [bezpieczeństwo](docs/SECURITY.md) ·
@@ -560,6 +563,8 @@ uruchomieniu z uprawnieniami `0600`.
 | [docs/CHECKLISTA-WDROZENIA.md](docs/CHECKLISTA-WDROZENIA.md) | checklista przed pilotażem, produkcją i włączeniem tunelu |
 | [docs/SCIAGAWKA-UCZEN.md](docs/SCIAGAWKA-UCZEN.md) | jednostronicowa ściągawka dla ucznia do wydruku |
 | [docs/SCIAGAWKA-KUCHNIA.md](docs/SCIAGAWKA-KUCHNIA.md) | jednostronicowa ściągawka dla kuchni do wydruku |
+| [docs/RELEASE.md](docs/RELEASE.md) | procedura wydania, tagowanie, rollback i wydanie awaryjne |
+| [CHANGELOG.md](CHANGELOG.md) | historia zmian w formacie Keep a Changelog |
 
 ## Ograniczenia i dalszy rozwój
 
@@ -593,7 +598,8 @@ uruchomieniu z uprawnieniami `0600`.
 ## Licencja
 
 Projekt jest udostępniany na licencji **MIT** — pełny tekst w pliku
-[LICENSE](LICENSE). Copyright (c) 2026 **natan-rosa**.
+[LICENSE](LICENSE). Copyright (c) 2026 **natan-rosa**. Autorem
+i właścicielem praw autorskich jest **natan-rosa**.
 
 Licencja MIT obejmuje kod aplikacji, dokumentację i skrypty w tym
 repozytorium. Pliki źródłowe (Rust, JavaScript, CSS, HTML, skrypty
