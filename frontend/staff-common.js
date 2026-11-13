@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /* ZSL Order — wspólne elementy panelu kuchni i administratora. */
 (function () {
     "use strict";

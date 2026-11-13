@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 [Unit]
 Description=ZSL Order - kopia zapasowa bazy danych
 Documentation=file:/opt/zsl-order/docs/DEPLOYMENT.md

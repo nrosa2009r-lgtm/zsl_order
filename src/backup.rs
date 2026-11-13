@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use crate::config::Config;
 use crate::util;
 use sqlx::sqlite::SqliteConnectOptions;

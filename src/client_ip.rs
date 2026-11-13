@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use crate::config::{Config, DeployMode};
 use crate::state::AppState;
 use axum::{

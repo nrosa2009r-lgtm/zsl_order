@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use crate::config::{Config, PublicUrl, authority_eq, is_loopback_authority};
 
 /// W trybie tunnel akceptujemy wyłącznie publiczny Host oraz adresy

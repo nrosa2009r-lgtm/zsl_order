@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 pub mod admin;
 pub mod auth;
 pub mod menu;

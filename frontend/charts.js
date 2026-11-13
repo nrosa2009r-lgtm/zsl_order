@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /* ZSL Order — lekkie wykresy na canvasie (bez zewnętrznych bibliotek). */
 (function () {
     "use strict";

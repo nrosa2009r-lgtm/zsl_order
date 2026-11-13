@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use crate::db;
 use crate::error::AppError;
 use crate::state::AppState;

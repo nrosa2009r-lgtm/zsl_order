@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use axum::{
     Json,
     http::{HeaderValue, StatusCode, header},

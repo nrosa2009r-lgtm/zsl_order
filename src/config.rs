@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use ipnet::IpNet;
 use serde_json::Value;
 use std::error::Error;

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # UWAGA: skrypt testowy. Tworzy izolowaną bazę w /tmp/opencode i nie
 # dotyka prawdziwych danych. Wymaga zbudowanej binarki (`cargo build`)
 # oraz sqlite3.

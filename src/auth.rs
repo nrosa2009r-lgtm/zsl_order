@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use crate::config::Config;
 use crate::error::AppError;
 use crate::security;

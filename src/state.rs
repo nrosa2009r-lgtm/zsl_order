@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use crate::auth::{LoginLimiter, PickupLimiter};
 use crate::config::Config;
 use sqlx::SqlitePool;

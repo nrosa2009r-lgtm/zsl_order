@@ -596,6 +596,9 @@ Projekt jest udostępniany na licencji **MIT** — pełny tekst w pliku
 [LICENSE](LICENSE). Copyright (c) 2026 **natan-rosa**.
 
 Licencja MIT obejmuje kod aplikacji, dokumentację i skrypty w tym
-repozytorium. Biblioteki stron trzecich zachowują własne licencje —
-wykaz znajduje się w [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)
-(np. dołączony jsQR 1.4.0 jest na licencji Apache-2.0).
+repozytorium. Pliki źródłowe (Rust, JavaScript, CSS, HTML, skrypty
+powłoki, jednostki systemd i workflow CI) mają nagłówek
+`SPDX-License-Identifier: MIT`. Biblioteki stron trzecich zachowują
+własne licencje — wykaz znajduje się w
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) (np. dołączony jsQR
+1.4.0 jest na licencji Apache-2.0).

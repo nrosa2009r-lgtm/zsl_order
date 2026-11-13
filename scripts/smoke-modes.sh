@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # UWAGA: skrypt testowy. Używa wyłącznie danych testowych, losowo
 # generowanych kont i izolowanej bazy w /tmp/opencode. Nie uruchamiaj go
 # na prawdziwej instancji i nigdy nie używaj tych danych logowania w

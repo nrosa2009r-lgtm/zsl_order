@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use axum::{extract::Request, middleware::Next, response::Response};
 use std::time::Instant;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};

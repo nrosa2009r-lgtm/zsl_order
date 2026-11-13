@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /* ZSL Order — logowanie. */
 (function () {
     "use strict";

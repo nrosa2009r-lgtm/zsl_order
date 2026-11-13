@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # UWAGA: skrypt testowy. Tworzy izolowane bazy w /tmp/opencode i nie dotyka
 # prawdziwych danych. Nie uruchamiaj go na produkcji.
 #

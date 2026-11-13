@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 use chrono::{DateTime, Duration as ChronoDuration, LocalResult, NaiveDate, TimeZone, Utc};
 use chrono_tz::Europe::Warsaw;
 use chrono_tz::Tz;

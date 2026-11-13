@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /* ZSL Order — wspólne funkcje UI i bezpiecznego wywoływania API. */
 (function () {
     "use strict";
