@@ -1,6 +1,7 @@
 # Licencje zależności
 
-Projekt ZSL Order jest udostępniany na licencji MIT (patrz [`LICENSE`](LICENSE)).
+Projekt ZSL Order jest udostępniany na licencji MIT
+(patrz [`LICENSE`](LICENSE)); Copyright (c) 2026 natan-rosa.
 Poniżej znajdują się zależności frontendu dołączone do repozytorium.
 Zależności Rusta są kontrolowane przez `cargo deny` i plik [`deny.toml`](deny.toml).
 
