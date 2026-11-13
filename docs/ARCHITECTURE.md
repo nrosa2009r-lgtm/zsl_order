@@ -180,7 +180,8 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 - QR generuje serwer w `GET /api/student/orders/:id/qr.svg` na podstawie
   `qr_token`; w obrazie jest wyłącznie nieprzejrzysty token, bez loginu,
   kodu ucznia, ID konta, ceny, URL i tokenu sesji.
-- Kuchnia skanuje QR (`BarcodeDetector` + `getUserMedia`) albo wpisuje
+- Kuchnia skanuje QR (`BarcodeDetector` + `getUserMedia`, z lokalnym
+  jsQR gdy `BarcodeDetector` jest niedostępny) albo wpisuje
   kod lub używa czytnika USB działającego jak klawiatura (Enter =
   szukaj). `POST /api/staff/pickup` normalizuje krótki kod do wielkich
   liter, opcjonalnie usuwa starszy prefiks `ZSL:` i szuka po `qr_token`
@@ -321,8 +322,12 @@ Kluczowe decyzje:
   świadome DPR, responsywne, kolory z CSS variables; bez zewnętrznych
   bibliotek i bez CDN.
 - `student.js` — menu, koszyk, checkout, potwierdzenie z QR, lista zamówień.
-- `kitchen.js` — kolejka, formularz pickup, skaner QR kamery (jeśli
-  `BarcodeDetector` jest dostępny) z fallbackiem na pole tekstowe.
+- `kitchen.js` — kolejka, formularz pickup, skaner QR kamery
+  (`BarcodeDetector`, a gdy go brak — lokalny `vendor/jsQR.js` ładowany
+  dynamicznie tylko na stronie kuchni) z fallbackiem na pole tekstowe.
+- `vendor/jsQR.js` — jsQR 1.4.0 (Apache-2.0) serwowany z własnego
+  serwera; bez CDN, bez inline JS, bez zmian w CSP. Szczegóły i sumy
+  SHA-256: `frontend/vendor/README.md`.
 - `admin.js` — statystyki, wykresy aktywności (7/14/30/90 dni), konta,
   generowanie, eksport CSV (fetch + blob), reset hasła, usuwanie konta z
   potwierdzeniem loginu, menu, zamówienia, ustawienia, audyt.

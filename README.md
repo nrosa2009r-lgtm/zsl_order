@@ -235,8 +235,9 @@ Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
 - zamówienia otwarte (`new`, `preparing`, `ready`), dzisiejsze lub wszystkie,
 - karty zamówień z pozycjami, kwotą, sposobem płatności i godziną odbioru,
 - wyszukiwanie po krótkim kodzie lub tokenie QR,
-- skaner QR kamery (`BarcodeDetector`, jeśli wspierany) + ręczne pole
-  (działa też z czytnikiem USB działającym jak klawiatura),
+- skaner QR kamery (`BarcodeDetector`, a gdy go brak — lokalny jsQR
+  ładowany tylko na tej stronie) + ręczne pole (działa też z czytnikiem
+  USB działającym jak klawiatura),
 - zmiana statusu: przyjęte → w przygotowaniu → gotowe → wydane,
 - oznaczenie płatności jako opłaconej,
 - zarządzanie menu (dodawanie, edycja, ukrywanie pozycji).
@@ -253,7 +254,8 @@ Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
   konta** (wraz z zamówieniami i sesjami; z zabezpieczeniem przed usunięciem
   siebie i ostatniego aktywnego administratora),
 - eksport CSV **metadanych** kont (bez haseł; hasła tylko jednorazowo po
-  wygenerowaniu lub resecie),
+  wygenerowaniu lub resecie) oraz jednorazowy plik CSV z hasłami
+  startowymi budowany w przeglądarce,
 - pełne zarządzanie menu,
 - wszystkie zamówienia i ręczna korekta statusów/płatności,
 - ustawienia stołówki i limitów,
@@ -576,9 +578,10 @@ uruchomieniu z uprawnieniami `0600`.
   [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 - Brak MFA dla kont administracyjnych; zalecane silne, unikalne hasła
   i ograniczenie dostępu sieciowego.
-- Hasła nie są odzyskiwalne z bazy (tylko Argon2id); eksport CSV zawiera
-  wyłącznie metadane kont. Ewentualny plik z hasłami trzeba zabezpieczyć
-  i zniszczyć po przekazaniu uczniom.
+- Hasła nie są odzyskiwalne z bazy (tylko Argon2id). Eksport metadanych
+  CSV nie zawiera haseł; osobny, jednorazowy plik z hasłami startowymi
+  powstaje wyłącznie w przeglądarce administratora i trzeba go
+  zabezpieczyć oraz zniszczyć po przekazaniu uczniom.
 - Logi techniczne w journald nie mają wbudowanego limitu rozmiaru po
   stronie aplikacji — administrator ustawia `SystemMaxUse` i
   `MaxRetentionSec` w journald (np. 30 dni). Logi nie zawierają haseł,
@@ -590,3 +593,5 @@ uruchomieniu z uprawnieniami `0600`.
 Projekt jest udostępniany na licencji MIT — pełny tekst w pliku
 [LICENSE](LICENSE). Prawa autorskie: `[TWOJE IMIĘ LUB NICK]` (do
 uzupełnienia przez właściciela repozytorium).
+
+Zależności frontendu i ich licencje: [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).

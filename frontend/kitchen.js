@@ -8,6 +8,9 @@
     let pickupContainer = null;
     let scannerStream = null;
     let scannerTimer = null;
+    let scannerCanvas = null;
+    let scannerContext = null;
+    let jsQrLoader = null;
     let audioContext = null;
 
     App.bootPage("kitchen", async function () {
@@ -200,14 +203,14 @@
                 "Ta przeglądarka nie udostępnia kamery. Wpisz kod ręcznie albo użyj czytnika USB.";
             return;
         }
-        if (!hasDetector) {
-            status.textContent =
-                "Ta przeglądarka nie obsługuje BarcodeDetector. " +
-                "Wpisz kod ręcznie albo użyj czytnika USB (działa jak klawiatura).";
-            return;
-        }
 
         scanButton.hidden = false;
+        if (!hasDetector) {
+            status.textContent =
+                "Skaner QR użyje lokalnej biblioteki jsQR (bez CDN). " +
+                "Kamera nadal wymaga HTTPS albo localhost; alternatywnie wpisz kod " +
+                "ręcznie lub użyj czytnika USB.";
+        }
 
         scanButton.addEventListener("click", async function () {
             stopScanner();
@@ -223,13 +226,34 @@
                 status.textContent = "Skieruj kamerę na kod QR…";
                 await video.play();
 
-                const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+                let detector = null;
+                if (hasDetector) {
+                    detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+                } else {
+                    try {
+                        await loadJsQr();
+                    } catch (error) {
+                        stopScanner();
+                        status.textContent =
+                            "Nie udało się wczytać lokalnego czytnika jsQR. " +
+                            "Wpisz kod ręcznie albo użyj czytnika USB.";
+                        return;
+                    }
+                }
+
                 scannerTimer = window.setInterval(async function () {
                     if (!scannerStream) return;
                     try {
-                        const codes = await detector.detect(video);
-                        if (codes.length && codes[0].rawValue) {
-                            const value = codes[0].rawValue;
+                        let value = "";
+                        if (detector) {
+                            const codes = await detector.detect(video);
+                            if (codes.length && codes[0].rawValue) {
+                                value = codes[0].rawValue;
+                            }
+                        } else {
+                            value = decodeWithJsQr(video);
+                        }
+                        if (value) {
                             stopScanner();
                             App.$("#pickupCode").value = value;
                             await lookup(value);
@@ -237,7 +261,7 @@
                     } catch (error) {
                         // Pomijamy pojedyncze klatki bez kodu.
                     }
-                }, 350);
+                }, detector ? 350 : 500);
             } catch (error) {
                 stopScanner();
                 if (error && error.name === "NotAllowedError") {
@@ -259,6 +283,59 @@
             status.textContent = "Skanowanie zatrzymane.";
             focusPickupInput();
         });
+
+        function loadJsQr() {
+            if (window.jsQR) return Promise.resolve();
+            if (jsQrLoader) return jsQrLoader;
+            jsQrLoader = new Promise(function (resolve, reject) {
+                const script = document.createElement("script");
+                script.src = "/vendor/jsQR.js";
+                script.async = true;
+                script.onload = function () {
+                    if (typeof window.jsQR === "function") {
+                        resolve();
+                    } else {
+                        jsQrLoader = null;
+                        script.remove();
+                        reject(new Error("Brak eksportu jsQR."));
+                    }
+                };
+                script.onerror = function () {
+                    jsQrLoader = null;
+                    script.remove();
+                    reject(new Error("Nie udało się pobrać jsQR."));
+                };
+                document.head.append(script);
+            });
+            return jsQrLoader;
+        }
+
+        function decodeWithJsQr(video) {
+            if (typeof window.jsQR !== "function") return "";
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            if (!width || !height) return "";
+
+            if (!scannerCanvas) {
+                scannerCanvas = document.createElement("canvas");
+                scannerContext = scannerCanvas.getContext("2d", { willReadFrequently: true });
+            }
+            if (!scannerContext) return "";
+
+            // Ograniczamy rozdzielczość klatki — jsQR działa w czasie
+            // rzeczywistym, a kod QR w kuchni i tak jest duży.
+            const scale = Math.min(1, 640 / Math.max(width, height));
+            scannerCanvas.width = Math.max(1, Math.round(width * scale));
+            scannerCanvas.height = Math.max(1, Math.round(height * scale));
+            scannerContext.drawImage(video, 0, 0, scannerCanvas.width, scannerCanvas.height);
+            const image = scannerContext.getImageData(
+                0, 0, scannerCanvas.width, scannerCanvas.height
+            );
+            const result = window.jsQR(image.data, image.width, image.height, {
+                inversionAttempts: "dontInvert",
+            });
+            return result && result.data ? result.data : "";
+        }
 
         function stopScanner() {
             if (scannerTimer) {

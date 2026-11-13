@@ -575,8 +575,11 @@ Kamera w przeglądarce działa tylko w bezpiecznym kontekście: HTTPS albo
 — panel pokaże czytelny komunikat i wskaże wpisanie kodu ręcznie.
 
 W kuchni preferuj **czytnik USB/Bluetooth** (klawiaturowy). Nie wymaga
-HTTPS, uprawnień do kamery ani obsługi `BarcodeDetector`. Jeśli chcesz
-kamerę, wdróż HTTPS w sieci lokalnej albo tryb `tunnel` (rozdział 9).
+HTTPS ani uprawnień do kamery. Jeśli przeglądarka nie ma wbudowanego
+`BarcodeDetector`, panel doładuje lokalną bibliotekę jsQR z własnego
+serwera (bez CDN); to nadal nie omija wymogu HTTPS albo `localhost` dla
+kamery. Jeśli chcesz kamerę, wdróż HTTPS w sieci lokalnej albo tryb
+`tunnel` (rozdział 9).
 
 ### 6.5. Zamówienia nieodebrane
 

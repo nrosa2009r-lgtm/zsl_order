@@ -578,10 +578,17 @@ urządzeniu (tablet, telefon). Taki adres **nie jest** bezpiecznym
 kontekstem — przycisk kamery nie zadziała, nawet jeśli serwer i kamera
 działają poprawnie.
 
-Panel kuchni wykrywa to i zamiast przycisku skanowania pokazuje
-komunikat z odesłaniem do wpisania kodu ręcznie. Ten sam komunikat
-pojawia się, gdy przeglądarka nie ma `navigator.mediaDevices` albo nie
-obsługuje `BarcodeDetector`.
+Panel kuchni wykrywa brak bezpiecznego kontekstu i zamiast przycisku
+skanowania pokazuje komunikat z odesłaniem do wpisania kodu ręcznie.
+Gdy przeglądarka nie ma `navigator.mediaDevices`, również nie pokazuje
+przycisku kamery.
+
+Jeśli przeglądarka nie udostępnia `BarcodeDetector`, panel kuchni
+doładowuje **lokalną** bibliotekę jsQR 1.4.0 z `/vendor/jsQR.js`.
+Plik jest częścią repozytorium i serwowany wyłącznie z własnego serwera
+— CSP pozostaje `script-src 'self'`, bez CDN. jsQR zastępuje tylko
+dekoder QR; **kamera nadal wymaga HTTPS albo `localhost`**. Wersję,
+sumy SHA-256 i licencję opisuje `frontend/vendor/README.md`.
 
 Dostępne rozwiązania, od najprostszego:
 

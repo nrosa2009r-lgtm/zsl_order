@@ -53,6 +53,7 @@ trap cleanup EXIT
 
 rm -rf "$BASE"
 mkdir -p "$BASE" "$TMP"
+ln -s "$ROOT/frontend" "$BASE/frontend"
 cat >"$BASE/config.json" <<'JSON'
 {
   "db_url": "sqlite://baza.db",
@@ -112,6 +113,30 @@ request GET /api/healthz "" "" ""
 [ "$STATUS" = "200" ] && pass "healthz: /api/healthz 200" || fail "healthz: /api/healthz $STATUS"
 request GET /healthz "" "" ""
 [ "$STATUS" = "200" ] && pass "healthz: /healthz 200" || fail "healthz: /healthz $STATUS"
+
+# ---------------------------------------------------------------- jsQR (vendored)
+request GET /kitchen "" "" ""
+[ "$STATUS" = "200" ] && pass "jsQR: strona kuchni 200" || fail "jsQR: /kitchen $STATUS"
+if printf '%s' "$BODY" | grep -qF 'vendor/jsQR.js'; then
+  fail "jsQR: skrypt dołączony statycznie do HTML (ma być ładowany warunkowo)"
+else
+  pass "jsQR: skrypt nie jest dołączony statycznie do HTML"
+fi
+
+curl -s --noproxy '*' -D "$TMP/jsqr.headers" -o "$TMP/jsqr.js" \
+  -H "Host: $HOSTADDR" "http://$HOSTADDR/vendor/jsQR.js" || true
+JSQR_TYPE=$(tr -d '\r' <"$TMP/jsqr.headers" | sed -n 's/^[Cc]ontent-[Tt]ype: //p')
+case "$JSQR_TYPE" in
+  application/javascript*|text/javascript*)
+    pass "jsQR: Content-Type=$JSQR_TYPE" ;;
+  *)
+    fail "jsQR: niepoprawny Content-Type=${JSQR_TYPE:-brak}" ;;
+esac
+if grep -qF 'jsQR v1.4.0' "$TMP/jsqr.js" 2>/dev/null; then
+  pass "jsQR: plik serwowany lokalnie z nagłówkiem wersji"
+else
+  fail "jsQR: brak pliku lub nagłówka wersji"
+fi
 
 # ---------------------------------------------------------------- admin login + policy
 ADMIN_JAR="$TMP/admin.jar"
