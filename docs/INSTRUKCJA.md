@@ -222,8 +222,8 @@ sudo -u zsl-order rm -f /var/lib/zsl-order/admin_start.txt
 
 1. Otwórz `http://<ADRES-SERWERA>:3000/admin`.
 2. Zaloguj się loginem i hasłem z `admin_start.txt`.
-3. System wymusi zmianę hasła. Wpisz nowe hasło (minimum 12 znaków,
-   litera i cyfra) i zapisz je w menedżerze haseł.
+3. System wymusi zmianę hasła. Wpisz nowe hasło (dla admina minimum
+   12 znaków; nie może zawierać loginu) i zapisz je w menedżerze haseł.
 4. Po zmianie sprawdź, że plik zniknął:
 
 ```bash
@@ -457,9 +457,9 @@ nieodebranego zamówienia pozostaje w bazie i raporcie.
 1. Otwórz `http://<ADRES-SERWERA>:3000/student` (lub adres HTTPS podany
    przez szkołę).
 2. Wpisz login i hasło startowe z karty.
-3. Przy pierwszym logowaniu zmień hasło na własne (minimum 12 znaków,
-   litera i cyfra). Nowe hasło zapamiętaj — nie ma odzyskiwania hasła
-   przez e-mail.
+3. Przy pierwszym logowaniu zmień hasło na własne (minimum 10 znaków;
+   nie może zawierać loginu ani być zbyt popularne). Nowe hasło
+   zapamiętaj — nie ma odzyskiwania hasła przez e-mail.
 4. Jeśli hasło zostanie zgubione, zgłoś się do administratora/stołówki.
    Administrator może je zresetować.
 
