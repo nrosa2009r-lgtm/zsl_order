@@ -89,14 +89,21 @@ CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
 
 | Kolumna | Opis |
 | --- | --- |
-| `token_hash` | SHA-256 tokenu sesji (hex); jawny token tylko w ciasteczku |
+| `token_hash` | SHA-256 tokenu sesji (hex) dla cookie albo SHA-256(`"jwt:" + jti`) dla tokenu JWT; jawny token tylko u klienta |
 | `user_id` | właściciel sesji |
-| `csrf_token` | losowy token CSRF (jawny, potrzebny do porównania) |
+| `csrf_token` | losowy token CSRF (jawny, potrzebny do porównania); pusty dla wierszy JWT |
 | `created_at` | Unix UTC |
-| `expires_at` | Unix UTC |
+| `expires_at` | Unix UTC; dla JWT `now + 900` |
 | `last_seen_at` | Unix UTC; odświeżane maks. co 5 min |
 
-Wygasłe sesje są usuwane przy logowaniu i starcie aplikacji.
+Tabela obsługuje **dwa rodzaje sesji**: ciasteczkowe (TTL
+`session_hours`) i JWT (TTL 15 min). Wiersz JWT jest tworzony przy
+`POST /api/auth/token`, a usuwany przy logout Bearer, zmianie hasła,
+dezaktywacji konta lub twardym usunięciu użytkownika. Dzięki temu token
+JWT działa jak referencja do sesji i można go unieważnić natychmiast.
+
+Wygasłe sesje (oba rodzaje) są usuwane przy logowaniu, wydaniu tokenu
+i starcie aplikacji.
 
 ### `menu_items`
 
@@ -322,11 +329,41 @@ Unieważnienie wszystkich sesji (np. incydent):
 DELETE FROM sessions;
 ```
 
+Powyższe usuwa także wiersze JWT — wszystkie wydane tokeny dostępu
+natychmiast przestają działać (oprócz tych, które i tak wygasły).
+Unieważnienie pojedynczego tokenu wymaga znajomości `jti`; praktycznie
+wygodniej wylogować sesję przez API lub usunąć wiersze danego
+użytkownika:
+
+```sql
+DELETE FROM sessions WHERE user_id = ?;
+```
+
+Twarde usunięcie konta (to samo, co robi `DELETE /api/admin/users/:id`)
+wykonuje się w jednej transakcji, w kolejności od dzieci do rodzica:
+
+```sql
+BEGIN;
+DELETE FROM order_items WHERE order_id IN
+  (SELECT id FROM orders WHERE user_id = ?);
+DELETE FROM orders  WHERE user_id = ?;
+DELETE FROM sessions WHERE user_id = ?;
+DELETE FROM users   WHERE id = ?;
+COMMIT;
+```
+
+`users` ma `ON DELETE RESTRICT` na `orders.user_id`, dlatego zamówienia
+trzeba usunąć przed kontem. Wiersze `sessions` (cookie i JWT) giną
+automatycznie dzięki `ON DELETE CASCADE`, ale jawne usunięcie w
+transakcji jest czytelniejsze. Zabronione jest usunięcie własnego konta
+i ostatniego aktywnego administratora. Zdarzenie trafia do audytu jako
+`user_deleted` (już po commicie).
+
 ## 6. Retencja i porządki
 
 Automatyczne:
 
-- sesje wygasłe — przy logowaniu i starcie,
+- sesje wygasłe (cookie i JWT) — przy logowaniu, wydaniu tokenu i starcie,
 - audyt starszy niż 90 dni — przy starcie.
 
 Ręczne (zalecane, zgodnie z polityką szkoły):

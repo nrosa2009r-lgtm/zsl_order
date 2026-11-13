@@ -52,10 +52,15 @@ przechowywane poza systemem.
 
 | Dane | Cel | Uwagi |
 | --- | --- | --- |
-| `token_hash` | utrzymanie sesji | tylko SHA-256 tokenu |
+| `token_hash` | utrzymanie sesji cookie lub JWT | tylko SHA-256 (dla JWT: `SHA-256("jwt:" + jti)`) |
 | `user_id` | powiązanie z kontem | techniczne |
-| `csrf_token` | ochrona CSRF | losowy |
-| `created_at`, `expires_at`, `last_seen_at` | ważność sesji | UTC |
+| `csrf_token` | ochrona CSRF | losowy; pusty dla wierszy JWT (Bearer nie używa CSRF) |
+| `created_at`, `expires_at`, `last_seen_at` | ważność sesji | UTC; JWT wygasa po 15 min |
+
+Tokeny JWT nie są przechowywane w bazie — tylko skrót ich `jti`. Claims
+zawierają wyłącznie pseudonimowe identyfikatory (`sub`, `login`, `role`,
+`code`), bez danych osobowych. Token jest podpisywany sekretem z pliku
+`jwt.key` (0600), który nie jest danymi osobowymi.
 
 ### `orders` i `order_items`
 
@@ -93,7 +98,8 @@ Audyt nie zawiera imion, adresów e-mail, tokenów sesji ani haseł.
 - daty urodzenia, PESEL, zdjęcia, podpisu,
 - danych karty płatniczej lub rachunku bankowego,
 - adresów IP w bazie (limiter działa w pamięci),
-- nagłówka `User-Agent` ani access logów HTTP,
+- nagłówka `User-Agent` ani ciał żądań w logach,
+- tokenów JWT, ciasteczek, CSRF ani haseł w logach,
 - treści czatów/uwag (brak takiej funkcji),
 - plików cookies innych niż sesyjne.
 
@@ -196,6 +202,8 @@ administratora i dostęp do bazy, z zachowaniem backupu i audytu.
 
 - hasła Argon2id, tokeny sesji tylko jako SHA-256,
 - ciasteczka `HttpOnly`, `SameSite=Strict`, `Secure` przy HTTPS,
+- opcjonalne tokeny JWT (15 min) powiązane z sesją w bazie, więc
+  natychmiast unieważnialne; sekret `jwt.key` z `0600`,
 - CSRF, RBAC, rate limiting, walidacja, parametryzowany SQL,
 - CSP bez inline, `frame-ancestors 'none'`, `nosniff`, `no-referrer`,
 - minimalizacja pól i retencja audytu,
@@ -238,7 +246,10 @@ administratora i dostęp do bazy, z zachowaniem backupu i audytu.
   journald na 30 dni (`MaxRetentionSec=30day`) i limit rozmiaru
   (`SystemMaxUse`), zgodnie z [DEPLOYMENT.md](DEPLOYMENT.md).
 - Logi proxy (jeśli włączone): zawierają IP i ścieżki — ustal retencję,
-  ogranicz dostęp, nie loguj ciał żądań.
+  ogranicz dostęp, nie loguj ciał żądań ani nagłówka `Authorization`.
+- Tokeny JWT: nie są danymi osobowymi, ale są bearer-tokenami — nie
+  publikuj ich, nie zapisuj w logach ani w URL. Wygaśnięcie po 15 min
+  ogranicza skutki ewentualnego wycieku.
 - Audyt: techniczny, 90 dni; może być kopiowany do systemu append-only.
 
 ## 11. Rekomendowany tekst informacyjny dla uczniów

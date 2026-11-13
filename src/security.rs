@@ -107,6 +107,14 @@ pub fn hash_token(token: &str) -> String {
 pub fn load_or_create_jwt_secret(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     match fs::read_to_string(path) {
         Ok(text) => {
+            // Plik mógł zostać utworzony lub skopiowany z szerszymi
+            // uprawnieniami — zawsze wymuszamy 0600.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+            }
+
             let secret = text.trim();
             if secret.len() < 64 || !secret.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Err(format!(
@@ -221,8 +229,14 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            let third = load_or_create_jwt_secret(&path).expect("odczyt sekretu 0644");
+            assert_eq!(first, third);
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
+            assert_eq!(
+                mode, 0o600,
+                "istniejący plik musi zostać utwardzony do 0600"
+            );
         }
 
         let _ = fs::remove_file(path);
