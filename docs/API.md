@@ -185,9 +185,13 @@ Bez uwierzytelnienia. Informacje potrzebne na stronie logowania.
 {
   "cafeteria_name": "Stołówka ZSŁ",
   "ordering_enabled": true,
-  "payment_info": "Płatność przy odbiorze: gotówka lub karta."
+  "payment_info": "Płatność przy odbiorze: gotówka lub karta.",
+  "password_min_length": 10
 }
 ```
+
+`password_min_length` to najniższy próg w systemie (konto ucznia). Panel
+używa go do wyświetlenia wymagań bez duplikowania liczby w kodzie.
 
 ### `GET /api/healthz`
 
@@ -297,9 +301,15 @@ Zwraca bieżącego użytkownika i token CSRF (przydatne po odświeżeniu strony)
     "display_code": "KUC-XY7Z9",
     "must_change_password": false
   },
-  "csrf_token": "<64 znaki hex>"
+  "csrf_token": "<64 znaki hex>",
+  "password_min_length": 12,
+  "password_requirements": "Hasło musi mieć co najmniej 12 znaków. Nie może zawierać loginu ani być zbyt popularne."
 }
 ```
+
+`password_min_length` i `password_requirements` zależą od roli (uczeń 10,
+kuchnia i administrator 12) i pochodzą z tej samej stałej co walidacja
+serwera. Panel wyświetla gotowy komunikat bez duplikowania liczby w JS.
 
 ### `POST /api/auth/logout`
 
@@ -321,9 +331,14 @@ Puste ciało `{}` lub brak ciała. Zwraca `{"ok": true}`.
 
 Zasady nowego hasła:
 
-- 10–128 znaków,
-- co najmniej jedna litera ASCII i jedna cyfra,
-- różne od obecnego.
+- uczeń: 10–128 znaków, kuchnia i administrator: 12–128 znaków,
+- hasło nie może zawierać loginu ani być identyczne z loginem,
+- hasło nie może znajdować się na krótkiej liście najpopularniejszych,
+- nowe hasło musi różnić się od obecnego.
+
+Minimum pochodzi z jednej stałej (`src/password_policy.rs`) używanej przez
+walidację i komunikat błędu; to samo pole `password_min_length` zwraca
+`GET /api/auth/me`.
 
 **Odpowiedź 200**
 
@@ -1151,7 +1166,7 @@ szczegółów SQL, ścieżek ani stack trace.
 | --- | --- |
 | login | ≤ 64 znaki po przycięciu; dokładne dopasowanie |
 | hasło logowania | ≤ 256 znaków |
-| nowe hasło | 10–128 znaków, litera ASCII + cyfra, różne od obecnego |
+| nowe hasło | 10–128 znaków (uczeń) lub 12–128 (kuchnia, admin); bez loginu i popularnych haseł; różne od obecnego |
 | nazwa menu | 1–80 znaków |
 | opis menu | ≤ 240 znaków |
 | cena menu | 0–100 000 gr |

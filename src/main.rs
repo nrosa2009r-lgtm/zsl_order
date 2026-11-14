@@ -23,6 +23,7 @@ mod guard;
 mod handlers;
 mod logging;
 mod netinfo;
+mod password_policy;
 mod retention;
 mod security;
 mod state;

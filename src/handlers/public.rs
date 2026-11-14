@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::db;
 use crate::error::AppError;
+use crate::password_policy;
 use crate::state::AppState;
 use axum::{Json, extract::State};
 use serde::Serialize;
@@ -12,6 +13,8 @@ pub struct PublicInfo {
     pub cafeteria_name: String,
     pub ordering_enabled: bool,
     pub payment_info: String,
+    /// Minimalna długość hasła dla konta ucznia (najniższy próg w systemie).
+    pub password_min_length: usize,
 }
 
 pub async fn info(State(state): State<Arc<AppState>>) -> Result<Json<PublicInfo>, AppError> {
@@ -24,6 +27,7 @@ pub async fn info(State(state): State<Arc<AppState>>) -> Result<Json<PublicInfo>
             "Płatność przy odbiorze: gotówka lub karta.",
         )
         .await,
+        password_min_length: password_policy::STUDENT_MIN_LENGTH,
     }))
 }
 

@@ -6,7 +6,8 @@
 
 1. Wpisz login i hasło z karty.
 2. System poprosi o nowe hasło. Wpisz je dwa razy.
-3. Nowe hasło: **minimum 10 znaków**, nie może zawierać loginu.
+3. Nowe hasło: **minimum 10 znaków**, nie może zawierać loginu ani być
+   popularnym hasłem (np. `qwerty123`).
 4. Zapamiętaj hasło. Nie masz odzyskiwania przez e-mail.
 
 ## 2. Zamówienie

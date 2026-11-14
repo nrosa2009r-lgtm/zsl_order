@@ -7,6 +7,8 @@
         csrf: null,
         user: null,
         publicInfo: null,
+        passwordMinLength: 10,
+        passwordRequirements: "",
     };
 
     class ApiError extends Error {
@@ -268,6 +270,12 @@
         const data = await api.get("/api/auth/me", { redirectOn401: false });
         state.csrf = data.csrf_token;
         state.user = data.user;
+        if (Number.isInteger(data.password_min_length)) {
+            state.passwordMinLength = data.password_min_length;
+        }
+        if (typeof data.password_requirements === "string" && data.password_requirements) {
+            state.passwordRequirements = data.password_requirements;
+        }
         return data.user;
     }
 
@@ -329,6 +337,12 @@
         });
     }
 
+    function passwordRequirementsText() {
+        if (state.passwordRequirements) return state.passwordRequirements;
+        return "Hasło musi mieć co najmniej " + state.passwordMinLength +
+            " znaków. Nie może zawierać loginu ani być zbyt popularne.";
+    }
+
     function openPasswordDialog(force) {
         let dialog = $("#passwordDialog");
         if (!dialog) {
@@ -338,7 +352,8 @@
                 h("h2", { text: "Zmiana hasła" }),
                 h("p", {
                     class: "muted small",
-                    text: "Hasło musi mieć co najmniej 10 znaków, literę i cyfrę.",
+                    attrs: { id: "passwordRequirements" },
+                    text: passwordRequirementsText(),
                 })
             );
 
@@ -372,7 +387,6 @@
                     attrs: { id: "passwordError", role: "alert", hidden: true },
                 })
             );
-
             const actions = h("div", { class: "dialog-actions" });
             const cancel = h("button", {
                 class: "btn btn-ghost",
@@ -408,8 +422,9 @@
                     errorNode.hidden = false;
                     return;
                 }
-                if (next.length < 10) {
-                    errorNode.textContent = "Nowe hasło musi mieć co najmniej 10 znaków.";
+                if (Array.from(next).length < state.passwordMinLength) {
+                    errorNode.textContent = "Nowe hasło musi mieć co najmniej " +
+                        state.passwordMinLength + " znaków.";
                     errorNode.hidden = false;
                     return;
                 }
@@ -439,6 +454,15 @@
             });
 
             document.body.append(dialog);
+        }
+
+        const requirements = $("#passwordRequirements");
+        if (requirements) {
+            requirements.textContent = passwordRequirementsText();
+        }
+        const newPasswordInput = $("#pw_newPassword");
+        if (newPasswordInput) {
+            newPasswordInput.minLength = state.passwordMinLength;
         }
 
         if (force) {

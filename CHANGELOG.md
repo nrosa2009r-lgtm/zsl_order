@@ -22,6 +22,16 @@ Autorem projektu jest **natan-rosa**.
 ### Zmienione
 
 - Deklarowane MSRV podniesione do Rusta 1.88 (wymóg `time 0.3.55`).
+- Polityka haseł ma jedno źródło w `src/password_policy.rs`: uczeń 10,
+  kuchnia i admin 12 znaków, limit 128. `/api/auth/me` zwraca
+  `password_min_length` i gotowy komunikat, więc panel nie zaszywa już
+  liczby „10” w JavaScript.
+
+### Naprawione
+
+- Komunikat zmiany hasła nie obiecuje już „litery i cyfry”, której
+  walidacja nigdy nie wymagała; pokazuje rzeczywiste wymagania (długość,
+  brak loginu, brak popularnych haseł).
 
 ## [1.0.0] — 2026-11-13
 

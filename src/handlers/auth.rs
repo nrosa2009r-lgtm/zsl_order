@@ -3,6 +3,7 @@ use crate::auth::{self, AuthUser};
 use crate::client_ip::ClientIp;
 use crate::db;
 use crate::error::AppError;
+use crate::password_policy;
 use crate::security;
 use crate::state::AppState;
 use crate::util;
@@ -40,6 +41,10 @@ pub struct LoginResponse {
 pub struct MeResponse {
     pub user: UserView,
     pub csrf_token: String,
+    /// Minimalna długość hasła dla roli zalogowanego użytkownika.
+    pub password_min_length: usize,
+    /// Gotowy komunikat o wymaganiach, zbudowany z tej samej stałej.
+    pub password_requirements: String,
 }
 
 #[derive(Serialize)]
@@ -287,6 +292,8 @@ pub async fn token(
 }
 
 pub async fn me(Extension(user): Extension<AuthUser>) -> Json<MeResponse> {
+    let password_min_length = password_policy::min_length(&user.role);
+    let password_requirements = password_policy::requirements_text(&user.role);
     Json(MeResponse {
         user: UserView {
             login: user.login,
@@ -295,6 +302,8 @@ pub async fn me(Extension(user): Extension<AuthUser>) -> Json<MeResponse> {
             must_change_password: user.must_change_password,
         },
         csrf_token: user.csrf_token,
+        password_min_length,
+        password_requirements,
     })
 }
 
@@ -414,22 +423,18 @@ const COMMON_PASSWORDS: &[&str] = &[
     "uczen123",
 ];
 
-fn password_min_length(role: &str) -> usize {
-    // Personel i administrator mają dostęp do danych całej stołówki.
-    if role == "student" { 10 } else { 12 }
-}
-
 fn validate_new_password(
     new_password: &str,
     current_password: &str,
     login: &str,
     role: &str,
 ) -> Result<(), AppError> {
-    let min_length = password_min_length(role);
+    let min_length = password_policy::min_length(role);
     let length = new_password.chars().count();
-    if !(min_length..=128).contains(&length) {
+    if !(min_length..=password_policy::MAX_LENGTH).contains(&length) {
         return Err(AppError::bad(format!(
-            "Nowe hasło musi mieć od {min_length} do 128 znaków."
+            "Nowe hasło musi mieć od {min_length} do {} znaków.",
+            password_policy::MAX_LENGTH
         )));
     }
 
@@ -500,5 +505,22 @@ mod tests {
         assert!(
             validate_new_password("qwerty123", "inne-haslo-123", "s-uczen", "student").is_err()
         );
+    }
+
+    #[test]
+    fn too_short_message_uses_the_same_minimum_as_validation() {
+        for role in ["student", "kitchen", "admin"] {
+            let min = password_policy::min_length(role);
+            let too_short = "a".repeat(min - 1);
+            let error = validate_new_password(&too_short, "inne-haslo-123", "konto", role)
+                .expect_err("hasło krótsze od minimum musi zostać odrzucone");
+            let AppError::BadRequest(message) = error else {
+                panic!("oczekiwano BadRequest, otrzymano {error:?}");
+            };
+            assert!(
+                message.contains(&min.to_string()),
+                "komunikat dla roli {role} nie zawiera minimum {min}: {message}"
+            );
+        }
     }
 }

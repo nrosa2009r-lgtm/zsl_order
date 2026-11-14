@@ -61,6 +61,7 @@ rozdzielanie usług.
 | `src/db.rs` | schemat, indeksy, seed ustawień i menu, czyszczenie, bootstrap admina, audyt, ustawienia |
 | `src/auth.rs` | sesje cookie i Bearer, JWT (claims, podpis, weryfikacja), CSRF, guardy ról, limiter logowania |
 | `src/security.rs` | Argon2id, generatory loginów/haseł/kodów, SHA-256 tokenów, sekret `jwt.key`, porównanie w czasie stałym |
+| `src/password_policy.rs` | jedno źródło polityki haseł: minima dla ucznia (10) i personelu (12), limit 128, komunikat wymagań |
 | `src/logging.rs` | inicjalizacja `tracing` (JSON na stdout, journald), middleware logujące żądania; adres klienta tylko po `LOG_CLIENT_IP=1` |
 | `src/netinfo.rs` | adres dostępowy w sieci lokalnej wyliczany z adresu nasłuchu (log startowy) |
 | `src/util.rs` | czas UTC, doba i godziny w `Europe/Warsaw`, formatowanie dat, walidacja `HH:MM` |

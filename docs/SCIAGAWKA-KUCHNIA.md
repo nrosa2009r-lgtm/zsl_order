@@ -5,10 +5,12 @@
 ## 1. Start zmiany
 
 1. Zaloguj się kontem `kitchen`.
-2. Sprawdź zakładkę **Zamówienia** — widoczne są `new`, `preparing`,
+2. Zmiana hasła: minimum **12 znaków**, bez loginu i popularnych haseł
+   (przycisk **Zmień hasło**).
+3. Sprawdź zakładkę **Zamówienia** — widoczne są `new`, `preparing`,
    `ready`.
-3. Sprawdź, czy tablet ma poprawną godzinę i strefę czasu.
-4. Przygotuj czytnik USB/Bluetooth albo sprawdź, czy kamera działa.
+4. Sprawdź, czy tablet ma poprawną godzinę i strefę czasu.
+5. Przygotuj czytnik USB/Bluetooth albo sprawdź, czy kamera działa.
 
 ## 2. Statusy
 
