@@ -105,7 +105,7 @@ wydrukowany/wręczony login i hasło od administratora lub wychowawcy.
 
 | Warstwa | Technologia | Uwagi |
 | --- | --- | --- |
-| Język | Rust 2024 edition | wymaga Rust 1.85+ |
+| Język | Rust 2024 edition | wymaga Rust 1.88+ |
 | HTTP | Axum 0.7 / Tokio 1 | lekki, asynchroniczny serwer |
 | Baza | SQLite (sqlx 0.8) | WAL, klucze obce, transakcje |
 | Hasła | Argon2id (`argon2` 0.5) | losowa sól, domyślne parametry |
@@ -144,7 +144,7 @@ Szczegóły warstw, kolejności middleware i przepływów opisuje
 
 ### Wymagania
 
-- Rust 1.85+ i Cargo
+- Rust 1.88+ i Cargo
 - Linux, macOS lub Windows (produkcyjnie zalecany Linux)
 - brak zewnętrznej bazy danych — SQLite jest wbudowany
 
@@ -185,6 +185,27 @@ Hasło:  XXXXXXXXXXXXXXXX
 
 Po pierwszym zalogowaniu system wymusi zmianę hasła, a plik
 `admin_start.txt` zostanie automatycznie usunięty.
+
+### Uruchomienie w Dockerze
+
+Najszybszy wariant, bez instalowania Rusta:
+
+```bash
+docker compose up -d --build
+docker compose exec zsl-order cat /data/admin_start.txt
+```
+
+Aplikacja: `http://<IP-komputera>:11000` (Docker mapuje port hosta 11000
+na 3000 w kontenerze). Dla HTTPS w sieci lokalnej (kamera QR, brak
+ostrzeżeń przeglądarki) — port **10000**:
+
+```bash
+SITE_HOST=192.168.0.124 docker compose \
+  -f docker-compose.yml -f docker-compose.https.yml up -d
+```
+
+Pełna instrukcja — wolumeny, konfiguracja, kopie zapasowe, aktualizacja,
+zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 
 ### Pierwsze kroki
 
@@ -507,6 +528,9 @@ Gotowe przykłady systemd i Nginx, backup, aktualizacja i checklista:
 zsl-order/
 ├── Cargo.toml
 ├── Cargo.lock
+├── Dockerfile             # obraz dwuetapowy (build + runtime)
+├── docker-compose.yml     # uruchomienie kontenera (HTTP, port 11000)
+├── docker-compose.https.yml  # nakładka HTTPS z Caddy
 ├── config.example.json
 ├── README.md
 ├── docs/
@@ -514,6 +538,7 @@ zsl-order/
 │   ├── ARCHITECTURE.md
 │   ├── DATABASE.md
 │   ├── DEPLOYMENT.md
+│   ├── DOCKER.md
 │   ├── PRIVACY.md
 │   └── SECURITY.md
 ├── frontend/
@@ -557,6 +582,7 @@ uruchomieniu z uprawnieniami `0600`.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | moduły, middleware, przepływy, decyzje projektowe |
 | [docs/SECURITY.md](docs/SECURITY.md) | model zagrożeń, mechanizmy ochrony, ograniczenia, checklista |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | systemd, Nginx/TLS, backup, aktualizacje, monitoring |
+| [docs/DOCKER.md](docs/DOCKER.md) | uruchomienie w kontenerze, HTTPS przez Caddy, wolumeny, kopie zapasowe |
 | [docs/DATABASE.md](docs/DATABASE.md) | schemat SQL, indeksy, ustawienia, zapytania operacyjne |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | zakres danych, pseudonimizacja, retencja, RODO |
 | [docs/INSTRUKCJA.md](docs/INSTRUKCJA.md) | pełna instrukcja obsługi: instalacja, konfiguracja, konta, kuchnia, admin, backup, Cloudflare, FAQ, checklista |

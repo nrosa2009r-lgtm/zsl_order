@@ -7,7 +7,7 @@ Mechanizmy ochrony opisuje [SECURITY.md](SECURITY.md).
 ## 1. Wymagania
 
 - Linux (zalecany Debian/Ubuntu/Arch), systemd, Nginx lub Caddy.
-- Rust 1.85+ tylko do budowania; na serwerze wystarczy binarka.
+- Rust 1.88+ tylko do budowania; na serwerze wystarczy binarka.
 - SQLite w wersji wbudowanej w `sqlx` — nie trzeba instalować serwera DB.
 - Osobny użytkownik systemowy, np. `zsl`.
 - Ważny certyfikat TLS (Let's Encrypt lub wewnętrzny CA).
@@ -24,6 +24,10 @@ cargo build --release --locked
 
 Binarka: `target/release/zsl-order`. Profil release ma LTO, `strip`,
 `panic = "abort"` i optymalizację `opt-level = 3`.
+
+Wariant kontenerowy (Docker + opcjonalny HTTPS przez Caddy) opisuje
+[DOCKER.md](DOCKER.md). Dalsze sekcje dotyczą wdrożenia natywnego z
+systemd.
 
 Testy przed wdrożeniem:
 

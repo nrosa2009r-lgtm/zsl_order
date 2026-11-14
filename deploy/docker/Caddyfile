@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Reverse proxy z TLS dla ZSL Order w kontenerze.
+#
+# Adres podaje się jedną zmienną SITE_HOST — IP komputera albo nazwę hosta
+# w sieci lokalnej, np.:
+#   SITE_HOST=192.168.0.124
+#
+# `default_sni` jest konieczne, bo przeglądarki nie wysyłają SNI, gdy łączą
+# się z adresem IP. Certyfikat wystawia wewnętrzny CA Caddy (`tls internal`),
+# więc urządzenia w sieci muszą zaufać jego certyfikatowi głównemu —
+# patrz docs/DOCKER.md.
+
+{
+	default_sni {$SITE_HOST:localhost}
+	# Port 80 nie jest publikowany na hoście — nie tworzymy serwera przekierowań.
+	auto_https disable_redirects
+}
+
+https://{$SITE_HOST:localhost} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy zsl-order:3000
+}

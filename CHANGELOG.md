@@ -4,6 +4,25 @@ Format oparty na [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 Wersjonowanie zgodne z [Semantic Versioning](https://semver.org/lang/pl/).
 Autorem projektu jest **natan-rosa**.
 
+## [Unreleased]
+
+### Dodane
+
+- Uruchomienie w kontenerze: dwuetapowy `Dockerfile`, `docker-compose.yml`
+  i nakładka `docker-compose.https.yml` z Caddy (TLS z wewnętrznym CA dla
+  sieci lokalnej). Porty hosta: **11000 → HTTP**, **10000 → HTTPS**
+  (wewnątrz kontenera nadal 3000/443). Dane trzymane w wolumenie `/data`,
+  healthcheck HTTP, użytkownik UID 10001, instrukcja w `docs/DOCKER.md`.
+- Log startowy podaje dokładny adres dostępowy w sieci lokalnej
+  (`http://<IP>:<port>`); nasłuch wyłącznie na pętli jest jawnie
+  ostrzegany.
+- Opcjonalne `LOG_CLIENT_IP=1` dopisuje adres klienta do logów żądań
+  (domyślnie `-` — adresy IP nie są przechowywane).
+
+### Zmienione
+
+- Deklarowane MSRV podniesione do Rusta 1.88 (wymóg `time 0.3.55`).
+
 ## [1.0.0] — 2026-11-13
 
 Pierwsze wydanie produkcyjne: kompletny system zamawiania posiłków dla

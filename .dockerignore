@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Wykluczenia kontekstu budowania obrazu Docker.
+# W obrazie muszą znaleźć się tylko: Cargo.toml, Cargo.lock, src/,
+# migrations/, frontend/ oraz deploy/docker/entrypoint.sh.
+
+/target
+/.git
+/.github
+/.cargo
+/deny.toml
+/docs
+/scripts
+/config.example.json
+/.env.example
+/.env
+/.gitignore
+
+# Dane lokalne i sekrety — nigdy do obrazu.
+/config.json
+/admin_start.txt
+/jwt.key
+/baza.db
+/*.db
+/*.db-wal
+/*.db-shm
+/backups
+/logs
+/tmp

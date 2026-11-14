@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# Uruchomienie ZSL Order w kontenerze:
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose exec zsl-order cat /data/admin_start.txt
+
+services:
+  zsl-order:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zsl-order:1.0.0
+    container_name: zsl-order
+    restart: unless-stopped
+    ports:
+      # HTTP: port hosta 11000 -> port aplikacji 3000 w kontenerze.
+      # Zmiana lewej strony zmienia adres dla klientów (np. "12000:3000").
+      - "11000:3000"
+    environment:
+      DEPLOY_MODE: local
+      BIND_ADDR: 0.0.0.0:3000
+      # Adres publiczny potrzebny tylko w trybie tunnel (Cloudflare).
+      # PUBLIC_URL: https://zsl.example.com
+      #
+      # Retencja: 0 = bez automatycznego usuwania starych zamówień.
+      # RETENTION_ORDERS_DAYS: "30"
+      #
+      # Diagnostyka sieci: dopisuje adres klienta do logów żądań.
+      # LOG_CLIENT_IP: "1"
+    volumes:
+      - zsl-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  zsl-data:

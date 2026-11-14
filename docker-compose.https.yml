@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# Nakładka HTTPS: Caddy jako reverse proxy z TLS przed aplikacją.
+#
+# Użycie (SITE_HOST = IP lub nazwa hosta w sieci lokalnej):
+#   SITE_HOST=192.168.0.124 docker compose \
+#     -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# HTTPS na porcie hosta 10000 (w kontenerze Caddy słucha na 443),
+# HTTP bezpośrednio na porcie 11000 (patrz docker-compose.yml).
+# Porty 80/443/3000 na hoście nie są używane.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: zsl-order-caddy
+    restart: unless-stopped
+    depends_on:
+      zsl-order:
+        condition: service_healthy
+    ports:
+      # HTTPS: port hosta 10000 -> 443 w kontenerze Caddy.
+      - "10000:443"
+    environment:
+      SITE_HOST: ${SITE_HOST:-localhost}
+    volumes:
+      - ./deploy/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

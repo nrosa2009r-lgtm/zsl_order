@@ -22,6 +22,7 @@ mod error;
 mod guard;
 mod handlers;
 mod logging;
+mod netinfo;
 mod retention;
 mod security;
 mod state;
@@ -197,6 +198,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or("brak"),
         "Serwer uruchomiony"
     );
+    log_access_urls(&config, local);
 
     axum::serve(
         listener,
@@ -205,6 +207,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     Ok(())
+}
+
+/// Pokazuje w logach dokładny adres, pod którym serwer odpowiada w sieci.
+/// Bez tego użytkownik musi sam odgadnąć adres IP komputera, co jest
+/// najczęstszą przyczyną „nie widać aplikacji z innego urządzenia”.
+fn log_access_urls(config: &Config, local: SocketAddr) {
+    if local.ip().is_loopback() && !config.is_tunnel() {
+        tracing::warn!(
+            address = %local,
+            "Nasłuch tylko na adresie pętlowym — inne urządzenia w sieci lokalnej nie \
+             połączą się. Ustaw BIND_ADDR=0.0.0.0:3000 i otwórz port w firewallu."
+        );
+        return;
+    }
+
+    let urls = netinfo::access_urls(local);
+    if urls.is_empty() {
+        tracing::info!(
+            address = %local,
+            "Nasłuch na wszystkich interfejsach — adres sieciowy sprawdzisz poleceniem: ip -4 addr"
+        );
+        return;
+    }
+
+    for url in urls {
+        if std::path::Path::new("/.dockerenv").exists() {
+            tracing::info!(
+                url = %url,
+                "Adres wewnątrz kontenera — z sieci użyj http://<IP-hosta>:<opublikowany-port>"
+            );
+        } else {
+            tracing::info!(url = %url, "Adres dostępowy w sieci lokalnej");
+        }
+    }
 }
 
 fn build_router(state: Arc<AppState>) -> Router {
