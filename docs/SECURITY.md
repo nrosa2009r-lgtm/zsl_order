@@ -170,14 +170,26 @@ i żądania Bearer):
   `PUBLIC_URL`,
 - `null`, pusty lub niezgodny `Origin` → `403`.
 
-Tryb `local` ignoruje `CF-Connecting-IP` i inne nagłówki proxy. W trybie
-`tunnel` adres klienta pochodzi z `CF-Connecting-IP` wyłącznie wtedy, gdy
-połączenie przyszło z adresu z `TRUSTED_PROXIES`; w przeciwnym razie
-używany jest adres gniazda TCP.
+Tryb `local` bez `CLIENT_IP_HEADER` ignoruje `CF-Connecting-IP` i inne
+nagłówki proxy. W trybie `tunnel` adres klienta pochodzi z
+`CF-Connecting-IP` wyłącznie wtedy, gdy połączenie przyszło z adresu z
+`TRUSTED_PROXIES`; w przeciwnym razie używany jest adres gniazda TCP.
 
-Jeśli w trybie `tunnel` zaufane proxy **nie przekazało** nagłówka
-`CF-Connecting-IP` albo wartość jest nieprawidłowa (pusta, wiele adresów,
-nie-IP), aplikacja:
+**Reverse proxy w sieci lokalnej (Docker + Caddy).** Opcjonalne
+`CLIENT_IP_HEADER=X-Forwarded-For` (albo `X-Real-IP`) pozwala odczytać
+adres klienta również w trybie `local`, ale **tylko** gdy połączenie
+przyszło z `TRUSTED_PROXIES`. Caddy w `docker-compose.https.yml`
+**nadpisuje** nagłówek adresem rzeczywistego klienta, a zaufany jest
+wyłącznie jego stały adres w dedykowanej sieci (`172.28.0.2/32`), nie
+cała podsieć Dockera. Dzięki temu klient łączący się bezpośrednio z
+opublikowanym portem 11000 nie może podrobić adresu nagłówkiem. Dla
+`X-Forwarded-For` aplikacja wybiera pierwszy adres od prawej, który nie
+jest zaufanym proxy — wartości dopisane przez klienta po lewej stronie są
+ignorowane. Nagłówek z niezaufanego adresu jest zawsze odrzucany.
+
+Jeśli zaufane proxy **nie przekazało** nagłówka (`CF-Connecting-IP` w
+trybie `tunnel` lub skonfigurowanego `CLIENT_IP_HEADER`) albo wartość jest
+nieprawidłowa (pusta, wiele adresów, nie-IP), aplikacja:
 
 - **nie udaje**, że wszystko jest w porządku — zapisuje ostrzeżenie
   `WARN` w logach (maks. raz na minutę, aby nie zalać logów),
@@ -190,10 +202,10 @@ nie-IP), aplikacja:
   może współdzielić jeden publiczny adres.
 
 Ostrzeżenie w logach jest sygnałem, że należy sprawdzić konfigurację
-`cloudflared` (nagłówek jest dodawany automatycznie) oraz zgodność
-`TRUSTED_PROXIES` z adresem, z którego łączy się tunel. Bez tego
-mechanizmu błędna konfiguracja po cichu sprowadzałaby wszystkich
-użytkowników do `127.0.0.1`.
+`cloudflared` lub Caddy (nagłówek powinien być dodawany automatycznie)
+oraz zgodność `TRUSTED_PROXIES` z adresem, z którego łączy się proxy.
+Bez tego mechanizmu błędna konfiguracja po cichu sprowadzałaby wszystkich
+użytkowników do adresu proxy.
 
 Żądania bez `Origin` są dozwolone (np. `curl`). W trybie ciasteczkowym
 nadal obowiązuje CSRF; w trybie Bearer nie ma czego chronić przed
@@ -341,7 +353,7 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 | Obszar | Ograniczenie | Rekomendacja |
 | --- | --- | --- |
 | MFA | brak dla adminów | silne unikalne hasła, ograniczenie dostępu sieciowego, ewentualnie MFA przed wdrożeniem publicznym |
-| Rate limiting | w pamięci, per proces; za proxy widzi IP proxy | uruchamiać bezpośrednio za firewallem lub dodać zaufane `X-Forwarded-For` w kodzie; nie polegać wyłącznie na limiterze |
+| Rate limiting | w pamięci, per proces; za proxy bez nagłówka widzi IP proxy | uruchamiać bezpośrednio za firewallem albo ustawić `CLIENT_IP_HEADER` + wąskie `TRUSTED_PROXIES`; nie polegać wyłącznie na limiterze |
 | Fallback nasłuchu | przy zajętym porcie aplikacja próbuje `0.0.0.0:3000` | zapewnić wolny port; w produkcji zweryfikować interfejs nasłuchu |
 | Domyślna konfiguracja | `ip = 0.0.0.0`, `secure_cookies = false` | zawsze ustawiać `127.0.0.1` + HTTPS + `secure_cookies = true` |
 | HTTPS | aplikacja nie terminuje TLS | obowiązkowy reverse proxy (Nginx/Caddy) z ważnym certyfikatem |

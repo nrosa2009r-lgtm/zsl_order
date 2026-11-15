@@ -1,6 +1,6 @@
 # Ściągawka ucznia — ZSL Order
 
-**Panel:** `http://<ADRES-SERWERA>:3000/student` (albo adres podany przez szkołę)
+**Panel:** `http://<ADRES-SYSTEMU>:3000/student` (albo adres podany przez szkołę)
 
 ## 1. Pierwsze logowanie
 

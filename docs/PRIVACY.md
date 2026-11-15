@@ -242,7 +242,11 @@ administratora i dostęp do bazy, z zachowaniem backupu i audytu.
   komunikaty (np. `account_id`, rola). **Nie** zawierają nagłówków,
   ciasteczek, tokenów JWT/CSRF, haseł ani ciał żądań. Adres IP występuje
   wyłącznie w zdarzeniach bezpieczeństwa (nieudane logowanie, blokada
-  limitera); zamiast loginu zapisywane jest ID konta. Ustaw retencję
+  limitera); zamiast loginu zapisywane jest ID konta.
+  **Wyjątek diagnostyczny:** `LOG_CLIENT_IP=1` dopisuje adres klienta do
+  logów żądań. Włączaj go tylko na krótko, gdy trzeba ustalić, czy ruch
+  dociera do serwera, potem wyłącz i usuń stare wpisy. Domyślnie adres
+  jest zastępowany przez `-`. Ustaw retencję
   journald na 30 dni (`MaxRetentionSec=30day`) i limit rozmiaru
   (`SystemMaxUse`), zgodnie z [DEPLOYMENT.md](DEPLOYMENT.md).
 - Logi proxy (jeśli włączone): zawierają IP i ścieżki — ustal retencję,

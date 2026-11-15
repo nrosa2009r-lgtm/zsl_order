@@ -18,6 +18,12 @@ Autorem projektu jest **natan-rosa**.
   ostrzegany.
 - Opcjonalne `LOG_CLIENT_IP=1` dopisuje adres klienta do logów żądań
   (domyślnie `-` — adresy IP nie są przechowywane).
+- `CLIENT_IP_HEADER` (`X-Forwarded-For` lub `X-Real-IP`) pozwala odczytać
+  adres klienta za reverse proxy w sieci lokalnej; nagłówek jest
+  honorowany wyłącznie od `TRUSTED_PROXIES`. Caddy w
+  `docker-compose.https.yml` nadpisuje go adresem klienta, a zaufany jest
+  tylko stały adres Caddy (`172.28.0.2/32`). Podrobiony nagłówek z
+  niezaufanego źródła jest ignorowany.
 
 ### Zmienione
 

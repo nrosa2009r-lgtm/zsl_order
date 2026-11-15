@@ -2,7 +2,7 @@
 # Nakładka HTTPS: Caddy jako reverse proxy z TLS przed aplikacją.
 #
 # Użycie (SITE_HOST = IP lub nazwa hosta w sieci lokalnej):
-#   SITE_HOST=192.168.0.124 docker compose \
+#   SITE_HOST=<ADRES-SYSTEMU> docker compose \
 #     -f docker-compose.yml -f docker-compose.https.yml up -d
 #
 # HTTPS na porcie hosta 10000 (w kontenerze Caddy słucha na 443),
@@ -10,6 +10,18 @@
 # Porty 80/443/3000 na hoście nie są używane.
 
 services:
+  zsl-order:
+    environment:
+      # Caddy przekazuje adres klienta w X-Forwarded-For. Aplikacja ufa
+      # temu nagłówkowi WYŁĄCZNIE od adresu Caddy w dedykowanej sieci
+      # (172.28.0.2), a nie od całej podsieci Dockera. Dzięki temu klient
+      # łączący się bezpośrednio z portem 11000 nie może podmienić adresu.
+      CLIENT_IP_HEADER: X-Forwarded-For
+      TRUSTED_PROXIES: 172.28.0.2/32
+    networks:
+      - default
+      - zsl-proxy
+
   caddy:
     image: caddy:2-alpine
     container_name: zsl-order-caddy
@@ -22,10 +34,23 @@ services:
       - "10000:443"
     environment:
       SITE_HOST: ${SITE_HOST:-localhost}
+    networks:
+      default:
+      zsl-proxy:
+        ipv4_address: 172.28.0.2
     volumes:
       - ./deploy/docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+
+networks:
+  # Dedykowana sieć tylko dla Caddy -> aplikacja. Stały adres Caddy jest
+  # jedynym zaufanym proxy. Jeśli 172.28.0.0/24 koliduje z inną siecią,
+  # zmień podsieć i adres w TRUSTED_PROXIES.
+  zsl-proxy:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 
 volumes:
   caddy-data:

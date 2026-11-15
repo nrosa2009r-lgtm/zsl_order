@@ -33,7 +33,8 @@ docker compose logs -f
 ```
 
 Po chwili status to `Up (healthy)`. Adres w sieci lokalnej:
-`http://<IP-komputera>:11000`.
+`http://<ADRES-SYSTEMU>:11000`, gdzie `<ADRES-SYSTEMU>` to adres IP
+komputera albo jego nazwa w sieci (np. `zsl-serwer.local`).
 
 Odbierz dane administratora (tylko przy pierwszym starcie, na świeżym
 wolumenie):
@@ -56,7 +57,7 @@ postawić Caddy jako reverse proxy z własnym CA.
 
 ```bash
 # SITE_HOST = adres IP komputera w sieci lokalnej (bez http://)
-SITE_HOST=192.168.0.124 docker compose \
+SITE_HOST=<ADRES-SYSTEMU> docker compose \
   -f docker-compose.yml -f docker-compose.https.yml up -d
 ```
 
@@ -64,7 +65,7 @@ Aby ustawienie było trwałe, zapisz je w pliku `.env` w katalogu projektu
 (Compose czyta go automatycznie):
 
 ```dotenv
-SITE_HOST=192.168.0.124
+SITE_HOST=<ADRES-SYSTEMU>
 ```
 
 Wtedy wystarczy:
@@ -73,9 +74,37 @@ Wtedy wystarczy:
 docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
 ```
 
-Efekt: `https://192.168.0.124:10000`, a aplikacja pozostaje dostępna po
-HTTP na porcie 11000 (`http://192.168.0.124:11000`). Porty 80, 443 i 3000
+Efekt: `https://<ADRES-SYSTEMU>:10000`, a aplikacja pozostaje dostępna po
+HTTP na porcie 11000 (`http://<ADRES-SYSTEMU>:11000`). Porty 80, 443 i 3000
 na hoście nie są używane, więc nie kolidują z innymi usługami.
+
+### Adres klienta za Caddy (limity per IP)
+
+Caddy stoi przed aplikacją, więc bez przekazania adresu klienta aplikacja
+widzi tylko adres kontenera Caddy. Wszyscy użytkownicy trafiliby wtedy do
+jednego koszyka limitu prób logowania — jedna osoba mogłaby zablokować
+logowanie całej szkole.
+
+Nakładka HTTPS ustawia dlatego:
+
+- `CLIENT_IP_HEADER=X-Forwarded-For` — aplikacja czyta adres klienta z
+  tego nagłówka,
+- `TRUSTED_PROXIES=172.28.0.2/32` — tylko ten adres (Caddy w dedykowanej
+  sieci `zsl-proxy`) jest zaufany.
+
+Caddy **nadpisuje** `X-Forwarded-For` adresem rzeczywistego klienta
+(`header_up X-Forwarded-For {remote_host}`), więc klient nie może
+podmienić adresu własnym nagłówkiem. Połączenie bezpośrednie z portem
+11000 przychodzi z innego adresu (bramy sieci Compose), nie jest zaufane
+i podrobiony nagłówek jest ignorowany.
+
+Gdy nagłówka brakuje lub jest niepoprawny, aplikacja loguje ostrzeżenie
+(maks. raz na minutę) i wraca do adresu proxy. Wtedy limity per IP znów są
+wspólne — sprawdź wtedy konfigurację Caddy i `TRUSTED_PROXIES`.
+
+Jeśli podsieć `172.28.0.0/24` koliduje z inną siecią na hoście, zmień
+`subnet` w `docker-compose.https.yml` **oraz** adres w `TRUSTED_PROXIES`
+i `ipv4_address` Caddy.
 
 ### Zaufanie certyfikatowi Caddy
 
@@ -110,13 +139,13 @@ certyfikat, działa też poza siecią lokalną — patrz
 
 ## 4. Przeglądarka wymusza HTTPS
 
-Nowoczesne przeglądarki przy wpisaniu samego adresu (`192.168.0.124:11000`)
+Nowoczesne przeglądarki przy wpisaniu samego adresu (`<ADRES-SYSTEMU>:11000`)
 najpierw próbują `https://`. Ten serwer nie obsługuje TLS, więc próba kończy
 się błędem i wygląda to jak „nie ma połączenia”.
 
 Rozwiązania:
 
-1. wpisz pełny adres z protokołem: `http://192.168.0.124:11000`,
+1. wpisz pełny adres z protokołem: `http://<ADRES-SYSTEMU>:11000`,
 2. albo postaw HTTPS z §3 i korzystaj z `https://`,
 3. w Chrome wyłącz „Always use secure connections” (Ustawienia →
    Prywatność i bezpieczeństwo → Bezpieczeństwo), jeśli nie chcesz HTTPS
@@ -151,6 +180,8 @@ Ustawienia przekazuje się zmiennymi środowiskowymi w `docker-compose.yml`
 | `RETENTION_ORDERS_DAYS` | `0` | 0 = bez usuwania starych zamówień |
 | `RETENTION_AUDIT_DAYS` | `90` | retencja dziennika audytu |
 | `SESSION_HOURS` | `12` | ważność sesji |
+| `CLIENT_IP_HEADER` | brak | `X-Forwarded-For` lub `X-Real-IP`; honorowany tylko od `TRUSTED_PROXIES` |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1` | adresy/CIDR proxy, którym wolno przekazać adres klienta |
 | `LOG_CLIENT_IP` | brak | `1` dopisuje adres klienta do logów żądań (diagnostyka sieci) |
 | `RUST_LOG` | `info,sqlx=warn,hyper=warn,axum=warn` | poziom logów |
 

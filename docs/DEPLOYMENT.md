@@ -140,6 +140,8 @@ Przykładowy `/etc/zsl-order/zsl-order.env`:
 DEPLOY_MODE=local
 BIND_ADDR=0.0.0.0:8080
 TRUSTED_PROXIES=127.0.0.1,::1
+# Opcjonalnie, gdy przed aplikacją stoi proxy w sieci lokalnej:
+# CLIENT_IP_HEADER=X-Forwarded-For
 PUBLIC_URL=http://<adres-serwera>:8080
 COOKIE_SECURE=false
 ```

@@ -40,6 +40,41 @@ impl DeployMode {
     }
 }
 
+/// Nagłówek używany do przekazania adresu klienta przez zaufane proxy.
+///
+/// `CLIENT_IP_HEADER` jest opcjonalny i ma sens tylko wtedy, gdy przed
+/// aplikacją stoi proxy (np. Caddy w Dockerze). Nagłówek jest honorowany
+/// wyłącznie od adresów z `TRUSTED_PROXIES`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientIpHeader {
+    XForwardedFor,
+    XRealIp,
+}
+
+impl ClientIpHeader {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "x-forwarded-for" => Ok(Self::XForwardedFor),
+            "x-real-ip" => Ok(Self::XRealIp),
+            other => Err(format!(
+                "Nieprawidłowy CLIENT_IP_HEADER „{other}”. Dozwolone wartości: X-Forwarded-For, X-Real-IP."
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::XForwardedFor => "X-Forwarded-For",
+            Self::XRealIp => "X-Real-IP",
+        }
+    }
+
+    /// `X-Forwarded-For` może zawierać łańcuch adresów; `X-Real-IP` tylko jeden.
+    pub fn is_multi_hop(self) -> bool {
+        matches!(self, Self::XForwardedFor)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CookieSecureSetting {
     Auto,
@@ -271,6 +306,10 @@ pub struct Config {
     pub mode: DeployMode,
     pub bind_addr: SocketAddr,
     pub trusted_proxies: Vec<IpNet>,
+    /// Nagłówek z adresem klienta ustawiany przez zaufane proxy.
+    /// `None` oznacza dotychczasowe zachowanie (`CF-Connecting-IP` w trybie
+    /// tunnel, brak nagłówków w trybie local).
+    pub client_ip_header: Option<ClientIpHeader>,
     pub public_url: Option<PublicUrl>,
     pub cookie_secure_setting: CookieSecureSetting,
     pub secure_cookies: bool,
@@ -301,6 +340,7 @@ impl Default for Config {
             bind_addr: SocketAddr::from_str(DEFAULT_BIND_ADDR)
                 .expect("domyślny adres nasłuchu jest poprawny"),
             trusted_proxies: default_trusted_proxies(),
+            client_ip_header: None,
             public_url: None,
             cookie_secure_setting: CookieSecureSetting::Auto,
             secure_cookies: false,
@@ -346,6 +386,16 @@ impl Config {
                 .as_deref()
                 .unwrap_or(DEFAULT_TRUSTED_PROXIES),
         )?;
+
+        let client_ip_header = match env
+            .client_ip_header
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => Some(ClientIpHeader::parse(value)?),
+            None => None,
+        };
 
         let public_url = match env
             .public_url
@@ -444,6 +494,7 @@ impl Config {
             mode,
             bind_addr,
             trusted_proxies,
+            client_ip_header,
             public_url,
             cookie_secure_setting,
             secure_cookies,
@@ -732,6 +783,7 @@ pub struct EnvConfig {
     pub deploy_mode: Option<String>,
     pub bind_addr: Option<String>,
     pub trusted_proxies: Option<String>,
+    pub client_ip_header: Option<String>,
     pub public_url: Option<String>,
     pub cookie_secure: Option<String>,
     pub backup_dir: Option<String>,
@@ -748,6 +800,7 @@ impl EnvConfig {
             deploy_mode: env_value("DEPLOY_MODE"),
             bind_addr: env_value("BIND_ADDR"),
             trusted_proxies: env_value("TRUSTED_PROXIES"),
+            client_ip_header: env_value("CLIENT_IP_HEADER"),
             public_url: env_value("PUBLIC_URL"),
             cookie_secure: env_value("COOKIE_SECURE"),
             backup_dir: env_value("BACKUP_DIR"),

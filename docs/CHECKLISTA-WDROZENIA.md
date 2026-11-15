@@ -214,9 +214,10 @@ dlaczego).
       zweryfikowany skanem z zewnątrz.
 - [ ] `PUBLIC_URL` ustawiony na docelowy `https://`, `COOKIE_SECURE=true`,
       HSTS i poprawne nagłówki bezpieczeństwa; brak mixed content.
-- [ ] Origin guard i zaufane proxy są skonfigurowane świadomie; wiadomo,
-      że limiter widzi adres proxy, jeśli nie ma obsługi zaufanego
-      nagłówka.
+- [ ] Origin guard i zaufane proxy są skonfigurowane świadomie; przy
+      reverse proxy w sieci lokalnej ustawiono `CLIENT_IP_HEADER`
+      i wąskie `TRUSTED_PROXIES`, a podrobiony nagłówek z niezaufanego
+      adresu jest ignorowany.
 - [ ] Sekrety tunelu i certyfikaty mają `0600`, nie są w repozytorium;
       jest plan ich rotacji i odbioru dostępu.
 - [ ] Cloudflare Access loguje zdarzenia; ustalono retencję i dostęp do

@@ -3,7 +3,7 @@
 #
 # Adres podaje się jedną zmienną SITE_HOST — IP komputera albo nazwę hosta
 # w sieci lokalnej, np.:
-#   SITE_HOST=192.168.0.124
+#   SITE_HOST=<ADRES-SYSTEMU>
 #
 # `default_sni` jest konieczne, bo przeglądarki nie wysyłają SNI, gdy łączą
 # się z adresem IP. Certyfikat wystawia wewnętrzny CA Caddy (`tls internal`),
@@ -19,5 +19,11 @@
 https://{$SITE_HOST:localhost} {
 	tls internal
 	encode zstd gzip
-	reverse_proxy zsl-order:3000
+	reverse_proxy zsl-order:3000 {
+		# Nadpisujemy (nie dopisujemy) nagłówki adresem rzeczywistego
+		# klienta widzianym przez Caddy. Dzięki temu klient nie może
+		# podmienić adresu własnym X-Forwarded-For.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
 }

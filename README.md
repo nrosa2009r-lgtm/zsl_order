@@ -195,12 +195,12 @@ docker compose up -d --build
 docker compose exec zsl-order cat /data/admin_start.txt
 ```
 
-Aplikacja: `http://<IP-komputera>:11000` (Docker mapuje port hosta 11000
+Aplikacja: `http://<ADRES-SYSTEMU>:11000` (Docker mapuje port hosta 11000
 na 3000 w kontenerze). Dla HTTPS w sieci lokalnej (kamera QR, brak
 ostrzeżeń przeglądarki) — port **10000**:
 
 ```bash
-SITE_HOST=192.168.0.124 docker compose \
+SITE_HOST=<ADRES-SYSTEMU> docker compose \
   -f docker-compose.yml -f docker-compose.https.yml up -d
 ```
 

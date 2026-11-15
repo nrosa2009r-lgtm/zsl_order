@@ -5,9 +5,16 @@ konfigurację, codzienną pracę i utrzymanie systemu zamawiania posiłków.
 
 > **Zasada bezpieczeństwa:** w tej instrukcji nie zapisuj prawdziwych
 > haseł, domen, adresów IP, e-maili ani danych uczniów. W przykładach
-> używaj placeholderów: `<DOMENA>`, `<ADRES-SERWERA>`, `<LOGIN>`,
+> używaj placeholderów: `<DOMENA>`, `<ADRES-SYSTEMU>`, `<LOGIN>`,
 > `<HASŁO>`, `<TOKEN>`. Prawdziwe sekrety trzymaj w menedżerze haseł
 > albo w plikach z uprawnieniami `0600`, nigdy w repozytorium.
+>
+> **Adresy i porty.** `<ADRES-SYSTEMU>` to adres IP lub nazwa komputera.
+> Instalacja natywna (systemd) używa portu **3000**. Docker bez HTTPS
+> mapuje **11000 → 3000**, a Docker z Caddy wystawia HTTPS na porcie
+> **10000** (HTTP 11000 nadal działa). Przykłady z portem 3000 dotyczą
+> instalacji natywnej; w Dockerze użyj 11000 lub 10000. Szczegóły:
+> [docs/DOCKER.md](DOCKER.md).
 
 Spis treści:
 
@@ -220,7 +227,7 @@ sudo -u zsl-order rm -f /var/lib/zsl-order/admin_start.txt
 
 ### 2.6. Pierwsze logowanie administratora
 
-1. Otwórz `http://<ADRES-SERWERA>:3000/admin`.
+1. Otwórz `http://<ADRES-SYSTEMU>:3000/admin`.
 2. Zaloguj się loginem i hasłem z `admin_start.txt`.
 3. System wymusi zmianę hasła. Wpisz nowe hasło (dla admina minimum
    12 znaków; nie może zawierać loginu ani być popularne) i zapisz je
@@ -257,7 +264,8 @@ Plik: `/etc/zsl-order/zsl-order.env` (`root:zsl-order`, `0640`).
 | --- | --- | --- |
 | `DEPLOY_MODE` | `local` | `local` albo `tunnel`. W `tunnel` wymagany `PUBLIC_URL`, a `BIND_ADDR` musi być pętlą. |
 | `BIND_ADDR` | `0.0.0.0:3000` | Adres nasłuchu. `127.0.0.1:3000` ogranicza do localhost; `0.0.0.0:3000` otwiera sieć. |
-| `TRUSTED_PROXIES` | `127.0.0.1,::1` | Lista IP/CIDR proxy, którym wolno przekazać `CF-Connecting-IP`. Tylko tryb `tunnel`. |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1` | Lista IP/CIDR proxy, którym wolno przekazać adres klienta. W trybie `tunnel` dotyczy `CF-Connecting-IP`, a przy `CLIENT_IP_HEADER` — wybranego nagłówka. |
+| `CLIENT_IP_HEADER` | brak | `X-Forwarded-For` albo `X-Real-IP`; honorowany tylko od `TRUSTED_PROXIES`. Dla Caddy w Dockerze ustawiane automatycznie. |
 | `PUBLIC_URL` | brak | Publiczny adres bez ścieżki, np. `https://<DOMENA>`. Wymagany w `tunnel`. |
 | `COOKIE_SECURE` | `auto` | `auto`, `true` lub `false`. `auto` włącza `Secure`, gdy `PUBLIC_URL` jest HTTPS; w `tunnel` zawsze `true`. |
 | `BACKUP_DIR` | `backups` | Katalog kopii: względny wobec `/var/lib/zsl-order` albo absolutny. Zastępuje `backup_dir`. |
@@ -485,7 +493,7 @@ nieodebranego zamówienia pozostaje w bazie i raporcie.
 
 ### 5.1. Logowanie
 
-1. Otwórz `http://<ADRES-SERWERA>:3000/student` (lub adres HTTPS podany
+1. Otwórz `http://<ADRES-SYSTEMU>:3000/student` (lub adres HTTPS podany
    przez szkołę).
 2. Wpisz login i hasło startowe z karty.
 3. Przy pierwszym logowaniu zmień hasło na własne (minimum 10 znaków;
@@ -992,7 +1000,7 @@ podróżować po HTTP.
 **Objaw:** brak przycisku kamery lub komunikat o HTTPS.
 
 **Przyczyna:** przeglądarka wymaga bezpiecznego kontekstu (HTTPS albo
-`localhost`). Adres `http://<ADRES-SERWERA>:3000` na tablecie nim nie
+`localhost`). Adres `http://<ADRES-SYSTEMU>:3000` na tablecie nim nie
 jest.
 
 **Rozwiązanie:**

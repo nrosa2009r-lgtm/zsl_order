@@ -26,6 +26,8 @@ services:
       # RETENTION_ORDERS_DAYS: "30"
       #
       # Diagnostyka sieci: dopisuje adres klienta do logów żądań.
+      # Włączaj TYLKO na krótko (adres IP to dana osobowa) i wyłącz po
+      # zakończeniu diagnostyki. Domyślnie log zawiera "-".
       # LOG_CLIENT_IP: "1"
     volumes:
       - zsl-data:/data

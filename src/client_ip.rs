@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::config::{Config, DeployMode};
+use crate::config::{ClientIpHeader, Config, DeployMode};
 use crate::state::AppState;
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -7,6 +7,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,25 +39,37 @@ pub struct ResolvedClientIp {
     pub source: ClientIpSource,
 }
 
-/// Ustala adres klienta. W trybie tunnel zaufane proxy musi przekazać
-/// poprawny `CF-Connecting-IP`; brak lub błąd nagłówka kończy się
-/// zachowaniem adresu proxy, ale jest jawnie sygnalizowany przez
-/// `source` (middleware loguje ostrzeżenie).
+/// Ustala adres klienta.
+///
+/// * `CLIENT_IP_HEADER` (opcjonalny) — używany wyłącznie, gdy połączenie
+///   przyszło z adresu z `TRUSTED_PROXIES`. Działa w obu trybach, bo Docker
+///   z Caddy działa w trybie `local`.
+/// * Bez `CLIENT_IP_HEADER` w trybie tunnel zaufane proxy musi przekazać
+///   poprawny `CF-Connecting-IP`.
+/// * W trybie local bez skonfigurowanego nagłówka adres zawsze pochodzi
+///   z gniazda TCP.
+///
+/// Brak lub błąd nagłówka kończy się zachowaniem adresu proxy, ale jest
+/// jawnie sygnalizowany przez `source` (middleware loguje ostrzeżenie).
 pub fn resolve_client_ip(config: &Config, peer: IpAddr, headers: &HeaderMap) -> ResolvedClientIp {
     let from_socket = ResolvedClientIp {
         ip: peer,
         source: ClientIpSource::Socket,
     };
 
-    if config.mode == DeployMode::Local {
+    let peer_is_trusted = config
+        .trusted_proxies
+        .iter()
+        .any(|network| network.contains(&peer));
+    if !peer_is_trusted {
         return from_socket;
     }
 
-    if !config
-        .trusted_proxies
-        .iter()
-        .any(|network| network.contains(&peer))
-    {
+    if let Some(header) = config.client_ip_header {
+        return resolve_configured_header(config, header, peer, headers);
+    }
+
+    if config.mode == DeployMode::Local {
         return from_socket;
     }
 
@@ -79,6 +92,39 @@ pub fn resolve_client_ip(config: &Config, peer: IpAddr, headers: &HeaderMap) -> 
     }
 }
 
+/// Czyta skonfigurowany nagłówek. Dla `X-Forwarded-For` wybiera pierwszy
+/// adres od prawej, który nie jest zaufanym proxy: Caddy dopisuje na końcu
+/// adres rzeczywistego klienta, więc wartości dodane przez klienta po lewej
+/// stronie nie mogą podmienić adresu.
+fn resolve_configured_header(
+    config: &Config,
+    header: ClientIpHeader,
+    peer: IpAddr,
+    headers: &HeaderMap,
+) -> ResolvedClientIp {
+    let fallback = |source| ResolvedClientIp { ip: peer, source };
+    let Some(value) = headers.get(header.as_str()) else {
+        return fallback(ClientIpSource::MissingForwardedHeader);
+    };
+    let Ok(value) = value.to_str() else {
+        return fallback(ClientIpSource::InvalidForwardedHeader);
+    };
+
+    let parsed = if header.is_multi_hop() {
+        parse_forwarded_chain(value, &config.trusted_proxies)
+    } else {
+        parse_single_ip(value)
+    };
+
+    match parsed {
+        Some(ip) => ResolvedClientIp {
+            ip,
+            source: ClientIpSource::Forwarded,
+        },
+        None => fallback(ClientIpSource::InvalidForwardedHeader),
+    }
+}
+
 fn parse_single_ip(value: &str) -> Option<IpAddr> {
     let value = value.trim();
     if value.is_empty() || value.contains(',') {
@@ -87,13 +133,30 @@ fn parse_single_ip(value: &str) -> Option<IpAddr> {
     value.parse::<IpAddr>().ok()
 }
 
-/// Ostrzega (maks. raz na minutę), gdy w trybie tunnel zaufane proxy nie
-/// przekazało poprawnego adresu klienta. Bez tego wszyscy użytkownicy
-/// trafialiby po cichu do jednego koszyka adresu proxy.
+/// Wybiera adres klienta z łańcucha `X-Forwarded-For`, pomijając zaufane
+/// proxy. Każdy element musi być poprawnym adresem IP — w razie śmieci
+/// zwracamy `None`, żeby nie zgadywać.
+fn parse_forwarded_chain(value: &str, trusted: &[IpNet]) -> Option<IpAddr> {
+    let mut result = None;
+    for part in value.split(',').rev() {
+        let ip = part.trim().parse::<IpAddr>().ok()?;
+        if trusted.iter().any(|network| network.contains(&ip)) {
+            continue;
+        }
+        result = Some(ip);
+        break;
+    }
+    result
+}
+
+/// Ostrzega (maks. raz na minutę), gdy zaufane proxy nie przekazało
+/// poprawnego adresu klienta. Bez tego wszyscy użytkownicy trafialiby po
+/// cichu do jednego koszyka adresu proxy.
 fn warn_about_broken_forwarding(state: &AppState, resolved: ResolvedClientIp) {
     const WARNING_INTERVAL: Duration = Duration::from_secs(60);
 
-    if !state.cfg.is_tunnel()
+    let forwarding_enabled = state.cfg.is_tunnel() || state.cfg.client_ip_header.is_some();
+    if !forwarding_enabled
         || !matches!(
             resolved.source,
             ClientIpSource::MissingForwardedHeader | ClientIpSource::InvalidForwardedHeader
@@ -113,11 +176,17 @@ fn warn_about_broken_forwarding(state: &AppState, resolved: ResolvedClientIp) {
     }
     *last = Some(now);
 
+    let header = state
+        .cfg
+        .client_ip_header
+        .map(|value| value.as_str())
+        .unwrap_or(CF_CONNECTING_IP);
     tracing::warn!(
         source = ?resolved.source,
-        "Tryb tunnel: zaufane proxy nie przekazało poprawnego CF-Connecting-IP. \
+        header = %header,
+        "Zaufane proxy nie przekazało poprawnego nagłówka {header}. \
          Używam adresu proxy, więc limity per IP będą wspólne. \
-         Sprawdź konfigurację cloudflared i TRUSTED_PROXIES."
+         Sprawdź konfigurację proxy i TRUSTED_PROXIES."
     );
 }
 
@@ -169,6 +238,29 @@ mod tests {
     fn headers(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CF_CONNECTING_IP, HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    fn config_with_header(mode: DeployMode, name: &str, trusted: &str) -> Config {
+        Config::from_file_and_env(
+            Default::default(),
+            EnvConfig {
+                deploy_mode: Some(mode.as_str().to_string()),
+                bind_addr: Some("127.0.0.1:3000".to_string()),
+                trusted_proxies: Some(trusted.to_string()),
+                client_ip_header: Some(name.to_string()),
+                public_url: Some("https://zsl.example.com".to_string()),
+                cookie_secure: Some("auto".to_string()),
+                ..EnvConfig::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn forwarded(name: &str, value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        let name = axum::http::header::HeaderName::from_bytes(name.as_bytes()).unwrap();
+        headers.insert(name, HeaderValue::from_str(value).unwrap());
         headers
     }
 
@@ -226,5 +318,97 @@ mod tests {
         let resolved = resolve_client_ip(&config, untrusted_peer, &headers("198.51.100.9"));
         assert_eq!(resolved.source, ClientIpSource::Socket);
         assert_eq!(resolved.ip, untrusted_peer);
+    }
+
+    #[test]
+    fn configured_header_works_in_local_mode_from_trusted_proxy() {
+        let config = config_with_header(DeployMode::Local, "X-Forwarded-For", "127.0.0.1");
+        let peer = "127.0.0.1".parse().unwrap();
+        let resolved =
+            resolve_client_ip(&config, peer, &forwarded("x-forwarded-for", "203.0.113.7"));
+        assert_eq!(resolved.ip, "203.0.113.7".parse::<IpAddr>().unwrap());
+        assert_eq!(resolved.source, ClientIpSource::Forwarded);
+    }
+
+    #[test]
+    fn configured_header_from_untrusted_peer_is_ignored() {
+        let config = config_with_header(DeployMode::Local, "X-Forwarded-For", "127.0.0.1");
+        let peer = "192.168.1.50".parse().unwrap();
+        let resolved =
+            resolve_client_ip(&config, peer, &forwarded("x-forwarded-for", "203.0.113.7"));
+        assert_eq!(resolved.ip, peer);
+        assert_eq!(resolved.source, ClientIpSource::Socket);
+    }
+
+    #[test]
+    fn spoofed_values_on_the_left_of_forwarded_for_are_ignored() {
+        let config = config_with_header(DeployMode::Local, "X-Forwarded-For", "10.0.0.0/8");
+        let peer = "10.0.0.5".parse().unwrap();
+        // Klient dopisał "1.2.3.4", Caddy dopisał na końcu rzeczywisty adres
+        // klienta (198.51.100.9), a ostatni hop to zaufane proxy.
+        let resolved = resolve_client_ip(
+            &config,
+            peer,
+            &forwarded("x-forwarded-for", "1.2.3.4, 198.51.100.9, 10.0.0.5"),
+        );
+        assert_eq!(resolved.ip, "198.51.100.9".parse::<IpAddr>().unwrap());
+        assert_eq!(resolved.source, ClientIpSource::Forwarded);
+    }
+
+    #[test]
+    fn x_real_ip_accepts_only_a_single_address() {
+        let config = config_with_header(DeployMode::Local, "x-real-ip", "127.0.0.1");
+        let peer = "127.0.0.1".parse().unwrap();
+
+        let ok = resolve_client_ip(&config, peer, &forwarded("x-real-ip", "203.0.113.7"));
+        assert_eq!(ok.ip, "203.0.113.7".parse::<IpAddr>().unwrap());
+
+        let bad = resolve_client_ip(
+            &config,
+            peer,
+            &forwarded("x-real-ip", "203.0.113.7, 10.0.0.1"),
+        );
+        assert_eq!(bad.ip, peer);
+        assert_eq!(bad.source, ClientIpSource::InvalidForwardedHeader);
+    }
+
+    #[test]
+    fn configured_header_missing_or_invalid_falls_back_to_peer() {
+        let config = config_with_header(DeployMode::Local, "X-Forwarded-For", "127.0.0.1");
+        let peer = "127.0.0.1".parse().unwrap();
+
+        let missing = resolve_client_ip(&config, peer, &HeaderMap::new());
+        assert_eq!(missing.ip, peer);
+        assert_eq!(missing.source, ClientIpSource::MissingForwardedHeader);
+
+        let invalid = resolve_client_ip(&config, peer, &forwarded("x-forwarded-for", "nie-adres"));
+        assert_eq!(invalid.ip, peer);
+        assert_eq!(invalid.source, ClientIpSource::InvalidForwardedHeader);
+    }
+
+    #[test]
+    fn all_trusted_hops_are_not_a_client_address() {
+        let config = config_with_header(DeployMode::Local, "X-Forwarded-For", "10.0.0.0/8");
+        let peer = "10.0.0.5".parse().unwrap();
+        let resolved = resolve_client_ip(
+            &config,
+            peer,
+            &forwarded("x-forwarded-for", "10.0.0.1, 10.0.0.5"),
+        );
+        assert_eq!(resolved.ip, peer);
+        assert_eq!(resolved.source, ClientIpSource::InvalidForwardedHeader);
+    }
+
+    #[test]
+    fn client_ip_header_parser_is_case_insensitive_and_strict() {
+        assert_eq!(
+            ClientIpHeader::parse("X-Forwarded-For").unwrap(),
+            ClientIpHeader::XForwardedFor
+        );
+        assert_eq!(
+            ClientIpHeader::parse("x-real-ip").unwrap(),
+            ClientIpHeader::XRealIp
+        );
+        assert!(ClientIpHeader::parse("CF-Connecting-IP").is_err());
     }
 }

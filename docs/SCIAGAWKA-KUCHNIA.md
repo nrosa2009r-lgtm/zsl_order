@@ -1,6 +1,6 @@
 # Ściągawka kuchni — ZSL Order
 
-**Panel:** `http://<ADRES-SERWERA>:3000/kitchen` (albo adres HTTPS)
+**Panel:** `http://<ADRES-SYSTEMU>:3000/kitchen` (albo adres HTTPS)
 
 ## 1. Start zmiany
 

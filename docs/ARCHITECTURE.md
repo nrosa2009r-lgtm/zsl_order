@@ -54,8 +54,8 @@ rozdzielanie usług.
 | Plik | Odpowiedzialność |
 | --- | --- |
 | `src/main.rs` | konfiguracja routera, trasy, nagłówki bezpieczeństwa, `origin_guard`, serwowanie `frontend/`, start serwera |
-| `src/config.rs` | wczytywanie `.env` i `config.json`, walidacja trybu wdrożenia, `PUBLIC_URL`, zaufanych proxy i `sqlite_url()` |
-| `src/client_ip.rs` | ustalanie adresu klienta: gniazdo TCP w `local`, `CF-Connecting-IP` od zaufanego proxy w `tunnel` |
+| `src/config.rs` | wczytywanie `.env` i `config.json`, walidacja trybu wdrożenia, `PUBLIC_URL`, zaufanych proxy, `CLIENT_IP_HEADER` i `sqlite_url()` |
+| `src/client_ip.rs` | ustalanie adresu klienta: gniazdo TCP w `local`, `CF-Connecting-IP` od zaufanego proxy w `tunnel`, `X-Forwarded-For`/`X-Real-IP` tylko od `TRUSTED_PROXIES` |
 | `src/guard.rs` | walidacja `Host` i `Origin` dla obu trybów wdrożenia |
 | `src/state.rs` | `AppState`: pula DB, konfiguracja, dummy hash, limiter logowania, sekret JWT |
 | `src/db.rs` | schemat, indeksy, seed ustawień i menu, czyszczenie, bootstrap admina, audyt, ustawienia |
@@ -76,9 +76,11 @@ rozdzielanie usług.
 
 Kolejność warstw (od zewnątrz):
 
-0. **`client_ip`** — ustala adres klienta: w `local` zawsze z gniazda
-   TCP, w `tunnel` z `CF-Connecting-IP` tylko od zaufanego proxy.
-   Wynik trafia do rozszerzeń żądania jako `ClientIp`.
+0. **`client_ip`** — ustala adres klienta: w `local` z gniazda TCP,
+   w `tunnel` z `CF-Connecting-IP` tylko od zaufanego proxy; gdy
+   ustawiono `CLIENT_IP_HEADER`, czyta `X-Forwarded-For`/`X-Real-IP`
+   wyłącznie od `TRUSTED_PROXIES`. Wynik trafia do rozszerzeń żądania
+   jako `ClientIp`.
 1. **`request_log`** — mierzy czas i loguje metodę, ścieżkę bez query,
    status i czas odpowiedzi. Nie loguje nagłówków, ciasteczek, tokenów
    CSRF, ciał żądań ani adresów IP. Dla `/api/*` poziom zależy od statusu
