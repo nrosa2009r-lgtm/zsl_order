@@ -96,6 +96,10 @@ pub struct SettingsRequest {
     pub pickup_limit_minutes: Option<i64>,
     #[serde(default)]
     pub max_uncollected: Option<i64>,
+    #[serde(default)]
+    pub max_item_quantity_per_break: Option<i64>,
+    #[serde(default)]
+    pub one_active_order_per_break: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1238,6 +1242,20 @@ pub async fn update_settings(
             ));
         }
         updates.push(("max_uncollected".to_string(), value.to_string()));
+    }
+    if let Some(value) = body.max_item_quantity_per_break {
+        if !(0..=10).contains(&value) {
+            return Err(AppError::bad(
+                "Limit sztuk jednej pozycji na przerwę musi wynosić od 0 do 10 (0 = bez limitu).",
+            ));
+        }
+        updates.push(("max_item_quantity_per_break".to_string(), value.to_string()));
+    }
+    if let Some(value) = body.one_active_order_per_break {
+        updates.push((
+            "one_active_order_per_break".to_string(),
+            if value { "1" } else { "0" }.to_string(),
+        ));
     }
 
     if updates.is_empty() {

@@ -76,6 +76,9 @@ dlaczego).
 ### A4. Backup, retencja i logi
 
 - [ ] Katalog backupów istnieje, ma `0700` i wystarczające miejsce.
+- [ ] Przed każdą aktualizacją z migracją wykonano kopię `.backup`
+      (nie `cp`), zapisano jej nazwę i sprawdzono `PRAGMA
+      integrity_check` oraz `PRAGMA foreign_key_check`.
 - [ ] Backup działa o `03:15` (z losowym opóźnieniem do 15 minut), a
       retencja o `04:00`; kolejność i godziny są zgodne z konfiguracją.
 - [ ] Wykonano **test odtworzenia backupu na drugiej maszynie**:
@@ -104,7 +107,11 @@ dlaczego).
       dzisiejszego `ready`, jednorazowość, czytnik USB i wpis ręczny.
 - [ ] Kamera na HTTP pokazuje komunikat o HTTPS/localhost, a nie
       udaje, że działa; czytnik USB jest alternatywą.
-- [ ] Menu, raport dnia, eksport metadanych CSV, ustawienia i audyt.
+- [ ] Menu, raport dnia (w tym tabela stanu magazynu), eksport metadanych
+      CSV, ustawienia i audyt.
+- [ ] **Stan magazynowy**: pozycja z limitem 1, dwa równoczesne
+      zamówienia (jedno `201`, jedno `409`, brak `500`), zwrot po
+      anulowaniu i reset następnego dnia z `stock_default`.
 - [ ] **Test obciążeniowy** dla spodziewanego szczytu (np. 200–1000
       uczniów, przerwa obiadowa): zdefiniowane kryterium (np. p95 < 1 s,
       brak błędów 5xx, stabilna baza) i wynik zapisany.

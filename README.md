@@ -248,6 +248,7 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 ### Panel ucznia — `/student`
 
 - menu pogrupowane według kategorii, ceny w PLN, alergeny, dostępność,
+- licznik „Zostało N szt.” i blokada zamówienia wyprzedanej pozycji,
 - koszyk z ilościami (1–10 szt. na pozycję),
 - wybór płatności przy odbiorze: gotówka lub karta,
 - opcjonalna godzina odbioru (`HH:MM`),
@@ -265,7 +266,9 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
   USB działającym jak klawiatura),
 - zmiana statusu: przyjęte → w przygotowaniu → gotowe → wydane,
 - oznaczenie płatności jako opłaconej,
-- zarządzanie menu (dodawanie, edycja, ukrywanie pozycji).
+- zarządzanie menu (dodawanie, edycja, ukrywanie pozycji),
+- dzienny stan magazynowy: `−1`/`+1`/„Bez limitu”, domyślny stan na
+  nowy dzień i automatyczny reset.
 
 ### Panel administratora — `/admin`
 

@@ -118,14 +118,31 @@ CREATE TABLE IF NOT EXISTS menu_items (
     available INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    stock_remaining INTEGER
+        CHECK (stock_remaining IS NULL OR stock_remaining >= 0),
+    stock_default INTEGER
+        CHECK (stock_default IS NULL OR stock_default >= 0),
+    stock_date TEXT
 );
 CREATE INDEX IF NOT EXISTS menu_available_idx ON menu_items(available, sort_order);
+CREATE INDEX IF NOT EXISTS menu_items_stock_date_idx ON menu_items(stock_date);
 ```
 
 - `available = 0` to miękkie ukrycie; pozycja pozostaje w historii.
 - `sort_order` steruje kolejnością; mniejsza wartość = wyżej.
 - Pozycje są snapshotowane do `order_items` w momencie zamówienia.
+- `stock_remaining` to stan na dzień `stock_date` (`RRRR-MM-DD`,
+  Europe/Warsaw); `NULL` = bez limitu, `0` = wyprzedane.
+- `stock_default` to stan, do którego pozycja wraca przy pierwszym
+  odczycie nowego dnia. `NULL` = brak automatycznego resetu (stan
+  ustawiony ręcznie obowiązuje do następnej zmiany). Samo ustawienie
+  `stock_default` również zapisuje `stock_date = dziś`, więc limit
+  zacznie obowiązywać od następnego dnia, nawet jeśli dziś pozycja jest
+  bez limitu.
+- Reset jest **leniwy**: wykonywany w transakcji przy pierwszym odczycie
+  menu, zamówieniu lub raporcie nowego dnia. Nie ma zadania w tle.
+- `CHECK` blokuje wartości ujemne także w razie błędu w kodzie.
 
 ### `orders`
 
@@ -193,7 +210,9 @@ CREATE TABLE IF NOT EXISTS order_items (
     menu_item_id INTEGER REFERENCES menu_items(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
-    quantity INTEGER NOT NULL CHECK (quantity > 0)
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    stock_reserved INTEGER NOT NULL DEFAULT 0
+        CHECK (stock_reserved IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS order_items_order_idx ON order_items(order_id);
 ```
@@ -202,6 +221,9 @@ CREATE INDEX IF NOT EXISTS order_items_order_idx ON order_items(order_id);
 - `menu_item_id` może stać się `NULL`, jeśli pozycja menu zostanie
   kiedykolwiek fizycznie usunięta (aplikacja tylko ukrywa).
 - `quantity` 1–10 (walidacja aplikacji; baza wymaga > 0).
+- `stock_reserved = 1` oznacza, że pozycja faktycznie zabrała limitowany
+  stan. Anulowanie zwraca sztuki tylko takim pozycjom — limit ustawiony
+  po złożeniu zamówienia nie zawyża stanu.
 
 ### `settings`
 
@@ -224,6 +246,12 @@ Domyślne wpisy (seed `INSERT OR IGNORE`):
 | `cancel_window_minutes` | `30` | termin anulowania od złożenia; `0` = bez limitu |
 | `pickup_limit_minutes` | `120` | czas od `ready` do nieodebrania; `0` = wyłączone |
 | `max_uncollected` | `0` | blokada po N nieodebranych z 30 dni; `0` = brak |
+| `max_item_quantity_per_break` | `0` | limit sztuk jednej pozycji na przerwę; `0` = bez limitu |
+| `one_active_order_per_break` | `0` | `1` = jedno aktywne zamówienie na przerwę |
+
+Klucze `*_per_break` są zapisywane już teraz, ale egzekwowane dopiero po
+wdrożeniu tabeli przerw (kolejna migracja). Do tego czasu nie zmieniają
+zachowania zamówień.
 
 Wartości są stringami; API administracyjne waliduje zakresy i konwertuje
 `ordering_enabled` z bool na `1`/`0`.
@@ -255,6 +283,7 @@ CREATE INDEX IF NOT EXISTS audit_created_idx ON audit_log(created_at);
 | `sessions_user_idx` | `sessions` | `user_id` | wylogowanie wszystkich sesji |
 | `sessions_expiry_idx` | `sessions` | `expires_at` | czyszczenie wygasłych |
 | `menu_available_idx` | `menu_items` | `available, sort_order` | menu ucznia |
+| `menu_items_stock_date_idx` | `menu_items` | `stock_date` | leniwy reset stanu |
 | `orders_user_idx` | `orders` | `user_id, created_at` | historia ucznia |
 | `orders_status_idx` | `orders` | `status, created_at` | kolejka kuchni |
 | `orders_ready_idx` | `orders` | `status, ready_at` | automatyczne nieodebrane |
@@ -400,10 +429,33 @@ rozstrzygnij historię zamówień.
 
 ## 7. Backup i integralność
 
+Procedura przed każdą aktualizacją, która zawiera migrację (0006, 0007,
+kolejne):
+
+```bash
+# 1. Zatrzymaj aplikację, żeby nikt nie pisał do bazy.
+sudo systemctl stop zsl-order        # instalacja natywna
+# docker compose stop zsl-order      # Docker
+
+# 2. Wykonaj spójną kopię (nie zwykłym cp — WAL może być niespójny).
+sqlite3 /var/lib/zsl-order/baza.db \
+  ".backup '/var/backups/zsl-order/baza-przed-migracja.db'"
+
+# 3. Sprawdź kopię, zanim uruchomisz nową wersję.
+sqlite3 /var/backups/zsl-order/baza-przed-migracja.db "PRAGMA integrity_check;"
+sqlite3 /var/backups/zsl-order/baza-przed-migracja.db "PRAGMA foreign_key_check;"
+
+# 4. Uruchom nową wersję i sprawdź logi migracji.
+sudo systemctl start zsl-order
+journalctl -u zsl-order -n 50 --no-pager   # docker compose logs zsl-order
+```
+
+Zasady:
+
 - Backup: `sqlite3 baza.db ".backup 'kopia.db'"` lub `VACUUM INTO`.
 - Nie kopiuj `baza.db` przez `cp` podczas pracy — WAL może być niespójny.
 - Po odtworzeniu usuń `baza.db-wal` i `baza.db-shm`.
-- Sprawdzenie integralności:
+- Sprawdzenie integralności po migracji i po odtworzeniu:
 
 ```bash
 sqlite3 baza.db "PRAGMA integrity_check;"
@@ -446,6 +498,17 @@ pozostaje nieznany, więc `paid_by = NULL`).
 `users.uncollected_block_reset_at`. Dzięki temu administrator może zdjąć
 blokadę nieodebranych bez kasowania historii zamówień; licznik blokady
 uwzględnia tylko zamówienia nieodebrane po tej dacie.
+
+`0005_retention_indexes.sql` dodaje indeksy `orders_created_idx` oraz
+częściowy `orders_idempotency_created_idx`, wspierające nocną retencję.
+
+`0006_menu_stock.sql` dodaje dzienny stan magazynowy
+(`menu_items.stock_remaining`, `stock_default`, `stock_date`),
+`order_items.stock_reserved` (0/1) i indeks `menu_items_stock_date_idx`.
+Wszystkie zmiany są addytywne: istniejące pozycje dostają `NULL`
+(bez limitu), a historyczne pozycje zamówień `stock_reserved = 0`.
+Przed migracją wykonaj backup i sprawdź po niej `PRAGMA
+foreign_key_check;` oraz `PRAGMA integrity_check;`.
 
 ## 9. Ograniczenia SQLite w tym projekcie
 

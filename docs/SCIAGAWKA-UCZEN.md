@@ -14,9 +14,14 @@
 
 1. Wybierz pozycje z menu i ilości.
 2. Sprawdź alergeny i cenę.
-3. Wybierz płatność: **gotówka** albo **karta**.
-4. Opcjonalnie podaj godzinę odbioru `HH:MM`.
-5. Kliknij **Zamów**.
+3. Przy pozycjach limitowanych widzisz **„Zostało N szt.”**;
+   **„Wyprzedane na dziś”** oznacza, że nie można jej już zamówić.
+4. Wybierz płatność: **gotówka** albo **karta**.
+5. Opcjonalnie podaj godzinę odbioru `HH:MM`.
+6. Kliknij **Zamów**.
+
+Jeśli w trakcie zamawiania ktoś kupi ostatnią sztukę, zobaczysz
+komunikat „Skończyły się: …”. Odśwież menu i spróbuj ponownie.
 
 Po zamówieniu dostaniesz:
 
@@ -38,8 +43,9 @@ Możesz anulować tylko:
 - zanim kuchnia zacznie przygotowanie (status `new`),
 - w terminie ustalonym przez szkołę (domyślnie 30 minut).
 
-Po anulowaniu kod QR przestaje działać. Jeśli przycisk jest nieaktywny,
-poproś kuchnię o pomoc.
+Po anulowaniu kod QR przestaje działać. Jeśli zamówienie złożono
+dzisiaj i nie zostało jeszcze wydane, anulowanie zwraca sztukę na stan
+menu. Jeśli przycisk jest nieaktywny, poproś kuchnię o pomoc.
 
 ## 5. Statusy
 
@@ -67,6 +73,7 @@ poproś kuchnię o pomoc.
 | Konto zablokowane | Odczekaj 15 minut albo poproś administratora. |
 | Nie widzę zamówienia | Sprawdź, czy jesteś zalogowany na swoje konto. |
 | QR nie działa | Sprawdź, czy zamówienie jest `ready` i z dzisiaj; po wydaniu kod jest zużyty. |
+| Pozycja jest wyprzedana | Wybierz inną pozycję albo poproś kuchnię o uzupełnienie stanu. |
 | Zła godzina/cena | Zgłoś kuchni przed wydaniem. |
 
 **Nie podawaj nikomu kodu QR przez telefon ani w wiadomości.**

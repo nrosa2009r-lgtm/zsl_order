@@ -68,8 +68,9 @@ rozdzielanie usług.
 | `src/error.rs` | `AppError`, spójne odpowiedzi JSON, mapowanie błędów SQL/Argon2/IO, logowanie błędów wewnętrznych |
 | `src/handlers/auth.rs` | login, wydanie tokenu JWT, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
 | `src/handlers/public.rs` | publiczne informacje o stołówce i `/api/healthz` |
-| `src/handlers/menu.rs` | menu ucznia i personelu, CRUD pozycji |
-| `src/handlers/orders.rs` | składanie/anulowanie zamówień, QR, kolejka kuchni, pickup, zmiana statusów |
+| `src/handlers/menu.rs` | menu ucznia i personelu, CRUD pozycji, szybka korekta stanu (`/menu/:id/stock`) |
+| `src/handlers/orders.rs` | składanie/anulowanie zamówień z rezerwacją stanu, QR, kolejka kuchni, pickup, zmiana statusów, raport |
+| `src/stock.rs` | dzienny stan magazynowy: leniwy reset dobowy, warunkowa rezerwacja w transakcji, zwrot przy anulowaniu |
 | `src/handlers/admin.rs` | statystyki, aktywność, konta, generowanie, reset haseł, usuwanie kont, eksport CSV, ustawienia, audyt |
 
 ## 4. Cykl żądania HTTP
@@ -163,23 +164,51 @@ jego usunięcie i restart unieważnia wszystkie tokeny.
 POST /api/student/orders
   → auth + CSRF + rola student
   → sprawdź ordering_enabled, limity otwartych zamówień
+  → sprawdź klucz idempotencji (powtórka zwraca istniejące zamówienie)
   → waliduj płatność, godzinę, pozycje (1–10 szt., bez duplikatów)
   → SELECT menu_items WHERE id IN (...) (QueryBuilder, bindowane)
   → sprawdź istnienie i available
   → policz total_cents po stronie serwera (cena z bazy)
-  → BEGIN
+  → BEGIN IMMEDIATE
+      → leniwy reset stanu na dziś (stock::reset_daily_stock)
+      → rezerwacja stanu (stock::reserve, warunkowy UPDATE)
       → wygeneruj unikalny code (6 liter) i qr_token (24 B)
       → INSERT orders
-      → INSERT order_items (snapshot nazwy i ceny)
+      → INSERT order_items (snapshot nazwy i ceny, stock_reserved)
     COMMIT
   → audit(order_created)
   → 201 OrderView
 ```
 
+Klucz idempotencji jest sprawdzany **przed** rezerwacją stanu, więc
+ponowienie żądania nie zdejmuje sztuk drugi raz. `BEGIN IMMEDIATE`
+serializuje zapisy, a warunkowy `UPDATE ... WHERE stock_remaining >= ?`
+gwarantuje, że dwie osoby nie kupią ostatniej sztuki — przegrany dostaje
+`409` z nazwami wyczerpanych pozycji, a nie `500`. Po wyczerpaniu
+`busy_timeout` baza zwraca `SQLITE_BUSY`, które `AppError` mapuje na
+`503 unavailable` z `Retry-After: 1`.
+
 Transakcja gwarantuje, że zamówienie nie powstanie bez pozycji. Kody są
 losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 
-### 5.4. QR i odbiór
+### 5.4. Stan magazynowy
+
+- `src/stock.rs` trzyma logikę dziennego limitu: `reset_daily_stock`
+  (leniwy reset z `stock_default` przy pierwszym odczycie nowego dnia),
+  `reserve` (warunkowy `UPDATE` w transakcji zamówienia) i
+  `return_order_stock` (zwrot tylko dla dzisiejszego zamówienia i tylko
+  pozycji z `order_items.stock_reserved = 1`).
+- Brak zadania w tle: reset wykonuje się przy odczycie menu, złożeniu
+  zamówienia, zmianie stanu i raporcie. Doba jest liczona w
+  `Europe/Warsaw`, także w dniach zmiany czasu.
+- Anulowanie przez ucznia i administratora zwraca stan tylko wtedy, gdy
+  zamówienie jest z dzisiejszego dnia i nie zostało wydane ani
+  nieodebrane.
+- Stan jest widoczny w menu ucznia (`stock_remaining`), na kartach menu
+  personelu i w raporcie dziennym. CSV raportu pieniężnego pozostaje bez
+  zmian.
+
+### 5.5. QR i odbiór
 
 - QR generuje serwer w `GET /api/student/orders/:id/qr.svg` na podstawie
   `qr_token`; w obrazie jest wyłącznie nieprzejrzysty token, bez loginu,
@@ -197,7 +226,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 - Każde udane wyszukanie trafia do audytu; nieudane próby zasilają
   `PickupLimiter`.
 
-### 5.5. Zmiana statusu i płatności
+### 5.6. Zmiana statusu i płatności
 
 - Kuchnia: `new → preparing → ready → completed` (lub pominięcie stanów),
   `completed` automatycznie ustawia `paid`.
@@ -205,7 +234,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 - Student może anulować tylko własne `new`.
 - Administrator może ustawić dowolny dozwolony status i płatność.
 
-### 5.6. Statystyki aktywności
+### 5.7. Statystyki aktywności
 
 `GET /api/admin/stats/activity?days=1..90`:
 
@@ -225,7 +254,7 @@ Dni są grupowane według **Europe/Warsaw** (niezależnie od strefy serwera),
 a znaczniki czasu w bazie pozostają w UTC. Statystyki nie zawierają danych
 osobowych.
 
-### 5.7. Twarde usuwanie konta
+### 5.8. Twarde usuwanie konta
 
 `DELETE /api/admin/users/:id`:
 
@@ -245,7 +274,7 @@ osobowych.
 Operacja jest nieodwracalna i celowo usuwa także historię zamówień oraz
 sesje, aby nie pozostawiać osieroconych danych powiązanych z kontem.
 
-### 5.8. Eksport CSV metadanych
+### 5.9. Eksport CSV metadanych
 
 `GET /api/admin/users/export.csv` używa tych samych filtrów co lista kont
 (`role`, `active`, `q`), limit 20 000 wierszy:
@@ -262,7 +291,7 @@ sesje, aby nie pozostawiać osieroconych danych powiązanych z kontem.
 Kolumna `haslo_startowe` mówi tylko, czy konto nadal ma wymuszoną zmianę
 hasła — **nie zawiera hasła**. System nie przechowuje haseł jawnych.
 
-### 5.9. Logowanie techniczne
+### 5.10. Logowanie techniczne
 
 - `logging::init()` konfiguruje `tracing` do zapisu **JSON na stdout**.
   Aplikacja nie tworzy plików ani katalogu `logs/`; pod systemd stdout
@@ -414,8 +443,10 @@ przez NFS — SQLite nie jest do tego przeznaczony.
 ## 12. Testowalność
 
 - Testy jednostkowe w modułach `config`, `security`, `auth`, `util`,
-  `handlers::admin` (`cargo test`), w tym roundtrip JWT, odrzucenie
-  złego sekretu/wygaśnięcia, escapowanie CSV i ochrona przed formułami.
+  `stock`, `handlers::admin` (`cargo test`), w tym roundtrip JWT,
+  odrzucenie złego sekretu/wygaśnięcia, escapowanie CSV i ochrona przed
+  formułami, 20 równoległych rezerwacji ostatniej sztuki, reset stanu w
+  dniach zmiany czasu i zwrot tylko z dzisiejszego zamówienia.
 - Logika handlerów jest cienka; większość walidacji jest jawna i łatwa do
   pokrycia testami integracyjnymi.
 - Aplikacja nie wymaga frontendu do testów API — wystarczy `curl`.

@@ -6,7 +6,8 @@
 # Testuje dwie ścieżki migracji sqlx:
 #   1. pusta baza  -> pełny schemat + _sqlx_migrations,
 #   2. baza "legacy" utworzona starym schematem (bez _sqlx_migrations)
-#      -> dane pozostają, class_group uzupełnione z loginów.
+#      -> dane pozostają, class_group uzupełnione z loginów, a nowe
+#      kolumny (stan magazynu, stock_reserved) dostają bezpieczne wartości.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -68,8 +69,8 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "5" ] \
-  && pass "pusta baza: 5 migracji zastosowanych" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "6" ] \
+  && pass "pusta baza: 6 migracji zastosowanych" \
   || fail "pusta baza: brak migracji"
 
 for index in orders_created_idx orders_idempotency_created_idx; do
@@ -87,6 +88,28 @@ done
 [ "$(sqlite3 "$legacy_db" 'SELECT COUNT(*) FROM orders;')" = "1" ] \
   && pass "legacy: zamówienie zachowane" \
   || fail "legacy: utracono zamówienie"
+
+for column in stock_remaining stock_default stock_date; do
+  [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('menu_items') WHERE name='$column';")" = "1" ] \
+    && pass "legacy: kolumna menu_items.$column" \
+    || fail "legacy: brak kolumny menu_items.$column"
+done
+
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('order_items') WHERE name='stock_reserved';")" = "1" ] \
+  && pass "legacy: kolumna order_items.stock_reserved" \
+  || fail "legacy: brak kolumny order_items.stock_reserved"
+
+[ -z "$(sqlite3 "$legacy_db" "SELECT stock_remaining FROM menu_items WHERE name='Zupa';")" ] \
+  && pass "legacy: istniejąca pozycja bez limitu (NULL)" \
+  || fail "legacy: istniejąca pozycja dostała limit"
+
+[ "$(sqlite3 "$legacy_db" 'SELECT stock_reserved FROM order_items WHERE id=1;')" = "0" ] \
+  && pass "legacy: historyczna pozycja bez rezerwacji stanu" \
+  || fail "legacy: historyczna pozycja ma stock_reserved != 0"
+
+[ "$(sqlite3 "$legacy_db" 'PRAGMA foreign_key_check;' | wc -l)" = "0" ] \
+  && pass "legacy: foreign_key_check bez błędów" \
+  || fail "legacy: foreign_key_check zgłasza problemy"
 
 for column in paid_at paid_by ready_at uncollected_at idempotency_key; do
   [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('orders') WHERE name='$column';")" = "1" ] \

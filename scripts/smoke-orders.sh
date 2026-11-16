@@ -100,6 +100,12 @@ create_order() {
   request POST /api/student/orders "$S1_JAR" "$S1_CSRF" "$(json_order "$1" "$2")"
 }
 
+json_stock_order() {
+  local item=$1 method=$2 key=$3
+  printf '{"items":[{"menu_item_id":%s,"quantity":1}],"payment_method":"%s","pickup_time":"12:30","idempotency_key":"%s"}' \
+    "$item" "$method" "$key"
+}
+
 [ -x "$BIN" ] || { echo "Najpierw: cargo build"; exit 1; }
 command -v sqlite3 >/dev/null || { echo "Wymagany sqlite3"; exit 1; }
 command -v jq >/dev/null || { echo "Wymagany jq"; exit 1; }
@@ -230,6 +236,90 @@ request POST /api/student/orders "$S2_JAR" "$S2_CSRF" "$(json_order cash smoke-i
 [ "$STATUS" = "409" ] && pass "limit: max_open_orders=1 blokuje drugie zamówienie" \
   || fail "limit: max_open_orders=1 -> $STATUS ($BODY)"
 request PUT /api/admin/settings "$ADMIN_JAR" "$ADMIN_CSRF" '{"max_open_orders":3}'
+
+# ---------------------------------------------------------------- stan magazynu
+request POST /api/staff/menu "$ADMIN_JAR" "$ADMIN_CSRF" \
+  '{"name":"Smoke stan","description":"","price_cents":500,"category":"Dania","allergens":"","available":true,"sort_order":99,"stock_remaining":1,"stock_default":1}'
+STOCK_ITEM=$(printf '%s' "$BODY" | jq -r '.id // empty')
+STOCK_VALUE=$(printf '%s' "$BODY" | jq -r '.stock_remaining // empty')
+[ "$STATUS" = "201" ] && [ -n "$STOCK_ITEM" ] && [ "$STOCK_VALUE" = "1" ] \
+  && pass "stan: pozycja z limitem 1 utworzona" \
+  || fail "stan: create $STATUS id=$STOCK_ITEM stock=$STOCK_VALUE ($BODY)"
+
+# Dwie osoby równocześnie zamawiają ostatnią sztukę: dokładnie jedno 201,
+# jedno 409 i żadnego 500.
+async_request stock-a POST /api/student/orders "$S1_JAR" "$S1_CSRF" "$(json_stock_order "$STOCK_ITEM" cash smoke-stock-a)"
+async_request stock-b POST /api/student/orders "$S2_JAR" "$S2_CSRF" "$(json_stock_order "$STOCK_ITEM" card smoke-stock-b)"
+wait_async
+STOCK_OK=$(cat "$TMP/stock-a.status" "$TMP/stock-b.status" | grep -c '^201$')
+STOCK_CONFLICT=$(cat "$TMP/stock-a.status" "$TMP/stock-b.status" | grep -c '^409$')
+STOCK_BAD=$(cat "$TMP/stock-a.status" "$TMP/stock-b.status" | grep -cvE '^(201|409)$')
+[ "$STOCK_OK" = "1" ] && [ "$STOCK_CONFLICT" = "1" ] && [ "$STOCK_BAD" = "0" ] \
+  && pass "stan: równoległe zamówienia -> jedno 201, jedno 409, bez 5xx" \
+  || fail "stan: równolegle 201=$STOCK_OK 409=$STOCK_CONFLICT inne=$STOCK_BAD"
+[ "$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")" = "0" ] \
+  && pass "stan: ostatnia sztuka zdjęta z magazynu" \
+  || fail "stan: stock_remaining=$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")"
+RESERVED_ITEMS=$(db_scalar "SELECT COUNT(*) FROM order_items WHERE menu_item_id=$STOCK_ITEM AND stock_reserved=1;")
+[ "$RESERVED_ITEMS" = "1" ] && pass "stan: tylko jedna pozycja zarezerwowała limit" \
+  || fail "stan: stock_reserved=$RESERVED_ITEMS"
+
+# Idempotencja: powtórzenie tego samego klucza nie zdejmuje stanu drugi raz.
+request POST "/api/staff/menu/$STOCK_ITEM/stock" "$ADMIN_JAR" "$ADMIN_CSRF" '{"set":2}'
+[ "$STATUS" = "200" ] && [ "$(printf '%s' "$BODY" | jq -r '.stock_remaining')" = "2" ] \
+  && pass "stan: ręczne ustawienie na 2" \
+  || fail "stan: set -> $STATUS ($BODY)"
+request POST /api/student/orders "$S1_JAR" "$S1_CSRF" "$(json_stock_order "$STOCK_ITEM" cash smoke-stock-idem)"
+STOCK_ORDER=$(printf '%s' "$BODY" | jq -r '.id // empty')
+[ "$STATUS" = "201" ] && [ "$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")" = "1" ] \
+  && pass "stan: zamówienie zdejmuje jedną sztukę" \
+  || fail "stan: zamówienie -> $STATUS stock=$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")"
+request POST /api/student/orders "$S1_JAR" "$S1_CSRF" "$(json_stock_order "$STOCK_ITEM" cash smoke-stock-idem)"
+STOCK_DUP=$(printf '%s' "$BODY" | jq -r '.id // empty')
+[ "$STATUS" = "200" ] && [ "$STOCK_DUP" = "$STOCK_ORDER" ] \
+  && [ "$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")" = "1" ] \
+  && pass "stan: idempotencja nie zdejmuje stanu drugi raz" \
+  || fail "stan: idempotencja -> $STATUS id=$STOCK_DUP stock=$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")"
+
+# Anulowanie dzisiejszego zamówienia zwraca sztukę, ale tylko raz.
+request POST "/api/student/orders/$STOCK_ORDER/cancel" "$S1_JAR" "$S1_CSRF" '{}'
+[ "$STATUS" = "200" ] && [ "$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")" = "2" ] \
+  && pass "stan: anulowanie zwraca sztukę na stan" \
+  || fail "stan: anulowanie -> $STATUS stock=$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")"
+request POST "/api/student/orders/$STOCK_ORDER/cancel" "$S1_JAR" "$S1_CSRF" '{}'
+[ "$STATUS" = "409" ] && [ "$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")" = "2" ] \
+  && pass "stan: powtórne anulowanie nie zwraca stanu drugi raz" \
+  || fail "stan: powtórne anulowanie -> $STATUS stock=$(db_scalar "SELECT stock_remaining FROM menu_items WHERE id=$STOCK_ITEM;")"
+
+# Korekta ±1 i powrót do „bez limitu”.
+request POST "/api/staff/menu/$STOCK_ITEM/stock" "$ADMIN_JAR" "$ADMIN_CSRF" '{"delta":-1}'
+[ "$STATUS" = "200" ] && [ "$(printf '%s' "$BODY" | jq -r '.stock_remaining')" = "1" ] \
+  && pass "stan: korekta −1" \
+  || fail "stan: delta -1 -> $STATUS ($BODY)"
+request POST "/api/staff/menu/$STOCK_ITEM/stock" "$ADMIN_JAR" "$ADMIN_CSRF" '{"delta":1}'
+[ "$STATUS" = "200" ] && [ "$(printf '%s' "$BODY" | jq -r '.stock_remaining')" = "2" ] \
+  && pass "stan: korekta +1" \
+  || fail "stan: delta +1 -> $STATUS ($BODY)"
+request POST "/api/staff/menu/$STOCK_ITEM/stock" "$ADMIN_JAR" "$ADMIN_CSRF" '{"unlimited":true}'
+[ "$STATUS" = "200" ] && [ "$(printf '%s' "$BODY" | jq -r '.stock_remaining')" = "null" ] \
+  && pass "stan: powrót do bez limitu" \
+  || fail "stan: unlimited -> $STATUS ($BODY)"
+
+# Stan widoczny w menu ucznia i w raporcie dziennym.
+request GET /api/student/menu "$S1_JAR" "" ""
+STUDENT_STOCK=$(printf '%s' "$BODY" | jq -r --argjson id "$STOCK_ITEM" '.items[] | select(.id == $id) | .stock_remaining')
+[ "$STUDENT_STOCK" = "null" ] && pass "stan: menu ucznia pokazuje bez limitu" \
+  || fail "stan: menu ucznia stock=$STUDENT_STOCK"
+AUDIT_STOCK=$(db_scalar "SELECT COUNT(*) FROM audit_log WHERE action='menu_stock_changed';")
+[ "$AUDIT_STOCK" -ge 1 ] && pass "stan: zmiany zapisane w audycie" || fail "stan: brak audytu ($AUDIT_STOCK)"
+
+# Zamknij zwycięskie zamówienie z testu równoległości, aby nie zajmowało
+# limitu otwartych zamówień w dalszej części scenariusza. Status `completed`
+# (a nie `cancelled`) zostawia je w raporcie sprzedaży.
+STOCK_WINNER=$(db_scalar "SELECT o.id FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE oi.menu_item_id = $STOCK_ITEM AND oi.stock_reserved = 1 LIMIT 1;")
+request PATCH "/api/staff/orders/$STOCK_WINNER" "$ADMIN_JAR" "$ADMIN_CSRF" '{"status":"completed"}'
+[ "$STATUS" = "200" ] && pass "stan: zamówienie testowe zamknięte po sprawdzeniu stanu" \
+  || fail "stan: zamknięcie zamówienia testowego -> $STATUS ($BODY)"
 
 # ---------------------------------------------------------------- wyścig anulowań
 create_order cash smoke-idem-0002
@@ -505,6 +595,11 @@ DB_UNCOLLECTED=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY
 [ $((REPORT_CASH_ORDERS + REPORT_CARD_ORDERS)) = "$REPORT_ORDERS" ] \
   && pass "raport: cash + card = razem" \
   || fail "raport: cash/card orders=$REPORT_CASH_ORDERS+$REPORT_CARD_ORDERS != $REPORT_ORDERS"
+
+REPORT_STOCK_SOLD=$(printf '%s' "$BODY" | jq -r --argjson id "$STOCK_ITEM" '.stock[] | select(.menu_item_id == $id) | .sold' | head -n1)
+[ "$REPORT_STOCK_SOLD" = "1" ] \
+  && pass "raport: stan pokazuje sprzedaż pozycji testowej" \
+  || fail "raport: stock sold=$REPORT_STOCK_SOLD (oczekiwano 1)"
 
 request GET "/api/staff/report?date=$NEXT_DATE" "$K_JAR" "" ""
 NEXT_ORDERS=$(printf '%s' "$BODY" | jq -r '.orders // empty')

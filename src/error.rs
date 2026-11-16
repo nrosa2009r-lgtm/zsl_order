@@ -15,7 +15,12 @@ pub enum AppError {
     Forbidden(String),
     NotFound(String),
     Conflict(String),
-    TooManyRequests { retry_after: u64, message: String },
+    TooManyRequests {
+        retry_after: u64,
+        message: String,
+    },
+    /// Baza jest chwilowo zajęta (SQLITE_BUSY) — można ponowić żądanie.
+    Unavailable(String),
     PasswordChangeRequired,
     Internal,
 }
@@ -66,6 +71,12 @@ impl IntoResponse for AppError {
                 message,
                 Some(retry_after),
             ),
+            Self::Unavailable(message) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                message,
+                Some(1),
+            ),
             Self::PasswordChangeRequired => (
                 StatusCode::FORBIDDEN,
                 "password_change_required",
@@ -99,8 +110,25 @@ impl IntoResponse for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
+        if is_database_busy(&error) {
+            tracing::warn!(error = %error, "Baza chwilowo zajęta — zwracam 503");
+            return Self::Unavailable(
+                "Baza jest chwilowo zajęta. Spróbuj ponownie za chwilę.".to_string(),
+            );
+        }
         Self::internal(format!("SQLite: {error}"))
     }
+}
+
+/// SQLite zgłasza zajęcie bazy jako `SQLITE_BUSY` (5) lub `SQLITE_LOCKED` (6).
+/// Po wyczerpaniu `busy_timeout` lepiej zwrócić czytelne 503 niż 500.
+fn is_database_busy(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(database) = error else {
+        return false;
+    };
+    matches!(database.code().as_deref(), Some("5") | Some("6"))
+        || database.message().contains("database is locked")
+        || database.message().contains("database table is locked")
 }
 
 impl From<argon2::password_hash::Error> for AppError {

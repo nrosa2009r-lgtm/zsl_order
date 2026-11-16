@@ -5,6 +5,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::security;
 use crate::state::AppState;
+use crate::stock;
 use crate::util;
 use axum::{
     Extension, Json,
@@ -83,6 +84,7 @@ struct MenuItemRow {
     name: String,
     price_cents: i64,
     available: bool,
+    stock_remaining: Option<i64>,
 }
 
 #[derive(FromRow)]
@@ -166,6 +168,17 @@ pub struct DailyReport {
     pub summary: PaymentTotals,
     pub cash: PaymentTotals,
     pub card: PaymentTotals,
+    /// Bieżący stan pozycji menu i liczba sprzedanych sztuk w dniu raportu.
+    pub stock: Vec<StockReportRow>,
+}
+
+#[derive(FromRow, Serialize)]
+pub struct StockReportRow {
+    pub menu_item_id: i64,
+    pub name: String,
+    pub stock_remaining: Option<i64>,
+    pub stock_default: Option<i64>,
+    pub sold: i64,
 }
 
 pub async fn student_orders(
@@ -313,8 +326,12 @@ pub async fn create_order(
         )));
     }
 
+    // Reset dobowy przed odczytem stanu, aby `stock_remaining` odpowiadał
+    // dzisiejszej dacie także przy pierwszym zamówieniu po północy.
+    stock::reset_daily_stock(&mut *transaction, util::today()).await?;
+
     let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT id, name, price_cents, available FROM menu_items WHERE id IN (",
+        "SELECT id, name, price_cents, available, stock_remaining FROM menu_items WHERE id IN (",
     );
     {
         let mut separated = builder.separated(", ");
@@ -359,6 +376,22 @@ pub async fn create_order(
     if total_cents > 200_000 {
         transaction.rollback().await?;
         return Err(AppError::bad("Kwota zamówienia jest zbyt duża."));
+    }
+
+    // Stan magazynowy rezerwujemy w tej samej transakcji, warunkowym
+    // UPDATE. Klucz idempotencji został sprawdzony wcześniej, więc
+    // powtórzone żądanie nie zmniejsza stanu drugi raz.
+    let sold_out = stock::reserve(&mut transaction, &quantities, util::today()).await?;
+    if !sold_out.is_empty() {
+        transaction.rollback().await?;
+        let names = sold_out
+            .iter()
+            .map(|name| format!("„{name}”"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::conflict(format!(
+            "Skończyły się: {names}. Odśwież menu i złóż zamówienie ponownie."
+        )));
     }
 
     let mut code = String::new();
@@ -421,14 +454,15 @@ pub async fn create_order(
             .ok_or_else(|| AppError::internal("Brak pozycji menu w transakcji."))?;
         sqlx::query(
             "INSERT INTO order_items
-             (order_id, menu_item_id, name, price_cents, quantity)
-             VALUES (?, ?, ?, ?, ?)",
+             (order_id, menu_item_id, name, price_cents, quantity, stock_reserved)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(order_id)
         .bind(menu_item_id)
         .bind(&item.name)
         .bind(item.price_cents)
         .bind(*quantity)
+        .bind(i64::from(item.stock_remaining.is_some()))
         .execute(&mut *transaction)
         .await?;
     }
@@ -514,6 +548,12 @@ pub async fn cancel_order(
         return Err(AppError::conflict(
             "Zamówienie zostało właśnie zmienione. Odśwież listę i spróbuj ponownie.",
         ));
+    }
+
+    // Zwrot na stan tylko dla zamówienia z dzisiejszego dnia. Anulowanie
+    // zamówienia sprzed północy nie zwiększa dzisiejszego stanu.
+    if stock::is_from_today(current.created_at) {
+        stock::return_order_stock(&mut transaction, id, util::today()).await?;
     }
 
     transaction.commit().await?;
@@ -890,6 +930,15 @@ pub async fn staff_update_order(
         ));
     }
 
+    // Anulowanie przed wydaniem zwraca stan — tylko admin/uczeń i tylko
+    // dla dzisiejszego zamówienia. Wydane i nieodebrane nie wracają.
+    let cancelled_before_issue = final_status == "cancelled"
+        && !matches!(current.status.as_str(), "cancelled" | "completed")
+        && current.uncollected_at.is_none();
+    if cancelled_before_issue && stock::is_from_today(current.created_at) {
+        stock::return_order_stock(&mut transaction, id, util::today()).await?;
+    }
+
     transaction.commit().await?;
 
     let payment_reverted = current.payment_status == "paid" && final_payment == "unpaid";
@@ -1014,11 +1063,30 @@ async fn build_daily_report(
     let cash = aggregate_totals(rows.iter().filter(|row| row.payment_method == "cash"));
     let card = aggregate_totals(rows.iter().filter(|row| row.payment_method == "card"));
 
+    stock::reset_daily_stock(&state.db, util::today()).await?;
+    let stock_rows = sqlx::query_as::<_, StockReportRow>(
+        "SELECT m.id AS menu_item_id, m.name, m.stock_remaining, m.stock_default,
+                COALESCE(SUM(CASE
+                    WHEN o.id IS NOT NULL AND o.status <> 'cancelled' THEN oi.quantity
+                    ELSE 0
+                END), 0) AS sold
+         FROM menu_items m
+         LEFT JOIN order_items oi ON oi.menu_item_id = m.id
+         LEFT JOIN orders o ON o.id = oi.order_id AND o.created_at >= ? AND o.created_at < ?
+         GROUP BY m.id
+         ORDER BY m.sort_order ASC, m.name ASC",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(&state.db)
+    .await?;
+
     Ok(DailyReport {
         date: date.format("%Y-%m-%d").to_string(),
         summary,
         cash,
         card,
+        stock: stock_rows,
     })
 }
 

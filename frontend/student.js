@@ -47,6 +47,12 @@
         renderCart();
     }
 
+    function stockRemaining(item) {
+        return item.stock_remaining === null || item.stock_remaining === undefined
+            ? null
+            : item.stock_remaining;
+    }
+
     function renderMenu() {
         const list = App.$("#menuList");
         App.clear(list);
@@ -88,15 +94,36 @@
             }
 
             const inCart = cart.get(item.id) || 0;
+            const remaining = stockRemaining(item);
+            if (remaining !== null) {
+                card.append(
+                    App.h("p", {
+                        class: remaining > 0 ? "stock-note" : "stock-note sold-out",
+                        text: remaining > 0
+                            ? "Zostało " + remaining + " szt."
+                            : "Wyprzedane na dziś",
+                    })
+                );
+            }
+
+            const soldOut = remaining !== null && remaining <= 0;
+            const limitReached = remaining !== null && inCart >= remaining;
             const addButton = App.h("button", {
                 class: "btn btn-secondary btn-block",
-                text: inCart ? "Dodaj kolejną (" + inCart + ")" : "Dodaj do zamówienia",
+                text: soldOut
+                    ? "Wyprzedane"
+                    : limitReached
+                        ? "W koszyku " + inCart + " (limit)"
+                        : inCart
+                            ? "Dodaj kolejną (" + inCart + ")"
+                            : "Dodaj do zamówienia",
                 attrs: { type: "button" },
                 on: {
                     click: function () { addToCart(item.id); },
                 },
             });
             if (!info || !info.ordering_enabled) addButton.disabled = true;
+            if (soldOut || limitReached) addButton.disabled = true;
             card.append(addButton);
             list.append(card);
         });
@@ -104,6 +131,18 @@
 
     function addToCart(id) {
         const current = cart.get(id) || 0;
+        const item = menu.find(function (entry) { return entry.id === id; });
+        if (!item) return;
+        const remaining = stockRemaining(item);
+        if (remaining !== null && current >= remaining) {
+            App.toast(
+                remaining > 0
+                    ? "Zostało tylko " + remaining + " szt. tej pozycji."
+                    : "Ta pozycja jest już wyprzedana.",
+                "error"
+            );
+            return;
+        }
         const maxItems = info && info.max_order_items ? info.max_order_items : 20;
         if (current >= 10) {
             App.toast("Maksymalnie 10 sztuk jednej pozycji.", "error");
@@ -121,10 +160,15 @@
     function changeQuantity(id, delta) {
         const current = cart.get(id) || 0;
         const next = current + delta;
+        const item = menu.find(function (entry) { return entry.id === id; });
+        const remaining = item ? stockRemaining(item) : null;
         if (next <= 0) {
             cart.delete(id);
         } else if (next > 10) {
             App.toast("Maksymalnie 10 sztuk jednej pozycji.", "error");
+            return;
+        } else if (remaining !== null && next > remaining) {
+            App.toast("Zostało tylko " + remaining + " szt. tej pozycji.", "error");
             return;
         } else {
             cart.set(id, next);

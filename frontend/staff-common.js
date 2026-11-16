@@ -19,6 +19,8 @@
             App.$("#menuCategory").value = "Dania";
             App.$("#menuAllergens").value = "";
             App.$("#menuSortOrder").value = "0";
+            App.$("#menuStockRemaining").value = "";
+            App.$("#menuStockDefault").value = "";
             App.$("#menuAvailable").checked = true;
             App.$("#menuFormError").hidden = true;
             dialog.showModal();
@@ -33,9 +35,28 @@
             App.$("#menuCategory").value = item.category || "Dania";
             App.$("#menuAllergens").value = item.allergens || "";
             App.$("#menuSortOrder").value = String(item.sort_order || 0);
+            App.$("#menuStockRemaining").value = item.stock_remaining === null ? "" : String(item.stock_remaining);
+            App.$("#menuStockDefault").value = item.stock_default === null ? "" : String(item.stock_default);
             App.$("#menuAvailable").checked = !!item.available;
             App.$("#menuFormError").hidden = true;
             dialog.showModal();
+        }
+
+        function stockText(item) {
+            if (item.stock_remaining === null) return "Bez limitu";
+            if (item.stock_remaining <= 0) return "Wyprzedane";
+            return "Zostało " + item.stock_remaining + " szt.";
+        }
+
+        async function adjustStock(item, payload, successMessage) {
+            try {
+                await App.api.post("/api/staff/menu/" + item.id + "/stock", payload);
+                if (successMessage) App.toast(successMessage, "success");
+                await refresh();
+                if (options.onChanged) options.onChanged();
+            } catch (error) {
+                App.toast(error.message, "error");
+            }
         }
 
         async function refresh() {
@@ -66,8 +87,58 @@
                 const meta = App.h("div", { class: "manage-meta" });
                 meta.append(
                     App.h("span", { class: "chip", text: item.category || "Dania" }),
-                    App.h("strong", { class: "price", text: App.fmtPLN(item.price_cents) })
+                    App.h("strong", { class: "price", text: App.fmtPLN(item.price_cents) }),
+                    App.h("span", {
+                        class: item.stock_remaining === null
+                            ? "stock-note"
+                            : item.stock_remaining > 0
+                                ? "stock-note"
+                                : "stock-note sold-out",
+                        text: stockText(item),
+                    })
                 );
+
+                const stockActions = App.h("div", { class: "manage-actions" });
+                const unlimited = item.stock_remaining === null;
+                stockActions.append(
+                    App.h("button", {
+                        class: "btn btn-ghost btn-small",
+                        text: "−1 szt.",
+                        attrs: { type: "button", title: "Zmniejsz stan o 1" },
+                        on: {
+                            click: function () {
+                                adjustStock(item, { delta: -1 }, "Stan zmniejszony o 1.");
+                            },
+                        },
+                    }),
+                    App.h("button", {
+                        class: "btn btn-ghost btn-small",
+                        text: "+1 szt.",
+                        attrs: { type: "button", title: "Zwiększ stan o 1" },
+                        on: {
+                            click: function () {
+                                adjustStock(item, { delta: 1 }, "Stan zwiększony o 1.");
+                            },
+                        },
+                    }),
+                    App.h("button", {
+                        class: "btn btn-ghost btn-small",
+                        text: "Bez limitu",
+                        attrs: { type: "button" },
+                        on: {
+                            click: function () {
+                                if (unlimited) return;
+                                if (!window.confirm("Usunąć limit tej pozycji? Będzie dostępna bez ograniczeń.")) return;
+                                adjustStock(item, { unlimited: true }, "Limit usunięty.");
+                            },
+                        },
+                    })
+                );
+                if (unlimited) {
+                    stockActions.children[0].disabled = true;
+                    stockActions.children[1].disabled = true;
+                    stockActions.children[2].disabled = true;
+                }
 
                 const actions = App.h("div", { class: "manage-actions" });
                 actions.append(
@@ -119,7 +190,7 @@
                     })
                 );
 
-                card.append(main, meta, actions);
+                card.append(main, meta, stockActions, actions);
                 list.append(card);
             });
         }
@@ -139,6 +210,23 @@
                 return;
             }
 
+            function readStock(selector) {
+                const raw = App.$(selector).value.trim();
+                if (!raw) return null;
+                const value = Number.parseInt(raw, 10);
+                return Number.isFinite(value) ? value : NaN;
+            }
+
+            const stockRemaining = readStock("#menuStockRemaining");
+            const stockDefault = readStock("#menuStockDefault");
+            if (Number.isNaN(stockRemaining) || Number.isNaN(stockDefault) ||
+                (stockRemaining !== null && (stockRemaining < 0 || stockRemaining > 100000)) ||
+                (stockDefault !== null && (stockDefault < 0 || stockDefault > 100000))) {
+                errorNode.textContent = "Stan musi być pusty (bez limitu) albo liczbą od 0 do 100000.";
+                errorNode.hidden = false;
+                return;
+            }
+
             const payload = {
                 name: App.$("#menuName").value.trim(),
                 description: App.$("#menuDescription").value.trim(),
@@ -147,6 +235,8 @@
                 allergens: App.$("#menuAllergens").value.trim(),
                 available: App.$("#menuAvailable").checked,
                 sort_order: Number.parseInt(App.$("#menuSortOrder").value, 10) || 0,
+                stock_remaining: stockRemaining,
+                stock_default: stockDefault,
             };
 
             if (!payload.name) {
@@ -447,6 +537,7 @@
         const dateInput = App.$(options.dateSelector);
         const summary = App.$(options.summarySelector);
         const tbody = App.$(options.tableSelector);
+        const stockBody = options.stockTableSelector ? App.$(options.stockTableSelector) : null;
         const updated = App.$(options.updatedSelector);
         const exportButton = App.$(options.exportButtonSelector);
 
@@ -494,6 +585,38 @@
             renderRow("Gotówka", report.cash);
             renderRow("Karta", report.card);
             renderRow("Razem", report);
+
+            if (stockBody) {
+                App.clear(stockBody);
+                const stockRows = report.stock || [];
+                if (!stockRows.length) {
+                    const row = App.h("tr");
+                    row.append(App.h("td", {
+                        colspan: "4",
+                        class: "muted",
+                        text: "Brak pozycji menu.",
+                    }));
+                    stockBody.append(row);
+                } else {
+                    stockRows.forEach(function (item) {
+                        const row = App.h("tr");
+                        const remaining = item.stock_remaining === null
+                            ? "bez limitu"
+                            : item.stock_remaining > 0
+                                ? String(item.stock_remaining)
+                                : "0 (wyprzedane)";
+                        [
+                            item.name,
+                            String(item.sold),
+                            remaining,
+                            item.stock_default === null ? "—" : String(item.stock_default),
+                        ].forEach(function (value) {
+                            row.append(App.h("td", { text: value }));
+                        });
+                        stockBody.append(row);
+                    });
+                }
+            }
 
             if (updated) {
                 updated.textContent = "Raport za " + report.date +

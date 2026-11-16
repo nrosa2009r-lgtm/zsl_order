@@ -74,6 +74,14 @@ zawierają wyłącznie pseudonimowe identyfikatory (`sub`, `login`, `role`,
 | `pickup_time` | godzina odbioru | `HH:MM` |
 | `created_at`, `updated_at` | porządek i statystyki | UTC |
 | `name`, `price_cents`, `quantity` w `order_items` | historia zamówienia | snapshot menu |
+| `stock_reserved` w `order_items` | czy pozycja zabrała limitowany stan | 0/1, bez danych osobowych |
+
+### `menu_items` (stan magazynowy)
+
+`stock_remaining`, `stock_default` i `stock_date` opisują wyłącznie
+liczbę dostępnych porcji i dzień jej obowiązywania. Nie wiążą się z
+konkretnym uczniem ani jego zamówieniem — to dane operacyjne stołówki,
+takie jak liczba przygotowanych posiłków.
 
 ### `settings`
 

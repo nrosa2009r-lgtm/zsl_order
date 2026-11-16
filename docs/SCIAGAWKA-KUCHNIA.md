@@ -69,10 +69,27 @@ Kolejność rozwiązań:
 - Kuchnia nie zmienia takiego zamówienia.
 - Blokadę u ucznia zdejmuje **administrator**.
 
-## 8. Koniec zmiany
+## 8. Stan magazynowy
+
+- Karta pozycji w **Menu** pokazuje **„Zostało N szt.”** albo
+  **„Bez limitu”**.
+- Szybkie przyciski **−1 szt.**, **+1 szt.** i **Bez limitu** zmieniają
+  stan od razu; każda zmiana trafia do audytu.
+- W dialogu pozycji ustaw **Stan na dziś** (ile porcji zostało) i
+  opcjonalnie **Domyślny stan dzienny**:
+  - puste „Stan na dziś” = bez limitu,
+  - puste „Domyślny stan” = brak automatycznego resetu.
+- Nowy dzień: pozycje z domyślnym stanem wracają do niego przy pierwszym
+  odczycie menu. Pozostałe zachowują ostatni stan — sprawdź je rano.
+- Gdy stan spadnie do zera, uczeń widzi **„Wyprzedane na dziś”**.
+- Anulowanie dzisiejszego zamówienia przed wydaniem zwraca sztukę.
+- Bieżący stan i sprzedaż dnia znajdziesz w zakładce **Raport**.
+
+## 9. Koniec zmiany
 
 - [ ] Wszystkie wydane zamówienia są `completed`.
 - [ ] Nie ma otwartych `ready` bez wyjaśnienia.
+- [ ] Stan magazynowy na jutro ustawiony (albo `Domyślny stan dzienny`).
 - [ ] Tablet wylogowany lub zablokowany.
 - [ ] Czytnik odłożony, karta z hasłem schowana.
 - [ ] Problemy zgłoszone administratorowi.

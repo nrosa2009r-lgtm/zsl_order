@@ -24,6 +24,18 @@ Autorem projektu jest **natan-rosa**.
   `docker-compose.https.yml` nadpisuje go adresem klienta, a zaufany jest
   tylko stały adres Caddy (`172.28.0.2/32`). Podrobiony nagłówek z
   niezaufanego źródła jest ignorowany.
+- Dzienny stan magazynowy pozycji menu: `stock_remaining`,
+  `stock_default` i `stock_date`, leniwy reset nowego dnia, rezerwacja w
+  transakcji zamówienia i zwrot przy anulowaniu (tylko dzisiejsze
+  zamówienia i pozycje z `order_items.stock_reserved = 1`).
+- Szybka korekta stanu w panelu kuchni/admina: `-1`, `+1`, „Bez limitu”
+  i endpoint `POST /api/staff/menu/:id/stock`; zmiany trafiają do audytu
+  jako `menu_stock_changed`.
+- Menu ucznia pokazuje „Zostało N szt.” / „Wyprzedane na dziś”, a raport
+  dzienny tabelę bieżącego stanu i sprzedaży pozycji.
+- Nowe ustawienia `max_item_quantity_per_break` i
+  `one_active_order_per_break` (zapisywane teraz, egzekwowane po
+  wdrożeniu przerw).
 
 ### Zmienione
 
@@ -38,6 +50,8 @@ Autorem projektu jest **natan-rosa**.
 - Komunikat zmiany hasła nie obiecuje już „litery i cyfry”, której
   walidacja nigdy nie wymagała; pokazuje rzeczywiste wymagania (długość,
   brak loginu, brak popularnych haseł).
+- Zajęta baza (`SQLITE_BUSY`/`SQLITE_LOCKED`) zwraca czytelne
+  `503 unavailable` z `Retry-After: 1` zamiast `500`.
 
 ## [1.0.0] — 2026-11-13
 

@@ -123,6 +123,20 @@
                     <tbody id="reportTableBody"></tbody>
                 </table>
             </div>
+            <h3>Stan magazynu</h3>
+            <div class="table-wrap panel">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Pozycja</th>
+                            <th>Sprzedano</th>
+                            <th>Zostało</th>
+                            <th>Domyślny stan</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reportStockBody"></tbody>
+                </table>
+            </div>
         </section>
     </main>
 
@@ -162,6 +176,20 @@
                     <input id="menuAvailable" type="checkbox" checked>
                     <span>Dostępna dla uczniów</span>
                 </label>
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="menuStockRemaining">Stan na dziś</label>
+                    <input id="menuStockRemaining" type="number" min="0" max="100000"
+                           placeholder="bez limitu">
+                    <small class="muted">Puste = bez limitu, 0 = wyprzedane</small>
+                </div>
+                <div class="field">
+                    <label for="menuStockDefault">Domyślny stan dzienny</label>
+                    <input id="menuStockDefault" type="number" min="0" max="100000"
+                           placeholder="bez resetu">
+                    <small class="muted">Puste = stan bez automatycznego resetu</small>
+                </div>
             </div>
             <p id="menuFormError" class="form-error" role="alert" hidden></p>
             <div class="dialog-actions">

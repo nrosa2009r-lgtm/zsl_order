@@ -31,6 +31,7 @@
             dateSelector: "#reportDate",
             summarySelector: "#reportSummary",
             tableSelector: "#reportTableBody",
+            stockTableSelector: "#reportStockBody",
             updatedSelector: "#reportUpdated",
             exportButtonSelector: "#exportReportButton",
         });
@@ -821,6 +822,8 @@
         App.$("#settingCancelWindow").value = settings.cancel_window_minutes || "30";
         App.$("#settingPickupLimit").value = settings.pickup_limit_minutes || "120";
         App.$("#settingMaxUncollected").value = settings.max_uncollected || "0";
+        App.$("#settingMaxItemPerBreak").value = settings.max_item_quantity_per_break || "0";
+        App.$("#settingOneActiveOrderPerBreak").checked = settings.one_active_order_per_break === "1";
         App.$("#settingsError").hidden = true;
     }
 
@@ -839,6 +842,8 @@
             cancel_window_minutes: Number.parseInt(App.$("#settingCancelWindow").value, 10),
             pickup_limit_minutes: Number.parseInt(App.$("#settingPickupLimit").value, 10),
             max_uncollected: Number.parseInt(App.$("#settingMaxUncollected").value, 10),
+            max_item_quantity_per_break: Number.parseInt(App.$("#settingMaxItemPerBreak").value, 10),
+            one_active_order_per_break: App.$("#settingOneActiveOrderPerBreak").checked,
         };
 
         App.setBusy(button, true, "Zapisywanie…");

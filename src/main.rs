@@ -27,6 +27,7 @@ mod password_policy;
 mod retention;
 mod security;
 mod state;
+mod stock;
 mod util;
 
 use crate::config::Config;
@@ -264,6 +265,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/menu/:id",
             put(handlers::menu::update_menu_item).delete(handlers::menu::hide_menu_item),
         )
+        .route("/menu/:id/stock", post(handlers::menu::update_menu_stock))
         .route("/orders", get(handlers::orders::staff_orders))
         .route("/orders/:id", patch(handlers::orders::staff_update_order))
         .route("/pickup", post(handlers::orders::staff_pickup))

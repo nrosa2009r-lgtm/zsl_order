@@ -44,6 +44,7 @@
             dateSelector: "#reportDate",
             summarySelector: "#reportSummary",
             tableSelector: "#reportTableBody",
+            stockTableSelector: "#reportStockBody",
             updatedSelector: "#reportUpdated",
             exportButtonSelector: "#exportReportButton",
         });

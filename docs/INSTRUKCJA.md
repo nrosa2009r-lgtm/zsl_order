@@ -322,9 +322,28 @@ W panelu admina przejdź do zakładki **Menu**. Jedna pozycja ma pola:
 | `allergens` | alergeny | tekst, np. `gluten, mleko` |
 | `available` | dostępność | `false` ukrywa pozycję przed uczniami |
 | `sort_order` | kolejność | mniejsza liczba = wyżej |
+| `stock_remaining` | stan na dziś | puste = bez limitu; `0` = wyprzedane |
+| `stock_default` | domyślny stan dzienny | puste = brak automatycznego resetu |
 
 Pozycje można edytować i ukrywać. Ukrycie nie usuwa historii zamówień.
 Ceny zawsze liczy serwer z bazy — uczeń nie może ich zmienić.
+
+**Stan magazynowy.** Limit dotyczy wyłącznie **dzisiejszego dnia**.
+Po północy (w strefie szkoły) pozycja z `stock_default` wraca do tego
+stanu przy pierwszym odczycie menu, zamówieniu albo raporcie. Pozycja bez
+`stock_default` zachowuje stan ustawiony ręcznie do następnej zmiany.
+Dzięki temu nie trzeba ręcznie zerować licznika codziennie.
+
+Szybkie przyciski **−1 szt.**, **+1 szt.** i **Bez limitu** na karcie
+pozycji pozwalają skorygować stan bez otwierania dialogu. Każda zmiana
+trafia do audytu jako `menu_stock_changed`.
+
+Na razie zamówienia dotyczą tylko dzisiejszego dnia i limit dotyczy
+dzisiejszego stanu. Gdy w kolejnej wersji pojawi się zamawianie
+z wyprzedzeniem, limit będzie kontrolowany wyłącznie dla zamówień na
+dziś — stan przyszłych dni nie będzie kontrolowany; panel administratora
+pokaże to ostrzeżenie. W panelu ucznia widoczne jest „Zostało N szt.”
+albo „Wyprzedane na dziś”.
 
 ### 3.4. Godziny, terminy i limity
 
@@ -340,6 +359,12 @@ W panelu admina **Ustawienia**:
 | `cancel_window_minutes` | `30` | 0–1440 | jak długo uczeń może anulować; `0` = bez limitu |
 | `pickup_limit_minutes` | `120` | 0–720 | po ilu minutach od `ready` zamówienie staje się nieodebrane; `0` = wyłączone |
 | `max_uncollected` | `0` | 0–20 | ile nieodebranych blokuje kolejne zamówienia; `0` = brak blokady |
+| `max_item_quantity_per_break` | `0` | 0–10 | limit sztuk jednej pozycji na przerwę; `0` = bez limitu |
+| `one_active_order_per_break` | `false` | — | jedno aktywne zamówienie na przerwę |
+
+Pola `*_per_break` są już widoczne i zapisywane, ale zaczną obowiązywać
+po wdrożeniu przerw (kolejna aktualizacja). Do tego czasu nie zmieniają
+działania zamówień.
 
 Semantyka:
 
@@ -508,10 +533,15 @@ zamówieniami i historią płatności.
 
 1. W zakładce **Menu** wybierz pozycje i ilości (maksymalnie 10 szt.
    jednej pozycji, do `max_order_items` pozycji).
-2. Sprawdź alergeny i dostępność.
+2. Sprawdź alergeny i dostępność. Przy pozycjach limitowanych widnieje
+   „Zostało N szt.”; „Wyprzedane na dziś” oznacza, że nie można już jej
+   zamówić. Stan dotyczy tylko dzisiejszego dnia.
 3. Wybierz sposób płatności przy odbiorze: **gotówka** albo **karta**.
 4. Opcjonalnie podaj godzinę odbioru w formacie `HH:MM`.
 5. Kliknij **Zamów**. System policzy kwotę po stronie serwera.
+
+Jeśli w międzyczasie ktoś kupi ostatnią sztukę, zobaczysz komunikat
+„Skończyły się: …”. Odśwież menu i złóż zamówienie ponownie.
 
 Po złożeniu zobaczysz krótki kod odbioru (np. `K7M2QP`) oraz kod QR.
 Zapisz/pozostaw kod — kuchnia odszuka zamówienie po kodzie lub QR.
@@ -538,9 +568,11 @@ Zamówienie możesz anulować tylko wtedy, gdy:
 - ma status `new` (nie zostało jeszcze przyjęte do przygotowania),
 - nie minął termin `cancel_window_minutes` od złożenia.
 
-Po anulowaniu kod QR przestaje działać. Jeśli przycisk anulowania jest
-nieaktywny, poproś kuchnię o pomoc — po rozpoczęciu przygotowania
-anulowanie nie jest możliwe.
+Po anulowaniu kod QR przestaje działać. Jeśli zamówienie złożono
+dzisiaj i nie zostało jeszcze wydane, anulowanie zwraca sztuki na
+dzisiejszy stan menu — pozycja znów będzie dostępna dla innych. Jeśli
+przycisk anulowania jest nieaktywny, poproś kuchnię o pomoc — po
+rozpoczęciu przygotowania anulowanie nie jest możliwe.
 
 ### 5.6. Statusy widoczne dla ucznia
 
@@ -636,6 +668,19 @@ W zakładce **Menu** kuchnia może dodawać, edytować i ukrywać pozycje.
 Ceny podawaj w groszach (`1250` = 12,50 zł). Pozycja niedostępna nie
 pojawi się u ucznia, ale pozostaje w historii zamówień.
 
+**Stan na dziś.** W dialogu pozycji ustaw `Stan na dziś` (ile sztuk
+zostało) i opcjonalnie `Domyślny stan dzienny` (do czego wrócić nazajutrz).
+Puste pole = bez limitu. Na karcie pozycji są też przyciski **−1 szt.**,
+**+1 szt.** i **Bez limitu** — używaj ich, gdy skończy się porcja albo
+trzeba dorzucić kolejną partię. Kiedy stan spadnie do zera, uczeń
+zobaczy „Wyprzedane na dziś”. Jeśli ustawisz **tylko** `Domyślny stan
+dzienny`, dzisiaj pozycja pozostaje bez limitu, a ustawiona liczba
+zacznie obowiązywać od następnego dnia.
+
+Reset stanu jest automatyczny przy pierwszym odczycie nowego dnia, ale
+tylko dla pozycji z ustawionym `Domyślnym stanem dziennym`. Pozycje bez
+niego zachowują ostatni stan — ustaw go świadomie po każdej zmianie.
+
 ---
 
 ## 7. Obsługa dla administratora
@@ -665,9 +710,10 @@ hasła. Po zamknięciu komunikatu nie da się ich odzyskać.
 
 ### 7.3. Menu
 
-Zakładka **Menu**: dodawanie, edycja, ukrywanie pozycji. Zmiany są
-widoczne u uczniów natychmiast. Nie usuwaj pozycji, której historia jest
-potrzebna w raportach — użyj `available = false`.
+Zakładka **Menu**: dodawanie, edycja, ukrywanie pozycji oraz stan
+magazynowy (rozdział 6.6). Zmiany są widoczne u uczniów natychmiast.
+Nie usuwaj pozycji, której historia jest potrzebna w raportach — użyj
+`available = false`.
 
 ### 7.4. Ustawienia
 
@@ -687,7 +733,10 @@ Zakładka **Raport**:
 1. Wybierz datę.
 2. Odczytaj podsumowanie: liczba zamówień, opłacone, nieopłacone,
    anulowane, nieodebrane, sumy gotówka/karta/razem.
-3. Pobierz CSV przyciskiem **Eksport CSV**.
+3. Sprawdź tabelę **Stan magazynu**: bieżący stan, sprzedaż w dniu
+   raportu i domyślny stan pozycji. Stan jest bieżący, nie historyczny.
+4. Pobierz CSV przyciskiem **Eksport CSV**. CSV zawiera wyłącznie
+   podsumowanie pieniężne — tabela stanu jest tylko w panelu.
 
 CSV ma BOM, separator `;` i jest zgodny z Excelem. Zawiera podział na
 gotówkę, kartę i razem. Formuły w komórkach są neutralizowane apostrofem
@@ -899,8 +948,19 @@ i przeanalizuj logi. Nie usuwaj kopii bazy.
 - Nie edytuj ręcznie tabel ani `_sqlx_migrations`, jeśli nie wiesz, co
   robisz.
 - Przed każdą aktualizacją zrób kopię i przetestuj migrację na kopii.
+- Po migracji sprawdź integralność:
+
+  ```bash
+  sqlite3 /var/lib/zsl-order/baza.db "PRAGMA foreign_key_check;"
+  sqlite3 /var/lib/zsl-order/baza.db "PRAGMA integrity_check;"
+  ```
+
+  Oba polecenia powinny zwrócić pusty wynik (lub `ok`). Pełna procedura
+  backupu przed migracją: [docs/DATABASE.md](DATABASE.md#7-backup-i-integralność).
 - Migracja bazowa używa `IF NOT EXISTS`, więc działa też na starszych
   bazach bez tabeli migracji.
+- Aktualizacja ze stanem magazynu dodaje `0006_menu_stock.sql`
+  (addytywna: istniejące pozycje dostają „bez limitu”).
 
 ---
 

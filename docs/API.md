@@ -146,6 +146,7 @@ HTTP/1.1 403 Forbidden
 | `GET` | `/api/staff/menu` | `kitchen` / `admin` | nie |
 | `POST` | `/api/staff/menu` | `kitchen` / `admin` | tak |
 | `PUT` | `/api/staff/menu/:id` | `kitchen` / `admin` | tak |
+| `POST` | `/api/staff/menu/:id/stock` | `kitchen` / `admin` | tak |
 | `DELETE` | `/api/staff/menu/:id` | `kitchen` / `admin` | tak |
 | `GET` | `/api/staff/orders` | `kitchen` / `admin` | nie |
 | `PATCH` | `/api/staff/orders/:id` | `kitchen` / `admin` | tak |
@@ -374,7 +375,10 @@ Zwraca wyłącznie dostępne pozycje menu, posortowane po `sort_order`, nazwie.
       "category": "Dania główne",
       "allergens": "gluten, jaja, mleko",
       "available": true,
-      "sort_order": 20
+      "sort_order": 20,
+      "stock_remaining": 12,
+      "stock_default": 20,
+      "stock_date": "2026-11-10"
     }
   ],
   "ordering_enabled": true,
@@ -385,6 +389,15 @@ Zwraca wyłącznie dostępne pozycje menu, posortowane po `sort_order`, nazwie.
   "max_uncollected": 0
 }
 ```
+
+- `stock_remaining`: ile sztuk zostało na dzień `stock_date`;
+  `null` = pozycja bez limitu,
+- `stock_default`: stan, do którego pozycja wraca przy pierwszym odczycie
+  nowego dnia; `null` = brak automatycznego resetu,
+- `stock_date`: dzień (`RRRR-MM-DD`, strefa szkoły), którego dotyczy
+  `stock_remaining`. Jest ustawiany także przy samym `stock_default`
+  (stan „bez limitu na dziś” wróci do domyślnego nazajutrz); `null`
+  tylko wtedy, gdy nie ma ani limitu, ani domyślnego stanu.
 
 ### `GET /api/student/orders`
 
@@ -428,6 +441,13 @@ pozycje w kolejności `order_items.id`.
   akcją administratora `POST /api/admin/users/:id/clear-uncollected-block`;
   historia nieodebranych i raporty pozostają bez zmian.
 - `ordering_enabled = false` blokuje składanie zamówień.
+- Pozycje z `stock_remaining` mają dzienny limit. Rezerwacja odbywa się
+  w tej samej transakcji co zapis zamówienia (warunkowy `UPDATE`), więc
+  dwie osoby nie kupią ostatniej sztuki. Brak sztuk → `409` z nazwami
+  wyczerpanych pozycji. Limit dotyczy wyłącznie dnia `stock_date`; stan
+  przyszłych dni nie jest kontrolowany.
+- Powtórzenie klucza idempotencji jest sprawdzane **przed** rezerwacją
+  stanu, więc ponowienie żądania nie zdejmuje sztuk drugi raz.
 
 **Odpowiedź 201** — nowy `OrderView`. **Odpowiedź 200** — istniejące
 zamówienie dla powtórzonego klucza idempotencji.
@@ -437,7 +457,8 @@ zamówienie dla powtórzonego klucza idempotencji.
 | Status | `code` | Opis |
 | --- | --- | --- |
 | 400 | `bad_request` | nieprawidłowe pozycje, płatność, godzina, klucz idempotencji, kwota |
-| 409 | `conflict` | zamawianie wyłączone, limit otwartych, blokada nieodebranych, pozycja niedostępna |
+| 409 | `conflict` | zamawianie wyłączone, limit otwartych, blokada nieodebranych, pozycja niedostępna lub wyczerpany stan |
+| 503 | `unavailable` | baza chwilowo zajęta (`SQLITE_BUSY`); `Retry-After: 1` |
 
 ### `POST /api/student/orders/:id/cancel`
 
@@ -446,6 +467,13 @@ zamówienie w statusie `new`, w terminie `cancel_window_minutes` od
 złożenia (`0` = bez limitu). Operacja jest transakcyjna i warunkowa —
 przy dwóch równoczesnych anulowaniach jedno kończy się `200`, drugie
 `409`. Zwraca zaktualizowany `OrderView` ze statusem `cancelled`.
+
+Jeśli zamówienie złożono **dzisiaj** i nie zostało jeszcze wydane ani
+nieodebrane, anulowanie zwraca zarezerwowane sztuki na dzisiejszy stan
+menu. Zwrot dotyczy wyłącznie pozycji, które faktycznie zabrały limit
+(`order_items.stock_reserved = 1`) — ustawienie limitu po złożeniu
+zamówienia nie zawyża stanu. Anulowanie zamówienia z poprzedniego dnia
+nie zmienia dzisiejszego stanu.
 
 | Status | `code` | Opis |
 | --- | --- | --- |
@@ -484,7 +512,9 @@ najpierw dostępne, potem `sort_order`, nazwa.
   "category": "Zupy",
   "allergens": "gluten, seler",
   "available": true,
-  "sort_order": 10
+  "sort_order": 10,
+  "stock_remaining": 30,
+  "stock_default": 30
 }
 ```
 
@@ -494,14 +524,47 @@ najpierw dostępne, potem `sort_order`, nazwa.
 - `category`: 1–40 znaków (domyślnie `"Dania"`),
 - `allergens`: ≤ 160 znaków,
 - `available`: bool (domyślnie `true`),
-- `sort_order`: −10 000…10 000.
+- `sort_order`: −10 000…10 000,
+- `stock_remaining`: `null`/brak = bez limitu; 0–100 000 = stan na dziś,
+- `stock_default`: `null`/brak = brak automatycznego resetu; 0–100 000 =
+  stan, do którego pozycja wraca przy pierwszym odczycie nowego dnia.
 
 **Odpowiedź 201** — `MenuItemView`.
 
 ### `PUT /api/staff/menu/:id`
 
 Przyjmuje ten sam obiekt co `POST` (pełna aktualizacja). Zwraca
-`MenuItemView`. Brak pozycji → `404`.
+`MenuItemView`. Ustawienie `stock_remaining` lub `stock_default`
+rozpoczyna nowy dzień stanu (`stock_date = dziś`).
+
+### `POST /api/staff/menu/:id/stock`
+
+Szybka korekta stanu na dziś, bez edycji całej pozycji. Ciało zawiera
+**dokładnie jedną** operację:
+
+```json
+{"delta": -1}
+```
+
+```json
+{"set": 12}
+```
+
+```json
+{"unlimited": true}
+```
+
+- `delta`: −1000…1000, wymaga pozycji z limitem; wynik nie może być
+  ujemny ani przekroczyć 100 000,
+- `set`: 0–100 000 — ustawia stan bezwzględny,
+- `unlimited`: `true` usuwa limit (`stock_remaining = null`). Jeśli
+  pozycja ma `stock_default`, następny dzień przywróci ten limit; bez
+  domyślnego stanu pozycja pozostaje bez limitu.
+
+Operacja jest transakcyjna i warunkowa — równoległa zmiana tego samego
+stanu kończy się `409` zamiast cichego nadpisania. Zwraca zaktualizowany
+`MenuItemView`. Każda zmiana trafia do audytu jako `menu_stock_changed`.
+Brak pozycji → `404`.
 
 ### `DELETE /api/staff/menu/:id`
 
@@ -615,7 +678,16 @@ podział na gotówkę i kartę:
   "completed_orders": 9,
   "open_orders": 1,
   "cash": { "orders": 7, "paid_orders": 5, "paid_cents": 9800, "...": "..." },
-  "card": { "orders": 5, "paid_orders": 4, "paid_cents": 8800, "...": "..." }
+  "card": { "orders": 5, "paid_orders": 4, "paid_cents": 8800, "...": "..." },
+  "stock": [
+    {
+      "menu_item_id": 2,
+      "name": "Kotlet schabowy z ziemniakami",
+      "stock_remaining": 4,
+      "stock_default": 20,
+      "sold": 16
+    }
+  ]
 }
 ```
 
@@ -632,6 +704,11 @@ podział na gotówkę i kartę:
 - `completed_orders + open_orders + cancelled_orders + uncollected_orders =
   orders` (podział według realizacji),
 - `cash.*` + `card.*` = wartości łączne,
+- `stock` to **bieżący** stan pozycji menu (nie historyczny) oraz liczba
+  sprzedanych sztuk w dniu raportu; anulowane zamówienia nie zwiększają
+  `sold`, a pozycje z `stock_remaining = null` są pokazane jako „bez
+  limitu”. Tabela stanu jest tylko w JSON/UI — CSV raportu pieniężnego
+  pozostaje bez zmian,
 - nieprawidłowa data → `400`.
 
 Jeśli zamówienia z danego dnia zostały usunięte przez nocną retencję
@@ -975,7 +1052,9 @@ kont uczniów (`400` dla innych ról); brak konta → `404`. Audyt zapisuje
   "max_order_items": "20",
   "cancel_window_minutes": "30",
   "pickup_limit_minutes": "120",
-  "max_uncollected": "0"
+  "max_uncollected": "0",
+  "max_item_quantity_per_break": "0",
+  "one_active_order_per_break": "0"
 }
 ```
 
@@ -994,7 +1073,9 @@ Wszystkie pola opcjonalne; podaje się tylko zmieniane.
   "max_order_items": 20,
   "cancel_window_minutes": 30,
   "pickup_limit_minutes": 120,
-  "max_uncollected": 0
+  "max_uncollected": 0,
+  "max_item_quantity_per_break": 0,
+  "one_active_order_per_break": false
 }
 ```
 
@@ -1008,6 +1089,8 @@ Wszystkie pola opcjonalne; podaje się tylko zmieniane.
 | `cancel_window_minutes` | 0–1440; 0 = bez terminu |
 | `pickup_limit_minutes` | 0–720; 0 = auto-oznaczanie wyłączone |
 | `max_uncollected` | 0–20; 0 = brak blokady |
+| `max_item_quantity_per_break` | 0–10; 0 = bez limitu; dotyczy sztuk jednej pozycji na przerwę |
+| `one_active_order_per_break` | bool; jedno aktywne zamówienie na przerwę |
 
 Brak zmian → `400`. Zwraca pełny obiekt ustawień.
 
@@ -1152,6 +1235,7 @@ Format:
 | 404 | `not_found` | brak zasobu lub brak uprawnień do zasobu (nie ujawniamy istnienia) |
 | 409 | `conflict` | konflikt stanu (limit, zamknięte zamówienie, anulowane) |
 | 429 | `too_many_requests` | rate limit; `Retry-After` |
+| 503 | `unavailable` | baza chwilowo zajęta (`SQLITE_BUSY`); `Retry-After: 1` |
 | 500 | `internal_error` | błąd wewnętrzny; szczegóły nie są ujawniane |
 
 Dodatkowo framework może zwrócić `405 Method Not Allowed` dla złej metody
@@ -1173,6 +1257,8 @@ szczegółów SQL, ścieżek ani stack trace.
 | kategoria | 1–40 znaków |
 | alergeny | ≤ 160 znaków |
 | `sort_order` | −10 000…10 000 |
+| stan pozycji | `null` (bez limitu) lub 0–100 000 |
+| `delta` stanu | −1000…1000; wynik 0–100 000 |
 | ilość pozycji | 1–10 |
 | liczba pozycji zamówienia | 1–`max_order_items` (1–50) |
 | `pickup_time` | `""` lub `HH:MM`, 00:00–23:59 |

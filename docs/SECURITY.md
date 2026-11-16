@@ -290,6 +290,21 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   komunikat `internal_error` bez SQL/ścieżek/stack trace.
 - Limit ciała żądania 64 KiB; limit liczby pozycji, kont, list i długości
   pól.
+- Stan magazynowy jest rezerwowany w tej samej transakcji co zamówienie
+  (`BEGIN IMMEDIATE` + warunkowy `UPDATE`). Dwie osoby nie kupią ostatniej
+  sztuki: przegrany dostaje `409` z nazwami wyczerpanych pozycji, nie
+  `500`. Klucz idempotencji jest sprawdzany przed rezerwacją, więc
+  ponowienie żądania nie zdejmuje stanu drugi raz.
+- Po wyczerpaniu `busy_timeout` baza zwraca `SQLITE_BUSY`/`SQLITE_LOCKED`;
+  aplikacja mapuje to na `503 unavailable` z `Retry-After: 1`, bez
+  ujawniania szczegółów SQL.
+- Anulowanie zwraca stan wyłącznie dla zamówienia z dzisiejszego dnia i
+  pozycji, które faktycznie zabrały limit (`stock_reserved = 1`).
+  Anulowanie starego zamówienia nie zawyża dzisiejszego stanu.
+- Limity „na przerwę” (`max_item_quantity_per_break`,
+  `one_active_order_per_break`) są zapisywane w ustawieniach, ale zaczną
+  być egzekwowane dopiero po wdrożeniu tabeli przerw; do tego czasu nie
+  zmieniają zachowania zamówień.
 
 ## 8. Kody QR i odbiór
 

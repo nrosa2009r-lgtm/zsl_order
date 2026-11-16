@@ -95,6 +95,8 @@ async fn seed_settings(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ("cancel_window_minutes", "30"),
         ("pickup_limit_minutes", "120"),
         ("max_uncollected", "0"),
+        ("max_item_quantity_per_break", "0"),
+        ("one_active_order_per_break", "0"),
     ];
 
     for (key, value) in defaults {
@@ -470,7 +472,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 5);
+        assert_eq!(applied, 6);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")
@@ -483,5 +485,22 @@ mod tests {
                 .iter()
                 .any(|name| name == "uncollected_block_reset_at")
         );
+
+        for (table, expected) in [
+            ("menu_items", "stock_remaining"),
+            ("menu_items", "stock_default"),
+            ("menu_items", "stock_date"),
+            ("order_items", "stock_reserved"),
+        ] {
+            let columns: Vec<String> =
+                sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))
+                    .fetch_all(&pool)
+                    .await
+                    .expect("kolumny tabeli");
+            assert!(
+                columns.iter().any(|name| name == expected),
+                "brak kolumny {table}.{expected}"
+            );
+        }
     }
 }
