@@ -251,7 +251,10 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 - licznik „Zostało N szt.” i blokada zamówienia wyprzedanej pozycji,
 - koszyk z ilościami (1–10 szt. na pozycję),
 - wybór płatności przy odbiorze: gotówka lub karta,
-- opcjonalna godzina odbioru (`HH:MM`),
+- wybór przerwy (okna wydawania) i — gdy włączone — dnia odbioru
+  z wyprzedzeniem (`order_days_ahead`); przy przyszłym dniu uczeń widzi
+  ostrzeżenie, że stan magazynowy nie jest kontrolowany,
+- opcjonalna godzina odbioru (`HH:MM`, musi mieścić się w oknie przerwy),
 - potwierdzenie zamówienia z kodem odbioru i kodem QR,
 - lista własnych zamówień, statusy, anulowanie tylko świeżego zamówienia,
 - zmiana własnego hasła.
@@ -259,19 +262,25 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 ### Panel kuchni — `/kitchen`
 
 - zamówienia otwarte (`ordered`), dzisiejsze lub wszystkie,
-- karty zamówień z pozycjami, kwotą, sposobem płatności i godziną odbioru,
+- karty zamówień z pozycjami, kwotą, sposobem płatności, dniem odbioru
+  i przerwą,
 - wyszukiwanie po krótkim kodzie lub tokenie QR,
 - skaner QR kamery (`BarcodeDetector`, a gdy go brak — lokalny jsQR
   ładowany tylko na tej stronie) + ręczne pole (działa też z czytnikiem
   USB działającym jak klawiatura),
-- zmiana statusu: przyjęte → w przygotowaniu → gotowe → wydane,
+- zmiana statusu: zamówione → wydane (jednym przyciskiem „Wydaj
+  i opłacone”); wydanie tylko w dniu odbioru,
 - oznaczenie płatności jako opłaconej,
 - zarządzanie menu (dodawanie, edycja, ukrywanie pozycji),
 - dzienny stan magazynowy: `−1`/`+1`/„Bez limitu”, domyślny stan na
-  nowy dzień i automatyczny reset.
+  nowy dzień i automatyczny reset,
+- raport dnia z rozbiciem na przerwy.
 
 ### Panel administratora — `/admin`
 
+- przerwy (okna wydawania): dodawanie, edycja, wyłączanie i usuwanie
+  nieużywanych; przerwy z historią wyłącza się, aby raporty zachowały
+  nazwę,
 - statystyki: konta, zamówienia dzisiaj, utarg dzisiejszy, otwarte
   zamówienia, oczekujące płatności, dostępne pozycje menu, aktywne sesje,
 - wykresy aktywności za 7/14/30/90 dni: liczba zamówień, utarg dzienny,
@@ -303,7 +312,7 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 
       zamknięte bez wydania:
                  ordered → cancelled   (uczeń przed wydaniem lub admin)
-                 ordered → uncollected (minął pickup_limit_minutes)
+                 ordered → uncollected (koniec przerwy + pickup_limit_minutes)
 ```
 
 Płatność: `unpaid` → `paid`. Kuchnia może tylko oznaczyć `paid`; admin może

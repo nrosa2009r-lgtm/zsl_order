@@ -105,6 +105,27 @@ pub fn format_local_datetime(timestamp: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Znacznik czasu UTC dla daty i godziny `HH:MM` w strefie szkoły.
+/// Godzina niejednoznaczna przy zmianie czasu wybiera wcześniejszy
+/// wariant, a nieistniejąca (luka DST) zwraca `None`.
+pub fn local_datetime_timestamp(date: NaiveDate, time: &str) -> Option<i64> {
+    let bytes = time.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return None;
+    }
+    let hour: u32 = time[0..2].parse().ok()?;
+    let minute: u32 = time[3..5].parse().ok()?;
+    if hour >= 24 || minute >= 60 {
+        return None;
+    }
+    let naive = date.and_hms_opt(hour, minute, 0)?;
+    match APP_TZ.from_local_datetime(&naive) {
+        LocalResult::Single(value) => Some(value.timestamp()),
+        LocalResult::Ambiguous(earliest, _) => Some(earliest.timestamp()),
+        LocalResult::None => None,
+    }
+}
+
 /// Akceptujemy tylko godzinę w formacie HH:MM (opcjonalne pole odbioru).
 pub fn valid_pickup_time(value: &str) -> bool {
     if value.is_empty() {
@@ -132,6 +153,34 @@ mod tests {
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("poprawna data")
+    }
+
+    #[test]
+    fn local_datetime_handles_dst_days() {
+        // Zmiana czasu w Polsce: 29.03.2026 (11:50 CEST = 09:50 UTC)
+        // i 25.10.2026 (11:50 CET = 10:50 UTC).
+        let spring = date(2026, 3, 29);
+        assert_eq!(
+            local_datetime_timestamp(spring, "11:50"),
+            Some(
+                APP_TZ
+                    .with_ymd_and_hms(2026, 3, 29, 11, 50, 0)
+                    .unwrap()
+                    .timestamp()
+            )
+        );
+        let autumn = date(2026, 10, 25);
+        assert_eq!(
+            local_datetime_timestamp(autumn, "11:50"),
+            Some(
+                APP_TZ
+                    .with_ymd_and_hms(2026, 10, 25, 11, 50, 0)
+                    .unwrap()
+                    .timestamp()
+            )
+        );
+        assert_eq!(local_datetime_timestamp(spring, "25:00"), None);
+        assert_eq!(local_datetime_timestamp(spring, ""), None);
     }
 
     #[test]

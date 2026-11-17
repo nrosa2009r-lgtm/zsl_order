@@ -302,9 +302,26 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   pozycji, które faktycznie zabrały limit (`stock_reserved = 1`).
   Anulowanie starego zamówienia nie zawyża dzisiejszego stanu.
 - Limity „na przerwę” (`max_item_quantity_per_break`,
-  `one_active_order_per_break`) są zapisywane w ustawieniach, ale zaczną
-  być egzekwowane dopiero po wdrożeniu tabeli przerw; do tego czasu nie
-  zmieniają zachowania zamówień.
+  `one_active_order_per_break`) są egzekwowane w tej samej transakcji co
+  zapis zamówienia, dla pary (uczeń, `pickup_date`, `break_id`). Obejmują
+  tylko zamówienia `ordered`/`issued`, więc anulowanie zwalnia limit.
+- Dzień odbioru (`pickup_date`) jest walidowany względem ustawienia
+  `order_days_ahead` (0–7) i dzisiejszej daty w `Europe/Warsaw`. Wartość
+  spoza zakresu jest odrzucana jako `400` — nie da się obejść limitu
+  wyprzedzenia, podając dowolną datę.
+- Kod QR, wydanie w kuchni i oznaczanie nieodebranych działają wyłącznie
+  w dniu `pickup_date`. Zamówienie na przyszły dzień nie może zostać
+  wydane ani zamknięte jako nieodebrane wcześniej.
+- Termin nieodebrania to **koniec przerwy + `pickup_limit_minutes`**
+  w `Europe/Warsaw`; nie jest liczony od `created_at`. Zamówienie na
+  późniejszą przerwę nie może więc zostać zamknięte po restarcie ani po
+  samym upływie limitu od złożenia. Zamówienia z poprzednich dni są
+  zamykane zawsze (z wyjątkiem `pickup_limit_minutes = 0`, które całkowicie
+  wyłącza auto-oznaczanie). Blokada `max_uncollected` liczy wyłącznie
+  zamówienia `uncollected` zamknięte tą regułą.
+- Stan magazynowy jest rezerwowany tylko dla zamówień na dziś. Przy
+  `order_days_ahead > 0` stan przyszłych dni nie jest kontrolowany — to
+  świadome ograniczenie, opisane w panelu administratora i u ucznia.
 
 ## 8. Kody QR i odbiór
 

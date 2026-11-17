@@ -16,20 +16,22 @@ use axum::{
 use chrono::{Duration, NaiveDate};
 use qrcode::{QrCode, render::svg};
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection, FromRow, QueryBuilder, Sqlite, Transaction};
+use sqlx::{Connection, FromRow, QueryBuilder, Sqlite, SqlitePool, Transaction};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 const ORDER_SELECT: &str = "SELECT o.id, o.code, o.status, o.payment_method, o.payment_status,
-        o.total_cents, o.pickup_time, o.created_at, o.updated_at,
-        o.paid_at, o.issued_at, o.uncollected_at,
+        o.total_cents, o.pickup_time, o.pickup_date, o.break_id, o.created_at,
+        o.updated_at, o.paid_at, o.issued_at, o.uncollected_at,
         COALESCE(u.login, '') AS user_login,
         COALESCE(u.display_code, 'konto usunięte') AS user_display_code,
         p.login AS paid_by_login,
+        b.name AS break_name,
         oi.name AS item_name, oi.price_cents AS item_price, oi.quantity AS item_qty
  FROM orders o
  LEFT JOIN users u ON u.id = o.user_id
  LEFT JOIN users p ON p.id = o.paid_by
+ LEFT JOIN breaks b ON b.id = o.break_id
  LEFT JOIN order_items oi ON oi.order_id = o.id";
 
 #[derive(Clone, Serialize)]
@@ -48,6 +50,10 @@ pub struct OrderView {
     pub payment_status: String,
     pub total_cents: i64,
     pub pickup_time: String,
+    /// Dzień odbioru (`RRRR-MM-DD`); `None` = dzień złożenia.
+    pub pickup_date: Option<String>,
+    pub break_id: Option<i64>,
+    pub break_name: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub paid_at: Option<i64>,
@@ -68,6 +74,9 @@ struct OrderRow {
     payment_status: String,
     total_cents: i64,
     pickup_time: String,
+    pickup_date: Option<String>,
+    break_id: Option<i64>,
+    break_name: Option<String>,
     created_at: i64,
     updated_at: i64,
     paid_at: Option<i64>,
@@ -95,6 +104,7 @@ struct OrderState {
     status: String,
     payment_status: String,
     created_at: i64,
+    pickup_date: Option<String>,
     paid_at: Option<i64>,
     paid_by: Option<i64>,
     issued_at: Option<i64>,
@@ -107,6 +117,13 @@ pub struct CreateOrderRequest {
     pub payment_method: String,
     #[serde(default)]
     pub pickup_time: String,
+    /// Dzień odbioru `RRRR-MM-DD`; brak = dziś. Dozwolony zakres wyznacza
+    /// ustawienie `order_days_ahead`.
+    #[serde(default)]
+    pub pickup_date: Option<String>,
+    /// Przerwa (okno wydawania). Wymagana, gdy są aktywne przerwy.
+    #[serde(default)]
+    pub break_id: Option<i64>,
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
@@ -148,6 +165,8 @@ struct ReportOrderRow {
     payment_method: String,
     payment_status: String,
     total_cents: i64,
+    break_id: Option<i64>,
+    break_name: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -170,8 +189,19 @@ pub struct DailyReport {
     pub summary: PaymentTotals,
     pub cash: PaymentTotals,
     pub card: PaymentTotals,
+    /// Rozbicie zamówień dnia na przerwy („Bez przerwy” dla zamówień
+    /// złożonych, gdy przerwy nie były jeszcze skonfigurowane).
+    pub breaks: Vec<BreakReportRow>,
     /// Bieżący stan pozycji menu i liczba sprzedanych sztuk w dniu raportu.
     pub stock: Vec<StockReportRow>,
+}
+
+#[derive(Serialize)]
+pub struct BreakReportRow {
+    pub break_id: Option<i64>,
+    pub break_name: String,
+    #[serde(flatten)]
+    pub totals: PaymentTotals,
 }
 
 #[derive(FromRow, Serialize)]
@@ -224,7 +254,14 @@ pub async fn create_order(
         ));
     }
 
-    let pickup_time = body.pickup_time.trim().to_string();
+    let today = util::today();
+    let order_days_ahead = parse_setting(&state, "order_days_ahead", 0)
+        .await
+        .clamp(0, 7);
+    let pickup_date = resolve_pickup_date(body.pickup_date.as_deref(), today, order_days_ahead)?;
+    let pickup_date_key = stock::date_key(pickup_date);
+
+    let mut pickup_time = body.pickup_time.trim().to_string();
     if !util::valid_pickup_time(&pickup_time) {
         return Err(AppError::bad("Godzina odbioru musi być w formacie HH:MM."));
     }
@@ -282,6 +319,47 @@ pub async fn create_order(
         return Ok((StatusCode::OK, Json(load_order(&state, existing_id).await?)));
     }
 
+    // Przerwa jest walidowana w transakcji, aby usunięcie/wyłączenie
+    // przerwy w trakcie składania zamówienia nie przeszło po cichu.
+    let active_breaks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM breaks WHERE active = 1")
+        .fetch_one(&mut *transaction)
+        .await?;
+    let break_row: Option<(i64, String, String, bool)> = match body.break_id {
+        Some(id) => Some(
+            sqlx::query_as::<_, (i64, String, String, bool)>(
+                "SELECT id, start_time, end_time, active FROM breaks WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .ok_or_else(|| AppError::bad("Wybrana przerwa nie istnieje. Odśwież formularz."))?,
+        ),
+        None => None,
+    };
+    if let Some((_, _, _, false)) = break_row {
+        transaction.rollback().await?;
+        return Err(AppError::conflict(
+            "Wybrana przerwa jest nieaktywna. Odśwież formularz.",
+        ));
+    }
+    if break_row.is_none() && active_breaks > 0 {
+        transaction.rollback().await?;
+        return Err(AppError::bad(
+            "Wybierz przerwę, na której chcesz odebrać zamówienie.",
+        ));
+    }
+    let break_id = break_row.as_ref().map(|row| row.0);
+    if let Some((_, start_time, end_time, _)) = &break_row {
+        if pickup_time.is_empty() {
+            pickup_time = start_time.clone();
+        } else if !crate::breaks::time_within(&pickup_time, start_time, end_time) {
+            transaction.rollback().await?;
+            return Err(AppError::bad(format!(
+                "Godzina odbioru musi mieścić się w przerwie {start_time}–{end_time}."
+            )));
+        }
+    }
+
     let max_uncollected = setting_i64(&mut transaction, "max_uncollected", 0).await?;
     if max_uncollected > 0 {
         let cutoff = now - 30 * 24 * 60 * 60;
@@ -291,9 +369,14 @@ pub async fn create_order(
                 .fetch_one(&mut *transaction)
                 .await?;
         let block_reset_at = block_reset_at.unwrap_or(0);
+        // Liczą się wyłącznie zamówienia zamknięte automatyczną regułą
+        // „koniec przerwy + pickup_limit_minutes”. Ręczne korekty
+        // administratora zdejmują `uncollected_at`, więc nie wchodzą do
+        // blokady.
         let uncollected: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM orders
-             WHERE user_id = ? AND uncollected_at IS NOT NULL
+             WHERE user_id = ? AND status = 'uncollected'
+               AND uncollected_at IS NOT NULL
                AND uncollected_at >= ? AND uncollected_at > ?",
         )
         .bind(user.id)
@@ -379,10 +462,69 @@ pub async fn create_order(
         return Err(AppError::bad("Kwota zamówienia jest zbyt duża."));
     }
 
-    // Stan magazynowy rezerwujemy w tej samej transakcji, warunkowym
-    // UPDATE. Klucz idempotencji został sprawdzony wcześniej, więc
-    // powtórzone żądanie nie zmniejsza stanu drugi raz.
-    let sold_out = stock::reserve(&mut transaction, &quantities, util::today()).await?;
+    // Limity „na przerwę” liczą się dla pary (uczeń, dzień, przerwa).
+    // Sprawdzamy je po odczytaniu nazw pozycji, aby komunikat był czytelny.
+    if let Some(break_id) = break_id {
+        let one_active = setting_i64(&mut transaction, "one_active_order_per_break", 0).await? == 1;
+        if one_active {
+            let existing: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM orders
+                 WHERE user_id = ? AND pickup_date = ? AND break_id = ?
+                   AND status = 'ordered'",
+            )
+            .bind(user.id)
+            .bind(&pickup_date_key)
+            .bind(break_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if existing > 0 {
+                transaction.rollback().await?;
+                return Err(AppError::conflict(
+                    "Masz już aktywne zamówienie na tę przerwę. Odbierz je lub anuluj,                      zanim złożysz kolejne.",
+                ));
+            }
+        }
+
+        let per_break = setting_i64(&mut transaction, "max_item_quantity_per_break", 0).await?;
+        if per_break > 0 {
+            for (menu_item_id, quantity) in &quantities {
+                let already: i64 = sqlx::query_scalar(
+                    "SELECT COALESCE(SUM(oi.quantity), 0)
+                     FROM orders o
+                     JOIN order_items oi ON oi.order_id = o.id
+                     WHERE o.user_id = ? AND o.pickup_date = ? AND o.break_id = ?
+                       AND o.status IN ('ordered', 'issued')
+                       AND oi.menu_item_id = ?",
+                )
+                .bind(user.id)
+                .bind(&pickup_date_key)
+                .bind(break_id)
+                .bind(menu_item_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+                if already + quantity > per_break {
+                    let name = by_id
+                        .get(menu_item_id)
+                        .map(|item| format!("„{}”", item.name))
+                        .unwrap_or_else(|| "wybranej pozycji".to_string());
+                    transaction.rollback().await?;
+                    return Err(AppError::conflict(format!(
+                        "Limit na tę przerwę: maksymalnie {per_break} szt. {name}                          na ucznia. W tym zamówieniu masz już {already} szt."
+                    )));
+                }
+            }
+        }
+    }
+
+    // Stan magazynowy dotyczy wyłącznie dzisiejszego dnia. Zamówienie na
+    // przyszły dzień nie rezerwuje dzisiejszych sztuk — jego stan nie jest
+    // kontrolowany (świadome ograniczenie pierwszej wersji).
+    let stock_controlled = pickup_date == today;
+    let sold_out = if stock_controlled {
+        stock::reserve(&mut transaction, &quantities, today).await?
+    } else {
+        Vec::new()
+    };
     if !sold_out.is_empty() {
         transaction.rollback().await?;
         let names = sold_out
@@ -432,8 +574,8 @@ pub async fn create_order(
     let result = sqlx::query(
         "INSERT INTO orders
          (user_id, code, qr_token, status, payment_method, payment_status, total_cents,
-          pickup_time, idempotency_key, created_at, updated_at)
-         VALUES (?, ?, ?, 'ordered', ?, 'unpaid', ?, ?, ?, ?, ?)",
+          pickup_time, pickup_date, break_id, idempotency_key, created_at, updated_at)
+         VALUES (?, ?, ?, 'ordered', ?, 'unpaid', ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user.id)
     .bind(&code)
@@ -441,6 +583,8 @@ pub async fn create_order(
     .bind(&payment_method)
     .bind(total_cents)
     .bind(&pickup_time)
+    .bind(&pickup_date_key)
+    .bind(break_id)
     .bind(&idempotency_key)
     .bind(now)
     .bind(now)
@@ -463,7 +607,9 @@ pub async fn create_order(
         .bind(&item.name)
         .bind(item.price_cents)
         .bind(*quantity)
-        .bind(i64::from(item.stock_remaining.is_some()))
+        .bind(i64::from(
+            stock_controlled && item.stock_remaining.is_some(),
+        ))
         .execute(&mut *transaction)
         .await?;
     }
@@ -492,7 +638,7 @@ pub async fn cancel_order(
     let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
 
     let current: Option<OrderState> = sqlx::query_as(
-        "SELECT status, payment_status, created_at, paid_at, paid_by,
+        "SELECT status, payment_status, created_at, pickup_date, paid_at, paid_by,
                 issued_at, uncollected_at
          FROM orders WHERE id = ? AND user_id = ?",
     )
@@ -554,7 +700,7 @@ pub async fn cancel_order(
 
     // Zwrot na stan tylko dla zamówienia z dzisiejszego dnia. Anulowanie
     // zamówienia sprzed północy nie zwiększa dzisiejszego stanu.
-    if stock::is_from_today(current.created_at) {
+    if crate::breaks::is_order_from_today(current.created_at, current.pickup_date.as_deref()) {
         stock::return_order_stock(&mut transaction, id, util::today()).await?;
     }
 
@@ -576,24 +722,25 @@ pub async fn order_qr(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let row: Option<(String, String, i64)> = sqlx::query_as(
-        "SELECT qr_token, status, created_at FROM orders WHERE id = ? AND user_id = ?",
+    let row: Option<(String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT qr_token, status, created_at, pickup_date
+         FROM orders WHERE id = ? AND user_id = ?",
     )
     .bind(id)
     .bind(user.id)
     .fetch_optional(&state.db)
     .await?;
 
-    let (token, status, created_at) =
+    let (token, status, created_at, pickup_date) =
         row.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
     if matches!(status.as_str(), "cancelled" | "issued" | "uncollected") {
         return Err(AppError::conflict(
             "To zamówienie jest już zamknięte — kod QR nie jest aktywny.",
         ));
     }
-    if created_at < util::start_of_today() {
+    if crate::breaks::order_date(created_at, pickup_date.as_deref()) != Some(util::today()) {
         return Err(AppError::conflict(
-            "Kod QR jest aktywny tylko dla dzisiejszych zamówień.",
+            "Kod QR jest aktywny tylko w dniu odbioru zamówienia.",
         ));
     }
 
@@ -628,7 +775,10 @@ pub async fn staff_orders(
             format!("{ORDER_SELECT} ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300")
         }
         "today" => format!(
-            "{ORDER_SELECT} WHERE o.created_at >= ? AND o.created_at < ? ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
+            "{ORDER_SELECT}
+             WHERE (o.pickup_date = ?)
+                OR (o.pickup_date IS NULL AND o.created_at >= ? AND o.created_at < ?)
+             ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
         ),
         _ => format!(
             "{ORDER_SELECT} WHERE o.status = 'ordered'
@@ -638,6 +788,7 @@ pub async fn staff_orders(
 
     let rows = if scope == "today" {
         sqlx::query_as::<_, OrderRow>(&sql)
+            .bind(stock::date_key(util::today()))
             .bind(util::start_of_today())
             .bind(util::start_of_local_date(util::today() + Duration::days(1)))
             .fetch_all(&state.db)
@@ -729,7 +880,8 @@ fn pickup_rejection(order: &OrderView) -> Option<AppError> {
             "To zamówienie zostało anulowane lub nieodebrane.",
         )),
         "ordered" => {
-            if order.created_at < util::start_of_today() {
+            let day = crate::breaks::order_date(order.created_at, order.pickup_date.as_deref());
+            if day != Some(util::today()) {
                 Some(AppError::conflict("Kod dotyczy zamówienia z innego dnia."))
             } else {
                 None
@@ -790,7 +942,7 @@ pub async fn staff_update_order(
     }
 
     let current: Option<OrderState> = sqlx::query_as(
-        "SELECT status, payment_status, created_at, paid_at, paid_by,
+        "SELECT status, payment_status, created_at, pickup_date, paid_at, paid_by,
                 issued_at, uncollected_at
          FROM orders WHERE id = ?",
     )
@@ -816,9 +968,11 @@ pub async fn staff_update_order(
     }
 
     if user.role == "kitchen" {
-        if current.created_at < util::start_of_today() {
+        if crate::breaks::order_date(current.created_at, current.pickup_date.as_deref())
+            != Some(util::today())
+        {
             return Err(AppError::forbidden(
-                "Kuchnia może zmieniać tylko dzisiejsze zamówienia.",
+                "Kuchnia może zmieniać tylko zamówienia na dziś.",
             ));
         }
         if matches!(
@@ -928,7 +1082,9 @@ pub async fn staff_update_order(
     let cancelled_before_issue = final_status == "cancelled"
         && current.status == "ordered"
         && current.uncollected_at.is_none();
-    if cancelled_before_issue && stock::is_from_today(current.created_at) {
+    if cancelled_before_issue
+        && crate::breaks::is_order_from_today(current.created_at, current.pickup_date.as_deref())
+    {
         stock::return_order_stock(&mut transaction, id, util::today()).await?;
     }
 
@@ -1003,6 +1159,25 @@ pub async fn staff_report_csv(
         ));
     }
 
+    csv.push_str(
+        "\r\nprzerwa;zamowienia;wydane;oplacone;kwota_oplacona_gr;\
+         nieoplacone;kwota_nieoplacona_gr;anulowane;nieodebrane\r\n",
+    );
+    for entry in &report.breaks {
+        csv.push_str(&format!(
+            "{};{};{};{};{};{};{};{};{}\r\n",
+            csv_cell(&entry.break_name),
+            entry.totals.orders,
+            entry.totals.issued_orders,
+            entry.totals.paid_orders,
+            entry.totals.paid_cents,
+            entry.totals.unpaid_orders,
+            entry.totals.unpaid_cents,
+            entry.totals.cancelled_orders,
+            entry.totals.uncollected_orders,
+        ));
+    }
+
     let filename = format!("raport-zsl-order-{}.csv", report.date);
     db::audit(
         &state.db,
@@ -1043,10 +1218,19 @@ async fn build_daily_report(
     let start = util::start_of_local_date(date);
     let end = util::start_of_local_date(date + Duration::days(1));
 
+    // Raport dnia grupuje zamówienia po dniu odbioru. Stare wiersze bez
+    // `pickup_date` nadal liczą się po dniu złożenia, więc historia i testy
+    // granicy doby pozostają bez zmian.
     let rows = sqlx::query_as::<_, ReportOrderRow>(
-        "SELECT status, payment_method, payment_status, total_cents
-         FROM orders WHERE created_at >= ? AND created_at < ?",
+        "SELECT o.status, o.payment_method, o.payment_status, o.total_cents,
+                o.break_id, b.name AS break_name
+         FROM orders o
+         LEFT JOIN breaks b ON b.id = o.break_id
+         WHERE o.pickup_date = ?
+            OR (o.pickup_date IS NULL AND o.created_at >= ? AND o.created_at < ?)
+         ORDER BY b.sort_order ASC, b.start_time ASC, o.created_at ASC, o.id ASC",
     )
+    .bind(stock::date_key(date))
     .bind(start)
     .bind(end)
     .fetch_all(&state.db)
@@ -1055,6 +1239,7 @@ async fn build_daily_report(
     let summary = aggregate_totals(rows.iter());
     let cash = aggregate_totals(rows.iter().filter(|row| row.payment_method == "cash"));
     let card = aggregate_totals(rows.iter().filter(|row| row.payment_method == "card"));
+    let break_rows = aggregate_breaks(&rows);
 
     stock::reset_daily_stock(&state.db, util::today()).await?;
     let stock_rows = sqlx::query_as::<_, StockReportRow>(
@@ -1067,10 +1252,13 @@ async fn build_daily_report(
                 END), 0) AS sold
          FROM menu_items m
          LEFT JOIN order_items oi ON oi.menu_item_id = m.id
-         LEFT JOIN orders o ON o.id = oi.order_id AND o.created_at >= ? AND o.created_at < ?
+         LEFT JOIN orders o ON o.id = oi.order_id
+              AND (o.pickup_date = ?
+                   OR (o.pickup_date IS NULL AND o.created_at >= ? AND o.created_at < ?))
          GROUP BY m.id
          ORDER BY m.sort_order ASC, m.name ASC",
     )
+    .bind(stock::date_key(date))
     .bind(start)
     .bind(end)
     .fetch_all(&state.db)
@@ -1081,6 +1269,7 @@ async fn build_daily_report(
         summary,
         cash,
         card,
+        breaks: break_rows,
         stock: stock_rows,
     })
 }
@@ -1088,41 +1277,71 @@ async fn build_daily_report(
 fn aggregate_totals<'a>(rows: impl Iterator<Item = &'a ReportOrderRow>) -> PaymentTotals {
     let mut totals = PaymentTotals::default();
     for row in rows {
-        totals.orders += 1;
-
-        let uncollected = row.status == "uncollected";
-        let cancelled = row.status == "cancelled";
-        // Kategorie liczby zamówień są rozłączne:
-        // paid + unpaid + cancelled + uncollected = orders.
-        if uncollected {
-            totals.uncollected_orders += 1;
-        } else if cancelled {
-            totals.cancelled_orders += 1;
-        } else if row.status == "issued" {
-            totals.issued_orders += 1;
-        } else if row.status == "ordered" {
-            totals.open_orders += 1;
-        }
-
-        // Kwoty pieniężne obejmują również nieodebrane zamówienia: jeśli
-        // zostały opłacone, pieniądze wpłynęły do kasy. Jawne anulowanie
-        // nie jest przychodem. Liczniki `paid_orders`/`unpaid_orders` są
-        // rozłączne z `uncollected_orders`, aby nie podwajać zamówień.
-        if !cancelled {
-            if row.payment_status == "paid" {
-                if !uncollected {
-                    totals.paid_orders += 1;
-                }
-                totals.paid_cents += row.total_cents;
-            } else {
-                if !uncollected {
-                    totals.unpaid_orders += 1;
-                }
-                totals.unpaid_cents += row.total_cents;
-            }
-        }
+        add_order(&mut totals, row);
     }
     totals
+}
+
+fn aggregate_breaks(rows: &[ReportOrderRow]) -> Vec<BreakReportRow> {
+    let mut result: Vec<BreakReportRow> = Vec::new();
+    for row in rows {
+        let name = row
+            .break_name
+            .clone()
+            .unwrap_or_else(|| "Bez przerwy".to_string());
+        let index = match result
+            .iter()
+            .position(|entry| entry.break_id == row.break_id && entry.break_name == name)
+        {
+            Some(index) => index,
+            None => {
+                result.push(BreakReportRow {
+                    break_id: row.break_id,
+                    break_name: name,
+                    totals: PaymentTotals::default(),
+                });
+                result.len() - 1
+            }
+        };
+        add_order(&mut result[index].totals, row);
+    }
+    result
+}
+
+fn add_order(totals: &mut PaymentTotals, row: &ReportOrderRow) {
+    totals.orders += 1;
+
+    let uncollected = row.status == "uncollected";
+    let cancelled = row.status == "cancelled";
+    // Kategorie liczby zamówień są rozłączne:
+    // paid + unpaid + cancelled + uncollected = orders.
+    if uncollected {
+        totals.uncollected_orders += 1;
+    } else if cancelled {
+        totals.cancelled_orders += 1;
+    } else if row.status == "issued" {
+        totals.issued_orders += 1;
+    } else if row.status == "ordered" {
+        totals.open_orders += 1;
+    }
+
+    // Kwoty pieniężne obejmują również nieodebrane zamówienia: jeśli
+    // zostały opłacone, pieniądze wpłynęły do kasy. Jawne anulowanie
+    // nie jest przychodem. Liczniki `paid_orders`/`unpaid_orders` są
+    // rozłączne z `uncollected_orders`, aby nie podwajać zamówień.
+    if !cancelled {
+        if row.payment_status == "paid" {
+            if !uncollected {
+                totals.paid_orders += 1;
+            }
+            totals.paid_cents += row.total_cents;
+        } else {
+            if !uncollected {
+                totals.unpaid_orders += 1;
+            }
+            totals.unpaid_cents += row.total_cents;
+        }
+    }
 }
 
 fn csv_cell(value: &str) -> String {
@@ -1137,29 +1356,78 @@ fn csv_cell(value: &str) -> String {
     format!("\"{}\"", text.replace('"', "\"\""))
 }
 
-/// Oznacza jako nieodebrane zamówienia, które przez `pickup_limit_minutes`
-/// od przyjęcia nie zostały wydane. Dla historycznych zamówień liczy się
-/// `ready_at` z migracji, dla nowych `created_at`. Docelowo moment
-/// nieodebrania wyznaczy koniec przerwy (kolejny krok przebudowy).
+/// Oznacza jako nieodebrane zamówienia, których termin odbioru minął.
+///
+/// * Zamówienie z przerwą na dziś staje się `uncollected` dopiero po
+///   **końcu przerwy + `pickup_limit_minutes`** (strefa szkoły). Nie
+///   liczymy od `created_at` — zamówienie na późniejszą przerwę złożone
+///   rano nie może zostać zamknięte przed swoim oknem.
+/// * Zamówienia z poprzednich dni zamykamy zawsze (także te bez przerwy
+///   i historyczne wiersze bez `pickup_date`).
+/// * Dzisiejsze zamówienie bez przerwy (stare dane) nie jest zamykane
+///   automatycznie — brak okna, od którego można liczyć termin.
+/// * `pickup_limit_minutes = 0` wyłącza auto-oznaczanie całkowicie.
+///
 /// Funkcja jest odporna na wyścig z kuchnią dzięki warunkowemu
 /// `UPDATE ... WHERE status = 'ordered'`.
 pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error> {
-    let limit = parse_setting(state, "pickup_limit_minutes", 120).await;
+    mark_uncollected_at(&state.db, util::now()).await
+}
+
+async fn mark_uncollected_at(db: &SqlitePool, now: i64) -> Result<u64, sqlx::Error> {
+    let limit: i64 = db::get_setting_or(db, "pickup_limit_minutes", "120")
+        .await
+        .parse()
+        .unwrap_or(120);
     if limit <= 0 {
         return Ok(0);
     }
 
-    let now = util::now();
-    let cutoff = now - limit * 60;
-    let ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM orders
-         WHERE status = 'ordered' AND uncollected_at IS NULL
-           AND COALESCE(ready_at, created_at) <= ?
-         ORDER BY COALESCE(ready_at, created_at) ASC LIMIT 200",
+    let today = util::local_date(now).unwrap_or_else(util::today);
+    let today_key = stock::date_key(today);
+    let start_of_today = util::start_of_local_date(today);
+
+    // Kandydaci: poprzednie dni (zawsze zamykane) oraz dzisiejsze
+    // zamówienia z przerwą (termin liczymy w Rust po `end_time`). Dzisiejsze
+    // zamówienia bez przerwy są pomijane już w SQL.
+    let rows: Vec<(i64, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT o.id, o.created_at, o.pickup_date, b.end_time
+         FROM orders o
+         LEFT JOIN breaks b ON b.id = o.break_id
+         WHERE o.status = 'ordered' AND o.uncollected_at IS NULL
+           AND (o.pickup_date < ?
+                OR (o.pickup_date = ? AND o.break_id IS NOT NULL)
+                OR (o.pickup_date IS NULL AND o.created_at < ?))
+         ORDER BY o.created_at ASC, o.id ASC
+         LIMIT 200",
     )
-    .bind(cutoff)
-    .fetch_all(&state.db)
+    .bind(&today_key)
+    .bind(&today_key)
+    .bind(start_of_today)
+    .fetch_all(db)
     .await?;
+
+    let mut ids: Vec<i64> = Vec::new();
+    for (id, created_at, pickup_date, break_end) in rows {
+        let Some(date) = crate::breaks::order_date(created_at, pickup_date.as_deref()) else {
+            continue;
+        };
+        if date > today {
+            continue;
+        }
+        let due = if date < today {
+            true
+        } else {
+            break_end
+                .as_deref()
+                .and_then(|end| crate::breaks::uncollected_deadline(today, end, limit))
+                .map(|deadline| now >= deadline)
+                .unwrap_or(false)
+        };
+        if due {
+            ids.push(id);
+        }
+    }
 
     let mut marked = 0_u64;
     let mut marked_ids: Vec<i64> = Vec::new();
@@ -1172,7 +1440,7 @@ pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error>
         .bind(now)
         .bind(now)
         .bind(id)
-        .execute(&state.db)
+        .execute(db)
         .await?;
         if result.rows_affected() > 0 {
             marked += 1;
@@ -1184,7 +1452,7 @@ pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error>
 
     if marked > 0 {
         db::audit(
-            &state.db,
+            db,
             None,
             "orders_uncollected",
             &format!(
@@ -1234,6 +1502,9 @@ fn group_orders(rows: Vec<OrderRow>) -> Vec<OrderView> {
                     payment_status: row.payment_status,
                     total_cents: row.total_cents,
                     pickup_time: row.pickup_time,
+                    pickup_date: row.pickup_date,
+                    break_id: row.break_id,
+                    break_name: row.break_name,
                     created_at: row.created_at,
                     updated_at: row.updated_at,
                     paid_at: row.paid_at,
@@ -1260,6 +1531,30 @@ fn group_orders(rows: Vec<OrderRow>) -> Vec<OrderView> {
     }
 
     orders
+}
+
+/// Dzień odbioru z żądania. Brak/puste = dziś; dozwolony zakres to
+/// `[dziś, dziś + order_days_ahead]`.
+fn resolve_pickup_date(
+    requested: Option<&str>,
+    today: NaiveDate,
+    order_days_ahead: i64,
+) -> Result<NaiveDate, AppError> {
+    let raw = requested.map(str::trim).unwrap_or("");
+    if raw.is_empty() {
+        return Ok(today);
+    }
+    let date = NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .map_err(|_| AppError::bad("Dzień odbioru musi być w formacie RRRR-MM-DD."))?;
+    let last = today + Duration::days(order_days_ahead);
+    if date < today || date > last {
+        return Err(AppError::bad(if order_days_ahead == 0 {
+            "Zamawiać można tylko na dziś.".to_string()
+        } else {
+            format!("Dzień odbioru musi mieścić się między {today} a {last}.")
+        }));
+    }
+    Ok(date)
 }
 
 async fn parse_setting(state: &Arc<AppState>, key: &str, default: i64) -> i64 {
@@ -1352,6 +1647,8 @@ mod tests {
             payment_method: method.to_string(),
             payment_status: payment.to_string(),
             total_cents,
+            break_id: None,
+            break_name: None,
         }
     }
 
@@ -1436,6 +1733,9 @@ mod tests {
             payment_status: "unpaid".to_string(),
             total_cents: 1200,
             pickup_time: "12:30".to_string(),
+            pickup_date: None,
+            break_id: None,
+            break_name: None,
             created_at,
             updated_at: created_at,
             paid_at: None,
@@ -1465,5 +1765,299 @@ mod tests {
         assert_eq!(pickup_token("ZSL:abcdef123456"), "abcdef123456");
         assert_eq!(pickup_token("  ZSL:abcdef123456  "), "abcdef123456");
         assert_eq!(pickup_token("  K7M2QP  "), "K7M2QP");
+    }
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static UNCOLLECTED_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    async fn uncollected_pool(name: &str) -> (SqlitePool, std::path::PathBuf) {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        let unique = UNCOLLECTED_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "zsl-uncollected-{name}-{}-{unique}.db",
+            std::process::id()
+        ));
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+            .unwrap()
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(10));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+        (pool, path)
+    }
+
+    async fn uncollected_close(pool: SqlitePool, path: std::path::PathBuf) {
+        pool.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    async fn set_pickup_limit(pool: &SqlitePool, minutes: i64) {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ('pickup_limit_minutes', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(minutes.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_break(pool: &SqlitePool, start: &str, end: &str) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO breaks (name, start_time, end_time, active, sort_order,
+                                 created_at, updated_at)
+             VALUES ('Testowa przerwa', ?, ?, 1, 0, 1, 1)
+             RETURNING id",
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn insert_ordered(
+        pool: &SqlitePool,
+        code: &str,
+        created_at: i64,
+        pickup_date: Option<&str>,
+        break_id: Option<i64>,
+    ) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO orders
+             (user_id, code, qr_token, status, payment_method, payment_status,
+              total_cents, pickup_time, pickup_date, break_id, created_at, updated_at)
+             VALUES (NULL, ?, ?, 'ordered', 'cash', 'unpaid', 1000, '', ?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(code)
+        .bind(format!("{code}-token"))
+        .bind(pickup_date)
+        .bind(break_id)
+        .bind(created_at)
+        .bind(created_at)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn order_status(pool: &SqlitePool, id: i64) -> String {
+        sqlx::query_scalar("SELECT status FROM orders WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn at(date: NaiveDate, time: &str) -> i64 {
+        util::local_datetime_timestamp(date, time).expect("poprawna godzina")
+    }
+
+    #[tokio::test]
+    async fn later_break_is_not_closed_before_its_end_plus_limit() {
+        let (pool, path) = uncollected_pool("later-break").await;
+        set_pickup_limit(&pool, 30).await;
+        let date = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let break_id = insert_break(&pool, "11:30", "11:50").await;
+        let id = insert_ordered(
+            &pool,
+            "UNC001",
+            at(date, "09:58"),
+            Some("2026-11-17"),
+            Some(break_id),
+        )
+        .await;
+
+        // 32 minuty po złożeniu, ale przed przerwą — limit od `created_at`
+        // nie może zamknąć zamówienia.
+        assert_eq!(
+            mark_uncollected_at(&pool, at(date, "10:30")).await.unwrap(),
+            0
+        );
+        assert_eq!(order_status(&pool, id).await, "ordered");
+
+        // Koniec przerwy jeszcze nie minął.
+        assert_eq!(
+            mark_uncollected_at(&pool, at(date, "11:49")).await.unwrap(),
+            0
+        );
+        // Koniec przerwy + 29 minut — nadal otwarte.
+        assert_eq!(
+            mark_uncollected_at(&pool, at(date, "12:19")).await.unwrap(),
+            0
+        );
+        assert_eq!(order_status(&pool, id).await, "ordered");
+
+        // Dokładnie koniec przerwy + 30 minut.
+        assert_eq!(
+            mark_uncollected_at(&pool, at(date, "12:20")).await.unwrap(),
+            1
+        );
+        assert_eq!(order_status(&pool, id).await, "uncollected");
+        // Druga iteracja nie podwaja licznika.
+        assert_eq!(
+            mark_uncollected_at(&pool, at(date, "12:21")).await.unwrap(),
+            0
+        );
+
+        uncollected_close(pool, path).await;
+    }
+
+    #[tokio::test]
+    async fn previous_days_are_always_closed_but_today_without_break_is_not() {
+        let (pool, path) = uncollected_pool("previous-days").await;
+        set_pickup_limit(&pool, 30).await;
+        let break_id = insert_break(&pool, "11:30", "11:50").await;
+        let today = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let yesterday = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        let now = at(today, "09:00");
+
+        let with_break = insert_ordered(
+            &pool,
+            "UNC101",
+            at(yesterday, "12:00"),
+            Some("2026-11-16"),
+            Some(break_id),
+        )
+        .await;
+        let without_break =
+            insert_ordered(&pool, "UNC102", at(yesterday, "12:00"), None, None).await;
+        let today_no_break = insert_ordered(&pool, "UNC103", at(today, "08:00"), None, None).await;
+        let future = insert_ordered(
+            &pool,
+            "UNC104",
+            at(today, "08:00"),
+            Some("2026-11-18"),
+            Some(break_id),
+        )
+        .await;
+
+        assert_eq!(mark_uncollected_at(&pool, now).await.unwrap(), 2);
+        assert_eq!(order_status(&pool, with_break).await, "uncollected");
+        assert_eq!(order_status(&pool, without_break).await, "uncollected");
+        assert_eq!(order_status(&pool, today_no_break).await, "ordered");
+        assert_eq!(order_status(&pool, future).await, "ordered");
+
+        uncollected_close(pool, path).await;
+    }
+
+    #[tokio::test]
+    async fn deadline_uses_school_timezone_on_dst_days() {
+        let (pool, path) = uncollected_pool("dst").await;
+        set_pickup_limit(&pool, 30).await;
+        let break_id = insert_break(&pool, "11:30", "11:50").await;
+
+        // Wiosna: 29.03.2026, 12:20 CEST = 10:20 UTC.
+        let spring = NaiveDate::from_ymd_opt(2026, 3, 29).unwrap();
+        let spring_id = insert_ordered(
+            &pool,
+            "UNC201",
+            at(spring, "09:00"),
+            Some("2026-03-29"),
+            Some(break_id),
+        )
+        .await;
+        assert_eq!(
+            mark_uncollected_at(&pool, at(spring, "12:19"))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            mark_uncollected_at(&pool, at(spring, "12:20"))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(order_status(&pool, spring_id).await, "uncollected");
+
+        // Jesień: 25.10.2026, 12:20 CET = 11:20 UTC.
+        let autumn = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let autumn_id = insert_ordered(
+            &pool,
+            "UNC202",
+            at(autumn, "09:00"),
+            Some("2026-10-25"),
+            Some(break_id),
+        )
+        .await;
+        assert_eq!(
+            mark_uncollected_at(&pool, at(autumn, "12:19"))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            mark_uncollected_at(&pool, at(autumn, "12:20"))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(order_status(&pool, autumn_id).await, "uncollected");
+
+        // Termin w UTC zależy od offsetu dnia: CEST (UTC+2) vs CET (UTC+1).
+        use chrono::TimeZone;
+        assert_eq!(
+            at(spring, "12:20"),
+            chrono::Utc
+                .with_ymd_and_hms(2026, 3, 29, 10, 20, 0)
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(
+            at(autumn, "12:20"),
+            chrono::Utc
+                .with_ymd_and_hms(2026, 10, 25, 11, 20, 0)
+                .unwrap()
+                .timestamp()
+        );
+
+        uncollected_close(pool, path).await;
+    }
+
+    #[tokio::test]
+    async fn pickup_limit_zero_disables_auto_marking_entirely() {
+        let (pool, path) = uncollected_pool("disabled").await;
+        set_pickup_limit(&pool, 0).await;
+        let yesterday = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+        let id = insert_ordered(
+            &pool,
+            "UNC301",
+            at(yesterday, "12:00"),
+            Some("2026-11-16"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            mark_uncollected_at(&pool, at(today, "09:00"))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(order_status(&pool, id).await, "ordered");
+
+        uncollected_close(pool, path).await;
+    }
+
+    #[test]
+    fn pickup_date_stays_within_configured_window() {
+        let today = util::today();
+        let today_key = stock::date_key(today);
+        let tomorrow_key = stock::date_key(today + Duration::days(1));
+        assert_eq!(resolve_pickup_date(None, today, 0).unwrap(), today);
+        assert_eq!(resolve_pickup_date(Some(""), today, 0).unwrap(), today);
+        assert!(resolve_pickup_date(Some(&today_key), today, 0).is_ok());
+        assert!(resolve_pickup_date(Some(&tomorrow_key), today, 0).is_err());
+        assert!(resolve_pickup_date(Some(&tomorrow_key), today, 1).is_ok());
+        assert!(resolve_pickup_date(Some("2030-02-30"), today, 7).is_err());
     }
 }

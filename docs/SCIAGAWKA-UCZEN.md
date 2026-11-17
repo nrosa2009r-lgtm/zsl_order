@@ -30,11 +30,17 @@ Po zamówieniu dostaniesz:
 
 ## 3. Odbiór
 
-1. Przyjdź po zamówienie w wyznaczonym czasie.
+1. Przyjdź po zamówienie w wyznaczonym czasie (w wybranej przerwie).
 2. Pokaż kod QR albo podaj krótki kod.
 3. Kuchnia wyda posiłek i oznaczy płatność.
 
 Płatność następuje przy odbiorze — zgodnie z wyborem w zamówieniu.
+
+Jeśli szkoła włączyła zamawianie z wyprzedzeniem, w formularzu wybierzesz
+**dzień odbioru** i **przerwę**. Kod QR działa dopiero w wybranym dniu.
+Pamiętaj: stan magazynowy jest kontrolowany tylko dla zamówień na dziś —
+dostępność na przyszły dzień może się zmienić, dlatego wybieraj pozycje
+rozsądnie.
 
 ## 4. Anulowanie
 

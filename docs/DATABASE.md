@@ -26,7 +26,7 @@ settings — tabela key/value
 ```
 
 - `sessions.user_id` → `users.id` `ON DELETE CASCADE`
-- `orders.user_id` → `users.id` `ON DELETE RESTRICT`
+- `orders.user_id` → `users.id` `ON DELETE SET NULL`
 - `order_items.order_id` → `orders.id` `ON DELETE CASCADE`
 - `order_items.menu_item_id` → `menu_items.id` `ON DELETE SET NULL`
 - `audit_log.actor_id` → brak twardego FK (celowo, aby audyt przetrwał
@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS orders (
         CHECK (payment_status IN ('unpaid','paid')),
     total_cents INTEGER NOT NULL CHECK (total_cents >= 0),
     pickup_time TEXT NOT NULL DEFAULT '',
+    pickup_date TEXT,
     break_id INTEGER REFERENCES breaks(id) ON DELETE SET NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -174,6 +175,7 @@ CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS orders_uncollected_idx ON orders(uncollected_at);
 CREATE INDEX IF NOT EXISTS orders_ready_idx ON orders(status, ready_at);
 CREATE INDEX IF NOT EXISTS orders_break_idx ON orders(break_id, created_at);
+CREATE INDEX IF NOT EXISTS orders_pickup_idx ON orders(pickup_date, break_id);
 CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_idx
     ON orders(user_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
@@ -189,6 +191,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_idx
 | `payment_status` | `unpaid`, `paid` |
 | `total_cents` | suma policzona po stronie serwera |
 | `pickup_time` | `""` lub `HH:MM` (godzina lokalna) |
+| `pickup_date` | dzień odbioru `RRRR-MM-DD` (strefa szkoły); `NULL` tylko dla zamówień sprzed migracji 0008 — wtedy obowiązuje dzień złożenia |
 | `break_id` | przerwa, na którą złożono zamówienie; `NULL` gdy brak lub usunięta |
 | `created_at`, `updated_at` | Unix UTC |
 | `paid_at` | czas oznaczenia płatności (Unix UTC) lub `NULL` |
@@ -227,9 +230,12 @@ CREATE INDEX IF NOT EXISTS breaks_active_idx ON breaks(active, sort_order);
 
 Przerwy definiują okna wydawania zamówień (np. „Długa przerwa”
 11:30–11:50). `name` jest unikalna, godziny w formacie `HH:MM` czasu
-szkoły, a `CHECK` wymaga `start_time < end_time`. Tabela jest gotowa już
-w migracji 0007; limity „na przerwę” egzekwuje kolejny krok przebudowy.
-Usunięcie przerwy nie usuwa zamówień — tylko zeruje `orders.break_id`.
+szkoły, a `CHECK` wymaga `start_time < end_time`. Tabela powstaje
+w migracji 0007, a API i egzekwowanie limitów „na przerwę” w 0008.
+Przerwy nie są seedowane — administrator dodaje je ręcznie przed
+pilotażem; bez aktywnej przerwy uczeń nie wybiera okna, a limity
+`*_per_break` nie działają. Usunięcie przerwy z historią jest blokowane
+przez API (`409`); zamiast tego przerwę należy wyłączyć (`active = 0`).
 
 Uwaga: `qr_token` jest przechowywany jawnie, ponieważ serwer musi
 wygenerować obraz QR. Ochrona pliku bazy jest ochroną kodów odbioru.
@@ -277,15 +283,17 @@ Domyślne wpisy (seed `INSERT OR IGNORE`):
 | `max_open_orders` | `3` | limit otwartych zamówień na użytkownika |
 | `max_order_items` | `20` | limit pozycji w zamówieniu |
 | `cancel_window_minutes` | `30` | termin anulowania od złożenia; `0` = bez limitu |
-| `pickup_limit_minutes` | `120` | czas od przyjęcia (`ordered`) do nieodebrania; `0` = wyłączone |
+| `pickup_limit_minutes` | `120` | koniec przerwy odbioru + tyle minut = termin nieodebrania; `0` = wyłączone |
 | `max_uncollected` | `0` | blokada po N nieodebranych z 30 dni; `0` = brak |
+| `order_days_ahead` | `0` | ile dni naprzód można zamawiać; `0` = tylko dziś |
 | `max_item_quantity_per_break` | `0` | limit sztuk jednej pozycji na przerwę; `0` = bez limitu |
 | `one_active_order_per_break` | `0` | `1` = jedno aktywne zamówienie na przerwę |
 
-Tabela `breaks` jest już utworzona w migracji 0007. Klucze `*_per_break`
-są zapisywane i widoczne w panelu administratora, ale egzekwowanie
-limitów „na przerwę” wchodzi w kolejnym kroku przebudowy. Do tego czasu
-nie zmieniają zachowania zamówień.
+Klucze `*_per_break` są egzekwowane w transakcji `create_order` dla pary
+(uczeń, `pickup_date`, `break_id`) i dotyczą zamówień w statusie
+`ordered`/`issued`. Gdy `order_days_ahead > 0`, zamówienia przyszłe nie
+rezerwują dzisiejszego stanu magazynowego — stan jest kontrolowany
+wyłącznie dla zamówień na dziś.
 
 Wartości są stringami; API administracyjne waliduje zakresy i konwertuje
 `ordering_enabled` z bool na `1`/`0`.
@@ -322,6 +330,7 @@ CREATE INDEX IF NOT EXISTS audit_created_idx ON audit_log(created_at);
 | `orders_status_idx` | `orders` | `status, created_at` | kolejka kuchni |
 | `orders_ready_idx` | `orders` | `status, ready_at` | historyczne znaczniki gotowości |
 | `orders_break_idx` | `orders` | `break_id, created_at` | zamówienia przerwy |
+| `orders_pickup_idx` | `orders` | `pickup_date, break_id` | raport dnia, limity przerwy |
 | `orders_uncollected_idx` | `orders` | `uncollected_at` | licznik nieodebranych |
 | `orders_user_idempotency_idx` | `orders` | `user_id, idempotency_key` (częściowy) | ochrona przed duplikatem |
 | `order_items_order_idx` | `order_items` | `order_id` | składanie zamówień |
@@ -418,10 +427,12 @@ DELETE FROM users   WHERE id = ?;
 COMMIT;
 ```
 
-`users` ma `ON DELETE RESTRICT` na `orders.user_id`, dlatego zamówienia
-trzeba usunąć przed kontem. Wiersze `sessions` (cookie i JWT) giną
-automatycznie dzięki `ON DELETE CASCADE`, ale jawne usunięcie w
-transakcji jest czytelniejsze. Zabronione jest usunięcie własnego konta
+`orders.user_id` ma `ON DELETE SET NULL`, więc schemat pozwala zachować
+historię po usunięciu konta (API pokaże `konto usunięte`). Obecna akcja
+administracyjna usuwa jednak zamówienia konta przed kontem — to świadoma
+decyzja o pełnym usunięciu danych użytkownika. Wiersze `sessions` (cookie
+i JWT) giną automatycznie dzięki `ON DELETE CASCADE`, ale jawne usunięcie
+w transakcji jest czytelniejsze. Zabronione jest usunięcie własnego konta
 i ostatniego aktywnego administratora. Zdarzenie trafia do audytu jako
 `user_deleted` (już po commicie).
 
@@ -436,7 +447,8 @@ Ręczne (zalecane, zgodnie z polityką szkoły):
 
 - zamówienia starsze niż rok szkolny: usuń lub zanonimizuj,
 - konta nieaktywne po zakończeniu roku: dezaktywuj, a po okresie retencji
-  usuń (pamiętaj o `orders.user_id ON DELETE RESTRICT`).
+  usuń (historia zamówień może zostać dzięki `orders.user_id ON DELETE
+  SET NULL`; zdecyduj, czy ją zanonimizować).
 
 Przykład anonymizacji zamówień starszych niż 365 dni bez usuwania
 agregatów:
@@ -461,13 +473,15 @@ DELETE FROM orders WHERE created_at < strftime('%s','now') - 365*24*3600;
 COMMIT;
 ```
 
-Nie usuwaj użytkownika, dopóki ma zamówienia (`RESTRICT`). Najpierw
-rozstrzygnij historię zamówień.
+Usunięcie konta nie kasuje historii: `orders.user_id` ma
+`ON DELETE SET NULL`, a API pokazuje `konto usunięte`. Konto można więc
+usunąć bez utraty raportów; szczegóły akcji administracyjnych opisuje
+`API.md`.
 
 ## 7. Backup i integralność
 
 Procedura przed każdą aktualizacją, która zawiera migrację (0006, 0007,
-kolejne):
+0008, kolejne):
 
 ```bash
 # 1. Zatrzymaj aplikację, żeby nikt nie pisał do bazy.
@@ -596,6 +610,15 @@ Migracja nie tworzy widoków ani triggerów; jedyne klucze obce do `orders`
 to `order_items.order_id` (kaskadowy) i `orders.user_id`/`break_id`.
 Przebudowa kopiuje `order_items` razem z `stock_reserved`, aby nie
 uruchomić kaskady na nowych wierszach.
+
+`0008_orders_pickup_date.sql` dodaje `orders.pickup_date` oraz indeks
+`orders_pickup_idx (pickup_date, break_id)`. Zmiana jest addytywna:
+historyczne zamówienia mają `NULL`, co oznacza „dzień złożenia”.
+`pickup_date` jest używane przez raport dnia, widok kuchni „Dzisiaj”,
+ważność kodu QR oraz limity „na przerwę”. Przed migracją wykonaj backup
+i po starcie sprawdź `PRAGMA foreign_key_check;` oraz `PRAGMA
+integrity_check;`. Migracja nie zmienia istniejących wierszy poza dodaniem
+kolumny, więc liczby `orders` i `order_items` muszą pozostać identyczne.
 
 ## 9. Ograniczenia SQLite w tym projekcie
 

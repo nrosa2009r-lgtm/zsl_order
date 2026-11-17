@@ -15,6 +15,7 @@ use tower_http::services::ServeDir;
 
 mod auth;
 mod backup;
+mod breaks;
 mod client_ip;
 mod config;
 mod db;
@@ -271,6 +272,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pickup", post(handlers::orders::staff_pickup))
         .route("/report", get(handlers::orders::staff_report))
         .route("/report.csv", get(handlers::orders::staff_report_csv))
+        .route("/breaks", get(handlers::breaks::staff_breaks))
         .route_layer(middleware::from_fn(auth::require_staff));
 
     let admin_routes = Router::new()
@@ -299,6 +301,14 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/settings",
             get(handlers::admin::settings).put(handlers::admin::update_settings),
+        )
+        .route(
+            "/breaks",
+            get(handlers::breaks::admin_breaks).post(handlers::breaks::create_break),
+        )
+        .route(
+            "/breaks/:id",
+            put(handlers::breaks::update_break).delete(handlers::breaks::delete_break),
         )
         .route("/audit", get(handlers::admin::audit_log))
         .route_layer(middleware::from_fn(auth::require_admin));

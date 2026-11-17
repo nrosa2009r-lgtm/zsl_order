@@ -74,6 +74,7 @@ zawierają wyłącznie pseudonimowe identyfikatory (`sub`, `login`, `role`,
 | `pickup_time` | godzina odbioru | `HH:MM` |
 | `created_at`, `updated_at` | porządek i statystyki | UTC |
 | `name`, `price_cents`, `quantity` w `order_items` | historia zamówienia | snapshot menu |
+| `pickup_date`, `break_id` w `orders` | organizacja wydawania | dzień i okno odbioru — bez danych osobowych |
 | `stock_reserved` w `order_items` | czy pozycja zabrała limitowany stan | 0/1, bez danych osobowych |
 
 ### `menu_items` (stan magazynowy)
@@ -194,8 +195,10 @@ procedury:
   wyeksportować je z bazy),
 - **sprostowanie** — korekta danych poza systemem; w systemie można
   zmienić hasło, kod, aktywność,
-- **usunięcie** — dezaktywacja i usunięcie konta oraz rozstrzygnięcie
-  historii zamówień (`orders.user_id` ma `ON DELETE RESTRICT`),
+- **usunięcie** — dezaktywacja i usunięcie konta; historia zamówień
+  zostaje, a `orders.user_id` przechodzi na `NULL` (`ON DELETE SET NULL`),
+  więc raporty nie tracą danych, ale nie da się już przypisać ich do
+  osoby,
 - **ograniczenie** — dezaktywacja konta,
 - **sprzeciw** — do rozpatrzenia przez szkołę,
 - **przenoszenie** — eksport techniczny z bazy (CSV/JSON) po stronie
@@ -243,7 +246,8 @@ administratora i dostęp do bazy, z zachowaniem backupu i audytu.
 ## 10. QR, kody i logi
 
 - QR: 48 znaków hex — nieprzejrzysty losowy token, bez danych ucznia.
-  Traktuj jak bilet; działa tylko dla dzisiejszego zamówienia `ordered`.
+  Traktuj jak bilet; działa tylko w dniu odbioru (`pickup_date`) dla
+  zamówienia `ordered`.
 - Krótki kod: 6 liter, wygoda personelu; nie publikuj.
 - Logi aplikacji: **JSON w journald**, bez plików `logs/`. Zawierają
   metodę, ścieżkę bez query, status i czas odpowiedzi oraz techniczne

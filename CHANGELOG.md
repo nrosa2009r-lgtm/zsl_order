@@ -33,14 +33,31 @@ Autorem projektu jest **natan-rosa**.
   jako `menu_stock_changed`.
 - Menu ucznia pokazuje „Zostało N szt.” / „Wyprzedane na dziś”, a raport
   dzienny tabelę bieżącego stanu i sprzedaży pozycji.
-- Nowe ustawienia `max_item_quantity_per_break` i
-  `one_active_order_per_break` (zapisywane teraz, egzekwowane po
-  wdrożeniu przerw).
+- Nowe ustawienia `max_item_quantity_per_break`,
+  `one_active_order_per_break` i `order_days_ahead` (egzekwowane
+  w transakcji zamówienia).
 - Migracja `0007_orders_rebuild_breaks.sql`: statusy `ordered`, `issued`,
   `cancelled`, `uncollected`, pole `issued_at`, tabela `breaks` oraz
   `orders.user_id` dopuszczające `NULL` (`ON DELETE SET NULL`). Historia
   zamówień może przetrwać usunięcie konta; API pokazuje wtedy
   `konto usunięte`.
+- Przerwy (okna wydawania) z pełnym CRUD w panelu admina
+  (`/api/admin/breaks`), listą dla kuchni (`/api/staff/breaks`) i wyborem
+  w formularzu ucznia. Przerwy nie są seedowane — administrator dodaje je
+  przed pilotażem.
+- Zamawianie z wyprzedzeniem: `order_days_ahead` (0–7), migracja
+  `0008_orders_pickup_date.sql` dodaje `orders.pickup_date` i indeks
+  `orders_pickup_idx`. Raport dnia, QR, wydanie i „nieodebrane” liczą się
+  po dniu odbioru, a raport/CSV mają rozbicie na przerwy.
+- Limity „na przerwę” są egzekwowane w transakcji zamówienia dla pary
+  (uczeń, dzień, przerwa). Zamówienia na przyszły dzień nie rezerwują
+  dzisiejszego stanu — stan przyszłych dni nie jest kontrolowany, co
+  panel admina i uczeń pokazują jako ostrzeżenie.
+- Nieodebrane liczone od **końca przerwy + `pickup_limit_minutes`**
+  w `Europe/Warsaw` (nie od `created_at`). Zamówienia z poprzednich dni są
+  zamykane zawsze, dzisiejsze bez przerwy (stare dane) nie są zamykane
+  automatycznie, a `pickup_limit_minutes = 0` wyłącza auto-oznaczanie.
+  Blokada `max_uncollected` liczy tylko zamówienia zamknięte tą regułą.
 
 ### Zmienione
 

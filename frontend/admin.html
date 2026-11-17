@@ -21,6 +21,7 @@
             <button class="tab is-active" type="button" data-tab="dashboard">Pulpit</button>
             <button class="tab" type="button" data-tab="users">Użytkownicy</button>
             <button class="tab" type="button" data-tab="menu">Menu</button>
+            <button class="tab" type="button" data-tab="breaks">Przerwy</button>
             <button class="tab" type="button" data-tab="orders">Zamówienia</button>
             <button class="tab" type="button" data-tab="report">Raport</button>
             <button class="tab" type="button" data-tab="settings">Ustawienia</button>
@@ -215,6 +216,26 @@
             <div id="staffMenuList" class="menu-manage-list" aria-live="polite"></div>
         </section>
 
+        <section id="tab-breaks" class="tab-panel" aria-labelledby="breaksHeading">
+            <div class="section-head">
+                <div>
+                    <h2 id="breaksHeading">Przerwy</h2>
+                    <p class="muted small">
+                        Okna wydawania zamówień. Limity „na przerwę” liczą się
+                        osobno dla każdego dnia i każdej przerwy.
+                    </p>
+                </div>
+                <button id="addBreakButton" class="btn btn-primary" type="button">Dodaj przerwę</button>
+            </div>
+            <div id="breaksWarning" class="banner banner-warning" hidden>
+                Nie ma żadnej aktywnej przerwy. Uczniowie nie wybierają przerwy,
+                a limity <code>max_item_quantity_per_break</code> i
+                <code>one_active_order_per_break</code> nie działają.
+                Dodaj co najmniej jedną przerwę przed pilotażem.
+            </div>
+            <div id="breakList" class="menu-manage-list" aria-live="polite"></div>
+        </section>
+
         <section id="tab-orders" class="tab-panel" aria-labelledby="ordersHeading">
             <div class="section-head">
                 <div>
@@ -280,6 +301,23 @@
                     <tbody id="reportStockBody"></tbody>
                 </table>
             </div>
+            <h3>Przerwy</h3>
+            <div class="table-wrap panel">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Przerwa</th>
+                            <th>Zamówienia</th>
+                            <th>Wydane</th>
+                            <th>Opłacone</th>
+                            <th>Kwota opłacona</th>
+                            <th>Nieodebrane</th>
+                            <th>Anulowane</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reportBreakBody"></tbody>
+                </table>
+            </div>
         </section>
 
         <section id="tab-settings" class="tab-panel" aria-labelledby="settingsHeading">
@@ -317,12 +355,25 @@
                         <div class="field">
                             <label for="settingPickupLimit">Limit czasu odbioru (minuty)</label>
                             <input id="settingPickupLimit" type="number" min="0" max="720" required>
-                            <small class="muted">0 = automatyczne oznaczanie wyłączone</small>
+                            <small class="muted">
+                                Liczone od końca przerwy odbioru (koniec przerwy + minuty).
+                                0 wyłącza automatyczne oznaczanie nieodebranych.
+                            </small>
                         </div>
                         <div class="field">
                             <label for="settingMaxUncollected">Blokada po nieodebranych</label>
                             <input id="settingMaxUncollected" type="number" min="0" max="20" required>
                             <small class="muted">0 = brak blokady; licznik z 30 dni</small>
+                        </div>
+                    </div>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label for="settingOrderDaysAhead">Zamawianie z wyprzedzeniem (dni)</label>
+                            <input id="settingOrderDaysAhead" type="number" min="0" max="7" required>
+                            <small class="muted">
+                                0 = tylko dziś. Przy wartości większej niż 0 stan magazynowy
+                                przyszłych dni <strong>nie jest rezerwowany ani kontrolowany</strong>.
+                            </small>
                         </div>
                     </div>
                     <div class="form-grid">
@@ -337,7 +388,8 @@
                         </label>
                     </div>
                     <p class="muted small">
-                        Limity „na przerwę” zaczną obowiązywać po wdrożeniu przerw.
+                        Limity „na przerwę” działają tylko dla zamówień z wybraną
+                        przerwą. Skonfiguruj przerwy w karcie <strong>Przerwy</strong>.
                         Stan magazynowy dotyczy wyłącznie dzisiejszych zamówień —
                         przy zamawianiu z wyprzedzeniem stan przyszłych dni nie jest
                         kontrolowany.
@@ -437,6 +489,43 @@
             <div class="dialog-actions">
                 <button class="btn btn-ghost" type="button" data-close-dialog>Anuluj</button>
                 <button id="menuSaveButton" class="btn btn-primary" type="submit">Zapisz</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="breakDialog" class="dialog">
+        <form id="breakForm" class="stack" method="dialog">
+            <h2 id="breakDialogTitle">Dodaj przerwę</h2>
+            <input id="breakId" type="hidden">
+            <div class="field">
+                <label for="breakName">Nazwa</label>
+                <input id="breakName" type="text" maxlength="60" required
+                       placeholder="np. Długa przerwa">
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="breakStart">Początek</label>
+                    <input id="breakStart" type="time" step="60" required>
+                </div>
+                <div class="field">
+                    <label for="breakEnd">Koniec</label>
+                    <input id="breakEnd" type="time" step="60" required>
+                </div>
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="breakSortOrder">Kolejność</label>
+                    <input id="breakSortOrder" type="number" min="-1000" max="1000" value="0">
+                </div>
+                <label class="checkbox-row">
+                    <input id="breakActive" type="checkbox" checked>
+                    <span>Aktywna (widoczna dla uczniów)</span>
+                </label>
+            </div>
+            <p id="breakFormError" class="form-error" role="alert" hidden></p>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" type="button" data-close-dialog>Anuluj</button>
+                <button id="breakSaveButton" class="btn btn-primary" type="submit">Zapisz</button>
             </div>
         </form>
     </dialog>

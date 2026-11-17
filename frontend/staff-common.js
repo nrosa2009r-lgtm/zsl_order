@@ -302,6 +302,8 @@
         const metaPairs = [
             ["Uczeń (kod)", order.student_code || "—"],
             ["Złożono", App.fmtDate(order.created_at)],
+            ["Dzień odbioru", order.pickup_date ? App.fmtDay(order.pickup_date) : "Dzień złożenia"],
+            ["Przerwa", order.break_name || "—"],
             ["Odbiór", order.pickup_time || "Bez godziny"],
             ["Płatność", App.paymentLabels[order.payment_method] || order.payment_method],
             ["Kwota", App.fmtPLN(order.total_cents)],
@@ -344,16 +346,25 @@
 
         if (role === "kitchen") {
             if (order.status === "ordered") {
-                actions.append(App.h("button", {
-                    class: "btn btn-success btn-small",
-                    text: "Wydaj i opłacone",
-                    attrs: { type: "button" },
-                    on: {
-                        click: function () {
-                            updateOrder(order.id, { status: "issued" }, options);
+                const future = order.pickup_date && order.pickup_date !== localToday();
+                if (future) {
+                    actions.append(App.h("span", {
+                        class: "muted small",
+                        text: "Zamówienie na " + App.fmtDay(order.pickup_date) +
+                            " — wydanie będzie możliwe w dniu odbioru.",
+                    }));
+                } else {
+                    actions.append(App.h("button", {
+                        class: "btn btn-success btn-small",
+                        text: "Wydaj i opłacone",
+                        attrs: { type: "button" },
+                        on: {
+                            click: function () {
+                                updateOrder(order.id, { status: "issued" }, options);
+                            },
                         },
-                    },
-                }));
+                    }));
+                }
             }
         } else if (order.status === "uncollected") {
             actions.append(App.h("button", {
@@ -501,6 +512,7 @@
         const summary = App.$(options.summarySelector);
         const tbody = App.$(options.tableSelector);
         const stockBody = options.stockTableSelector ? App.$(options.stockTableSelector) : null;
+        const breakBody = options.breakTableSelector ? App.$(options.breakTableSelector) : null;
         const updated = App.$(options.updatedSelector);
         const exportButton = App.$(options.exportButtonSelector);
 
@@ -581,6 +593,36 @@
                 }
             }
 
+            if (breakBody) {
+                App.clear(breakBody);
+                const breakRows = report.breaks || [];
+                if (!breakRows.length) {
+                    const row = App.h("tr");
+                    row.append(App.h("td", {
+                        colspan: "7",
+                        class: "muted",
+                        text: "Brak zamówień w tym dniu.",
+                    }));
+                    breakBody.append(row);
+                } else {
+                    breakRows.forEach(function (entry) {
+                        const row = App.h("tr");
+                        [
+                            entry.break_name,
+                            String(entry.orders),
+                            String(entry.issued_orders),
+                            String(entry.paid_orders),
+                            App.fmtPLN(entry.paid_cents),
+                            String(entry.uncollected_orders),
+                            String(entry.cancelled_orders),
+                        ].forEach(function (value) {
+                            row.append(App.h("td", { text: value }));
+                        });
+                        breakBody.append(row);
+                    });
+                }
+            }
+
             if (updated) {
                 updated.textContent = "Raport za " + report.date +
                     " · zaktualizowano " + new Date().toLocaleTimeString("pl-PL");
@@ -622,6 +664,8 @@
         [
             ["Uczeń (kod)", order.student_code || "—"],
             ["Złożono", App.fmtDate(order.created_at)],
+            ["Dzień odbioru", order.pickup_date ? App.fmtDay(order.pickup_date) : "Dzień złożenia"],
+            ["Przerwa", order.break_name || "—"],
             ["Odbiór", order.pickup_time || "Bez godziny"],
             ["Płatność", App.paymentLabels[order.payment_method] || order.payment_method],
         ].forEach(function (pair) {

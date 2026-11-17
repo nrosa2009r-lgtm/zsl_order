@@ -121,11 +121,6 @@ pub async fn return_order_stock(
     Ok(result.rows_affected())
 }
 
-/// Czy zamówienie powstało dzisiaj (w strefie szkoły)?
-pub fn is_from_today(created_at: i64) -> bool {
-    util::local_date(created_at) == Some(util::today())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,11 +424,5 @@ mod tests {
         assert_eq!(remaining(&pool, unlimited).await, None);
 
         close(pool, path).await;
-    }
-
-    #[test]
-    fn order_date_comparison_uses_school_timezone() {
-        assert!(is_from_today(util::now()));
-        assert!(!is_from_today(util::now() - 48 * 60 * 60));
     }
 }

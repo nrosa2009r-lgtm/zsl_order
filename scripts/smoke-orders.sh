@@ -489,8 +489,23 @@ PAID_AT_5=$(printf '%s' "$BODY" | jq -r '.paid_at // empty')
 [ "$STATUS" = "200" ] && [ -n "$PAID_AT_5" ] \
   && pass "nieodebrane: zamówienie opłacone przed nieodebraniem" \
   || fail "nieodebrane: paid -> $STATUS at=$PAID_AT_5"
-# Nowe zamówienia nie mają ready_at: limit odbioru liczy się od created_at.
-db_scalar "UPDATE orders SET created_at = unixepoch() - 120 WHERE id=$ORDER5;" >/dev/null
+# Termin nieodebrania to koniec przerwy + pickup_limit_minutes. Wstawiamy
+# przerwę, która skończyła się kilka minut temu, i przypisujemy ją do
+# zamówienia. Tuż po północy (gdy -35 min wypada wczoraj) używamy reguły
+# „poprzedni dzień zawsze zamknięty”.
+BREAK_UNCOL_ID=""
+if [ "$(TZ=Europe/Warsaw date -d '-35 minutes' +%F)" != "$(TZ=Europe/Warsaw date +%F)" ]; then
+  PREV_DATE=$(TZ=Europe/Warsaw date -d '-1 day' +%F)
+  db_scalar "UPDATE orders SET pickup_date = '$PREV_DATE' WHERE id=$ORDER5;" >/dev/null
+else
+  BREAK_START_HM=$(TZ=Europe/Warsaw date -d '-35 minutes' +%H:%M)
+  BREAK_END_HM=$(TZ=Europe/Warsaw date -d '-5 minutes' +%H:%M)
+  BREAK_UNCOL_ID=$(db_scalar "INSERT INTO breaks
+      (name, start_time, end_time, active, sort_order, created_at, updated_at)
+      VALUES ('Test nieodebrane','$BREAK_START_HM','$BREAK_END_HM',1,0,unixepoch(),unixepoch());
+      SELECT last_insert_rowid();")
+  db_scalar "UPDATE orders SET break_id = $BREAK_UNCOL_ID WHERE id=$ORDER5;" >/dev/null
+fi
 
 stop_server
 start_server || { echo "Restart nieudany"; exit 1; }
@@ -500,6 +515,9 @@ for _ in $(seq 1 50); do
 done
 UNCOLLECTED=$(db_scalar "SELECT uncollected_at FROM orders WHERE id=$ORDER5;")
 [ -n "$UNCOLLECTED" ] && pass "nieodebrane: automatycznie oznaczone po restarcie" || fail "nieodebrane: brak znacznika"
+
+# Wyłącz przerwę testową, aby kolejne zamówienia nie wymagały jej wyboru.
+[ -n "$BREAK_UNCOL_ID" ] && db_scalar "UPDATE breaks SET active = 0 WHERE id=$BREAK_UNCOL_ID;" >/dev/null
 
 request GET /api/student/orders "$S1_JAR" "" ""
 EFFECTIVE=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER5" '.[] | select(.id == $id) | .status')

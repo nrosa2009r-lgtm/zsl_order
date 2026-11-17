@@ -12,6 +12,7 @@
     let importedAt = 0;
     let activityData = null;
     let resizeTimer = null;
+    let breaks = [];
 
     App.bootPage("admin", async function () {
         menuUi = StaffUI.setupMenuManager({
@@ -32,6 +33,7 @@
             summarySelector: "#reportSummary",
             tableSelector: "#reportTableBody",
             stockTableSelector: "#reportStockBody",
+            breakTableSelector: "#reportBreakBody",
             updatedSelector: "#reportUpdated",
             exportButtonSelector: "#exportReportButton",
         });
@@ -40,6 +42,7 @@
         await loadActivity();
         await loadUsers();
         await loadSettings();
+        await loadBreaks();
         await menuUi.refresh();
         await ordersUi.refresh();
         await loadAudit();
@@ -78,6 +81,8 @@
         App.$("#importForm").addEventListener("submit", importStudents);
         App.$("#importFile").addEventListener("change", loadImportFile);
         App.$("#settingsForm").addEventListener("submit", saveSettings);
+        App.$("#addBreakButton").addEventListener("click", openBreakCreate);
+        App.$("#breakForm").addEventListener("submit", saveBreak);
 
         App.$('.tab[data-tab="dashboard"]').addEventListener("click", function () {
             loadStats().catch(function (error) { App.toast(error.message, "error"); });
@@ -88,6 +93,9 @@
         });
         App.$('.tab[data-tab="menu"]').addEventListener("click", function () {
             menuUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
+        });
+        App.$('.tab[data-tab="breaks"]').addEventListener("click", function () {
+            loadBreaks().catch(function (error) { App.toast(error.message, "error"); });
         });
         App.$('.tab[data-tab="orders"]').addEventListener("click", function () {
             ordersUi.refresh().catch(function (error) { App.toast(error.message, "error"); });
@@ -821,6 +829,7 @@
         App.$("#settingCancelWindow").value = settings.cancel_window_minutes || "30";
         App.$("#settingPickupLimit").value = settings.pickup_limit_minutes || "120";
         App.$("#settingMaxUncollected").value = settings.max_uncollected || "0";
+        App.$("#settingOrderDaysAhead").value = settings.order_days_ahead || "0";
         App.$("#settingMaxItemPerBreak").value = settings.max_item_quantity_per_break || "0";
         App.$("#settingOneActiveOrderPerBreak").checked = settings.one_active_order_per_break === "1";
         App.$("#settingsError").hidden = true;
@@ -841,6 +850,7 @@
             cancel_window_minutes: Number.parseInt(App.$("#settingCancelWindow").value, 10),
             pickup_limit_minutes: Number.parseInt(App.$("#settingPickupLimit").value, 10),
             max_uncollected: Number.parseInt(App.$("#settingMaxUncollected").value, 10),
+            order_days_ahead: Number.parseInt(App.$("#settingOrderDaysAhead").value, 10),
             max_item_quantity_per_break: Number.parseInt(App.$("#settingMaxItemPerBreak").value, 10),
             one_active_order_per_break: App.$("#settingOneActiveOrderPerBreak").checked,
         };
@@ -857,6 +867,155 @@
         } finally {
             App.setBusy(button, false, "Zapisz ustawienia");
         }
+    }
+
+    function breakPayload(entry) {
+        return {
+            name: App.$("#breakName").value.trim(),
+            start_time: App.$("#breakStart").value,
+            end_time: App.$("#breakEnd").value,
+            sort_order: Number.parseInt(App.$("#breakSortOrder").value, 10) || 0,
+            active: App.$("#breakActive").checked,
+        };
+    }
+
+    function openBreakCreate() {
+        App.$("#breakId").value = "";
+        App.$("#breakDialogTitle").textContent = "Dodaj przerwę";
+        App.$("#breakName").value = "";
+        App.$("#breakStart").value = "";
+        App.$("#breakEnd").value = "";
+        App.$("#breakSortOrder").value = "0";
+        App.$("#breakActive").checked = true;
+        App.$("#breakFormError").hidden = true;
+        App.$("#breakDialog").showModal();
+    }
+
+    function openBreakEdit(entry) {
+        App.$("#breakId").value = String(entry.id);
+        App.$("#breakDialogTitle").textContent = "Edytuj przerwę";
+        App.$("#breakName").value = entry.name;
+        App.$("#breakStart").value = entry.start_time;
+        App.$("#breakEnd").value = entry.end_time;
+        App.$("#breakSortOrder").value = String(entry.sort_order || 0);
+        App.$("#breakActive").checked = !!entry.active;
+        App.$("#breakFormError").hidden = true;
+        App.$("#breakDialog").showModal();
+    }
+
+    async function saveBreak(event) {
+        event.preventDefault();
+        const id = App.$("#breakId").value;
+        const button = App.$("#breakSaveButton");
+        const errorNode = App.$("#breakFormError");
+        errorNode.hidden = true;
+        const payload = breakPayload();
+        App.setBusy(button, true, "Zapisywanie…");
+        try {
+            if (id) {
+                await App.api.put("/api/admin/breaks/" + id, payload);
+            } else {
+                await App.api.post("/api/admin/breaks", payload);
+            }
+            App.$("#breakDialog").close();
+            App.toast("Przerwa zapisana.", "success");
+            await loadBreaks();
+        } catch (error) {
+            errorNode.textContent = error.message;
+            errorNode.hidden = false;
+        } finally {
+            App.setBusy(button, false, "Zapisz");
+        }
+    }
+
+    async function toggleBreak(entry) {
+        try {
+            await App.api.put("/api/admin/breaks/" + entry.id, {
+                name: entry.name,
+                start_time: entry.start_time,
+                end_time: entry.end_time,
+                sort_order: entry.sort_order,
+                active: !entry.active,
+            });
+            App.toast(entry.active ? "Przerwa wyłączona." : "Przerwa włączona.", "success");
+            await loadBreaks();
+        } catch (error) {
+            App.toast(error.message, "error");
+        }
+    }
+
+    async function removeBreak(entry) {
+        if (!window.confirm("Usunąć przerwę „" + entry.name + "”?")) return;
+        try {
+            await App.api.del("/api/admin/breaks/" + entry.id);
+            App.toast("Przerwa usunięta.", "success");
+            await loadBreaks();
+        } catch (error) {
+            App.toast(error.message, "error");
+        }
+    }
+
+    function renderBreaks() {
+        const list = App.$("#breakList");
+        const warning = App.$("#breaksWarning");
+        App.clear(list);
+        warning.hidden = breaks.some(function (entry) { return entry.active; });
+
+        if (!breaks.length) {
+            list.append(App.h("p", {
+                class: "empty-state",
+                text: "Brak przerw. Dodaj pierwszą przerwę, aby uczniowie mogli wybrać okno odbioru.",
+            }));
+            return;
+        }
+
+        breaks.forEach(function (entry) {
+            const card = App.h("article", { class: "manage-item" });
+            const main = App.h("div", { class: "manage-main" });
+            main.append(
+                App.h("div", { class: "manage-title" }, [
+                    App.h("h3", { text: entry.name }),
+                    entry.active
+                        ? App.h("span", { class: "badge badge-ready", text: "Aktywna" })
+                        : App.h("span", { class: "badge badge-cancelled", text: "Wyłączona" }),
+                ]),
+                App.h("p", {
+                    class: "muted small",
+                    text: "Okno odbioru " + entry.start_time + "–" + entry.end_time +
+                        " · kolejność " + entry.sort_order,
+                })
+            );
+
+            const actions = App.h("div", { class: "manage-actions" });
+            actions.append(
+                App.h("button", {
+                    class: "btn btn-ghost btn-small",
+                    text: "Edytuj",
+                    attrs: { type: "button" },
+                    on: { click: function () { openBreakEdit(entry); } },
+                }),
+                App.h("button", {
+                    class: "btn btn-ghost btn-small",
+                    text: entry.active ? "Wyłącz" : "Włącz",
+                    attrs: { type: "button" },
+                    on: { click: function () { toggleBreak(entry); } },
+                }),
+                App.h("button", {
+                    class: "btn btn-danger btn-small",
+                    text: "Usuń",
+                    attrs: { type: "button" },
+                    on: { click: function () { removeBreak(entry); } },
+                })
+            );
+
+            card.append(main, actions);
+            list.append(card);
+        });
+    }
+
+    async function loadBreaks() {
+        breaks = await App.api.get("/api/admin/breaks");
+        renderBreaks();
     }
 
     async function loadAudit() {

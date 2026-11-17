@@ -73,11 +73,11 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "7" ] \
-  && pass "pusta baza: 7 migracji zastosowanych" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "8" ] \
+  && pass "pusta baza: 8 migracji zastosowanych" \
   || fail "pusta baza: brak migracji"
 
-for index in orders_created_idx orders_idempotency_created_idx; do
+for index in orders_created_idx orders_idempotency_created_idx orders_pickup_idx; do
   [ "$(sqlite3 "$empty_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='$index';")" = "1" ] \
     && pass "pusta baza: indeks $index" \
     || fail "pusta baza: brak indeksu $index"
@@ -115,7 +115,7 @@ done
   && pass "legacy: foreign_key_check bez błędów" \
   || fail "legacy: foreign_key_check zgłasza problemy"
 
-for column in paid_at paid_by ready_at issued_at uncollected_at idempotency_key break_id; do
+for column in paid_at paid_by ready_at issued_at uncollected_at idempotency_key break_id pickup_date; do
   [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('orders') WHERE name='$column';")" = "1" ] \
     && pass "legacy: kolumna orders.$column" \
     || fail "legacy: brak kolumny orders.$column"
@@ -149,6 +149,7 @@ done
 sqlite3 "$legacy_db" "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at,uncollected_at)
 VALUES (1,'UNCOL1','tokuncol1','cancelled','cash','paid',500,'12:05',105,105,105);"
 sqlite3 "$legacy_db" < "$ROOT/migrations/0007_orders_rebuild_breaks.sql"
+sqlite3 "$legacy_db" < "$ROOT/migrations/0008_orders_pickup_date.sql"
 [ "$(sqlite3 "$legacy_db" "SELECT status FROM orders WHERE code='UNCOL1';")" = "uncollected" ] \
   && pass "legacy: cancelled + uncollected_at -> status uncollected" \
   || fail "legacy: nie zmapowano nieodebranego"

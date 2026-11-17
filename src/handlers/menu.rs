@@ -40,6 +40,16 @@ pub struct StudentMenuResponse {
     pub cancel_window_minutes: i64,
     pub pickup_limit_minutes: i64,
     pub max_uncollected: i64,
+    /// Dzisiejsza data w strefie szkoły (`RRRR-MM-DD`).
+    pub today: String,
+    /// Ile dni naprzód można zamawiać (0 = tylko dziś).
+    pub order_days_ahead: i64,
+    /// 0 = bez limitu; limit sztuk jednej pozycji na przerwę.
+    pub max_item_quantity_per_break: i64,
+    /// Jedno aktywne zamówienie na przerwę (dzień + przerwa).
+    pub one_active_order_per_break: bool,
+    /// Aktywne przerwy do wyboru w formularzu zamówienia.
+    pub breaks: Vec<crate::breaks::BreakView>,
 }
 
 #[derive(Deserialize)]
@@ -77,7 +87,8 @@ pub async fn student_menu(
 ) -> Result<Json<StudentMenuResponse>, AppError> {
     // Leniwy reset dobowy: pierwszy odczyt menu po północy przywraca
     // domyślne stany, zanim uczeń zobaczy dostępność.
-    crate::stock::reset_daily_stock(&state.db, util::today()).await?;
+    let today = util::today();
+    crate::stock::reset_daily_stock(&state.db, today).await?;
 
     let items = sqlx::query_as::<_, MenuItemView>(
         "SELECT id, name, description, price_cents, category, allergens, available,
@@ -102,13 +113,27 @@ pub async fn student_menu(
         cancel_window_minutes: setting_i64(&state, "cancel_window_minutes", 30).await,
         pickup_limit_minutes: setting_i64(&state, "pickup_limit_minutes", 120).await,
         max_uncollected: setting_i64(&state, "max_uncollected", 0).await,
+        today: crate::stock::date_key(today),
+        order_days_ahead: setting_i64(&state, "order_days_ahead", 0).await.clamp(0, 7),
+        max_item_quantity_per_break: setting_i64(&state, "max_item_quantity_per_break", 0)
+            .await
+            .clamp(0, 10),
+        one_active_order_per_break: db::get_setting_or(
+            &state.db,
+            "one_active_order_per_break",
+            "0",
+        )
+        .await
+            == "1",
+        breaks: crate::breaks::list_active(&state.db).await?,
     }))
 }
 
 pub async fn staff_menu(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<MenuItemView>>, AppError> {
-    crate::stock::reset_daily_stock(&state.db, util::today()).await?;
+    let today = util::today();
+    crate::stock::reset_daily_stock(&state.db, today).await?;
 
     let items = sqlx::query_as::<_, MenuItemView>(
         "SELECT id, name, description, price_cents, category, allergens, available,

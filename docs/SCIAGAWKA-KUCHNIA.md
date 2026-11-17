@@ -21,7 +21,10 @@ ordered → issued
 - `issued` — wydane (automatycznie opłacone, jeśli było nieopłacone),
 - `cancelled` / `uncollected` — zamknięte, kuchnia ich nie zmienia.
 
-Kuchnia zmienia tylko **dzisiejsze** zamówienia.
+Kuchnia zmienia tylko **dzisiejsze** zamówienia. Zamówienie na przyszły
+dzień ma na karcie datę odbioru i informację „wydanie będzie możliwe
+w dniu odbioru” — nie wydawaj go wcześniej i nie oznaczaj jako
+nieodebrane.
 
 ## 3. Wydanie QR — 3 kroki
 
@@ -62,9 +65,23 @@ Kolejność rozwiązań:
 
 ## 7. Nieodebrane
 
-- Po czasie `pickup_limit_minutes` zamówienie staje się `uncollected`.
+- Zamówienie staje się `uncollected` po **końcu swojej przerwy +
+  `pickup_limit_minutes`**. Nie licz tego od godziny złożenia — poranne
+  zamówienie na późniejszą przerwę ma czas do końca tej przerwy.
+- Zamówienia z poprzednich dni są zamykane zawsze; dzisiejsze bez przerwy
+  (stare dane) nie są zamykane automatycznie.
 - Kuchnia nie zmienia takiego zamówienia.
 - Blokadę u ucznia zdejmuje **administrator**.
+
+## 7a. Przerwy i dzień odbioru
+
+- Karta zamówienia pokazuje **dzień odbioru** i **przerwę** (np. „Długa
+  przerwa”). Wydawaj zgodnie z nimi.
+- Kod QR i przycisk **Wydaj** są aktywne wyłącznie w dniu odbioru.
+- Automatyczne „nieodebrane” pomija zamówienia, których dzień odbioru
+  jeszcze nie nadszedł.
+- W raporcie dnia tabela **Przerwy** pokazuje liczbę zamówień, wydanych,
+  opłaconych i nieodebranych dla każdego okna.
 
 ## 8. Stan magazynowy
 

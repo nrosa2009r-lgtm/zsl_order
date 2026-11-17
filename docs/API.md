@@ -153,6 +153,7 @@ HTTP/1.1 403 Forbidden
 | `POST` | `/api/staff/pickup` | `kitchen` / `admin` | tak |
 | `GET` | `/api/staff/report?date=RRRR-MM-DD` | `kitchen` / `admin` | nie |
 | `GET` | `/api/staff/report.csv?date=RRRR-MM-DD` | `kitchen` / `admin` | nie |
+| `GET` | `/api/staff/breaks` | `kitchen` / `admin` | nie |
 | `GET` | `/api/admin/stats` | `admin` | nie |
 | `GET` | `/api/admin/stats/activity` | `admin` | nie |
 | `GET` | `/api/admin/users` | `admin` | nie |
@@ -163,6 +164,10 @@ HTTP/1.1 403 Forbidden
 | `DELETE` | `/api/admin/users/:id` | `admin` | tak |
 | `POST` | `/api/admin/users/:id/reset-password` | `admin` | tak |
 | `DELETE` | `/api/admin/users/:id/sessions` | `admin` | tak |
+| `GET` | `/api/admin/breaks` | `admin` | nie |
+| `POST` | `/api/admin/breaks` | `admin` | tak |
+| `PUT` | `/api/admin/breaks/:id` | `admin` | tak |
+| `DELETE` | `/api/admin/breaks/:id` | `admin` | tak |
 | `GET` | `/api/admin/settings` | `admin` | nie |
 | `PUT` | `/api/admin/settings` | `admin` | tak |
 | `GET` | `/api/admin/audit` | `admin` | nie |
@@ -386,10 +391,33 @@ Zwraca wyłącznie dostępne pozycje menu, posortowane po `sort_order`, nazwie.
   "max_order_items": 20,
   "cancel_window_minutes": 30,
   "pickup_limit_minutes": 120,
-  "max_uncollected": 0
+  "max_uncollected": 0,
+  "today": "2026-11-17",
+  "order_days_ahead": 0,
+  "max_item_quantity_per_break": 0,
+  "one_active_order_per_break": false,
+  "breaks": [
+    {
+      "id": 1,
+      "name": "Długa przerwa",
+      "start_time": "11:30",
+      "end_time": "11:50",
+      "active": true,
+      "sort_order": 1
+    }
+  ]
 }
 ```
 
+- `today` — dzisiejsza data w strefie szkoły (`RRRR-MM-DD`); panel ucznia
+  używa jej do wyboru dnia odbioru,
+- `order_days_ahead` — ile dni naprzód można zamawiać (`0` = tylko dziś),
+- `max_item_quantity_per_break` — limit sztuk jednej pozycji na przerwę
+  (`0` = bez limitu),
+- `one_active_order_per_break` — czy obowiązuje jedno aktywne zamówienie
+  na parę (dzień, przerwa),
+- `breaks` — aktywne przerwy do wyboru w formularzu. Pusta lista oznacza,
+  że zamówienie nie wymaga przerwy, a limity „na przerwę” nie działają.
 - `stock_remaining`: ile sztuk zostało na dzień `stock_date`;
   `null` = pozycja bez limitu,
 - `stock_default`: stan, do którego pozycja wraca przy pierwszym odczycie
@@ -414,6 +442,8 @@ pozycje w kolejności `order_items.id`.
   ],
   "payment_method": "cash",
   "pickup_time": "12:30",
+  "pickup_date": "2026-11-17",
+  "break_id": 1,
   "idempotency_key": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
@@ -431,7 +461,23 @@ pozycje w kolejności `order_items.id`.
   dwa razy. Pola `price_cents`, `total_cents`, `status` i
   `payment_status` w żądaniu są ignorowane — ceny i statusy ustala serwer.
 - `payment_method`: `cash` lub `card`.
+- `pickup_date`: `""`/brak = dziś albo `RRRR-MM-DD` w zakresie
+  `[dziś, dziś + order_days_ahead]`. Wartość spoza zakresu → `400`.
+- `break_id`: przerwa z listy `breaks`. Gdy są aktywne przerwy, pole jest
+  **wymagane** (`400` bez przerwy). Przerwa nieaktywna lub nieistniejąca →
+  `400`/`409`. Gdy nie ma aktywnych przerw, pole może być pominięte.
 - `pickup_time`: `""` (brak) lub `HH:MM` w zakresie `00:00`–`23:59`.
+  Przy wybranej przerwie pusta godzina jest uzupełniana początkiem przerwy,
+  a podana godzina musi mieścić się w jej oknie (`400` w przeciwnym razie).
+- Limity „na przerwę” liczą się dla pary (uczeń, `pickup_date`, `break_id`)
+  i obejmują zamówienia w statusie `ordered` lub `issued`:
+  - `max_item_quantity_per_break > 0` — suma sztuk jednej pozycji nie może
+    przekroczyć limitu (`409` z nazwą pozycji),
+  - `one_active_order_per_break = true` — drugie aktywne zamówienie na tę
+    samą przerwę i dzień → `409`.
+- Zamówienie na przyszły dzień **nie rezerwuje** dzisiejszego stanu
+  magazynowego (`order_items.stock_reserved = 0`). Stan przyszłych dni nie
+  jest kontrolowany — to świadome ograniczenie pierwszej wersji.
 - Suma jest liczona po stronie serwera na podstawie aktualnych cen.
 - Maksymalna kwota zamówienia: 200 000 gr (2000 zł).
 - Limit otwartych zamówień użytkownika: `max_open_orders` (domyślnie 3);
@@ -439,7 +485,13 @@ pozycje w kolejności `order_items.id`.
 - `max_uncollected > 0` blokuje nowe zamówienia, jeśli uczeń ma co najmniej
   tyle nieodebranych zamówień w ostatnich 30 dniach. Blokadę można zdjąć
   akcją administratora `POST /api/admin/users/:id/clear-uncollected-block`;
-  historia nieodebranych i raporty pozostają bez zmian.
+  historia nieodebranych i raporty pozostają bez zmian. Licznik obejmuje
+  wyłącznie zamówienia `uncollected` zamknięte automatyczną regułą.
+- Zamówienie staje się `uncollected` po **końcu przerwy odbioru +
+  `pickup_limit_minutes`** w `Europe/Warsaw`, a nie od `created_at`.
+  Zamówienia z poprzednich dni są zamykane zawsze; dzisiejsze zamówienie
+  bez przerwy (stare dane) nie jest zamykane automatycznie.
+  `pickup_limit_minutes = 0` wyłącza auto-oznaczanie całkowicie.
 - `ordering_enabled = false` blokuje składanie zamówień.
 - Pozycje z `stock_remaining` mają dzienny limit. Rezerwacja odbywa się
   w tej samej transakcji co zapis zamówienia (warunkowy `UPDATE`), więc
@@ -456,8 +508,8 @@ zamówienie dla powtórzonego klucza idempotencji.
 
 | Status | `code` | Opis |
 | --- | --- | --- |
-| 400 | `bad_request` | nieprawidłowe pozycje, płatność, godzina, klucz idempotencji, kwota |
-| 409 | `conflict` | zamawianie wyłączone, limit otwartych, blokada nieodebranych, pozycja niedostępna lub wyczerpany stan |
+| 400 | `bad_request` | nieprawidłowe pozycje, płatność, godzina, dzień odbioru, przerwa, klucz idempotencji, kwota |
+| 409 | `conflict` | zamawianie wyłączone, limit otwartych, blokada nieodebranych, pozycja niedostępna, wyczerpany stan, limit przerwy |
 | 503 | `unavailable` | baza chwilowo zajęta (`SQLITE_BUSY`); `Retry-After: 1` |
 
 ### `POST /api/student/orders/:id/cancel`
@@ -577,7 +629,8 @@ Pozycja pozostaje widoczna dla personelu i w historycznych zamówieniach
 - `open` (domyślnie): zamówienia `ordered`, sortowanie najstarsze
   pierwsze (kolejka). Kuchnia i tak zmienia tylko dzisiejsze; zaległe
   zamówienia są automatycznie zamykane jako nieodebrane,
-- `today`: zamówienia od początku doby `Europe/Warsaw`, najnowsze pierwsze,
+- `today`: zamówienia z dniem odbioru `pickup_date` równym dziś (stare
+  wiersze bez `pickup_date` — po dniu złożenia), najnowsze pierwsze,
 - `all`: wszystkie, najnowsze pierwsze, maks. 300.
 
 Każdy wariant zwraca maks. 300 zamówień. Odpowiedź to tablica
@@ -664,8 +717,9 @@ Każde wyszukanie jest zapisywane w audycie (`pickup_lookup`).
 Raport dzienny dla kuchni i administratora. `date` opcjonalne
 (domyślnie dzisiaj). Doba jest liczona w **Europe/Warsaw** — także przy
 zmianie czasu (dzień wiosenny ma 23 h, jesienny 25 h). Zakres obejmuje
-zamówienia **złożone** w danym dniu. Odpowiedź zawiera sumy łączne oraz
-podział na gotówkę i kartę:
+zamówienia z **dniem odbioru** `pickup_date` równym `date`. Stare
+zamówienia bez `pickup_date` nadal liczą się po dniu złożenia. Odpowiedź
+zawiera sumy łączne, podział na gotówkę i kartę oraz rozbicie na przerwy:
 
 ```json
 {
@@ -681,6 +735,22 @@ podział na gotówkę i kartę:
   "open_orders": 1,
   "cash": { "orders": 7, "paid_orders": 5, "paid_cents": 9800, "...": "..." },
   "card": { "orders": 5, "paid_orders": 4, "paid_cents": 8800, "...": "..." },
+  "breaks": [
+    {
+      "break_id": 1,
+      "break_name": "Długa przerwa",
+      "orders": 8,
+      "paid_orders": 6,
+      "paid_cents": 12400,
+      "...": "..."
+    },
+    {
+      "break_id": null,
+      "break_name": "Bez przerwy",
+      "orders": 4,
+      "...": "..."
+    }
+  ],
   "stock": [
     {
       "menu_item_id": 2,
@@ -708,6 +778,9 @@ podział na gotówkę i kartę:
 - `issued_orders` to zamówienia wydane w danym dniu (także opłacone
   nieodebrane są liczone osobno jako `uncollected_orders`),
 - `cash.*` + `card.*` = wartości łączne,
+- `breaks` — te same sumy pogrupowane po przerwie; zamówienia bez przerwy
+  trafiają do `break_name = "Bez przerwy"` (`break_id = null`), a suma
+  `breaks[].orders` równa się `orders`,
 - `stock` to **bieżący** stan pozycji menu (nie historyczny) oraz liczba
   sprzedanych sztuk w dniu raportu; anulowane zamówienia nie zwiększają
   `sold`, a pozycje z `stock_remaining = null` są pokazane jako „bez
@@ -723,9 +796,12 @@ przed upływem retencji, jeśli historia ma być dłuższa.
 ### `GET /api/staff/report.csv?date=RRRR-MM-DD`
 
 Ten sam raport jako CSV (`text/csv; charset=utf-8`, BOM, separator `;`,
-`Cache-Control: no-store`). Wiersze: gotówka, karta, razem. Kolumny:
-data, metoda, zamówienia, opłacone, kwota opłacona w groszach,
-nieopłacone, kwota nieopłacona w groszach, anulowane, nieodebrane.
+`Cache-Control: no-store`). Pierwsza sekcja: wiersze gotówka, karta,
+razem; kolumny: data, metoda, zamówienia, opłacone, kwota opłacona
+w groszach, nieopłacone, kwota nieopłacona w groszach, anulowane,
+nieodebrane. Druga sekcja (po pustym wierszu) zawiera nagłówek
+`przerwa;...` i wiersze per przerwa: nazwa, zamówienia, wydane, opłacone,
+kwota opłacona, nieopłacone, kwota nieopłacona, anulowane, nieodebrane.
 
 ## Administrator
 
@@ -747,7 +823,9 @@ nieopłacone, kwota nieopłacona w groszach, anulowane, nieodebrane.
 ```
 
 - `students`, `kitchen`, `admins` — tylko aktywne konta,
-- `orders_today`, `revenue_today_cents` — od początku doby `Europe/Warsaw`;
+- `orders_today` — zamówienia złożone od początku doby `Europe/Warsaw`;
+- `revenue_today_cents` — suma opłaconych zamówień z `paid_at` w tej dobie
+  (pieniądze przyjęte dziś, także za zamówienie złożone wcześniej);
   utarg liczy tylko `payment_status = 'paid'` i status inny niż
   `cancelled` (opłacone nieodebrane zostają w utargu),
 - `open_orders` — `ordered`,
@@ -1046,6 +1124,53 @@ kont uczniów (`400` dla innych ról); brak konta → `404`. Audyt zapisuje
 {"ok": true, "cleared_at": 1762451234}
 ```
 
+### `GET /api/admin/breaks`
+
+Lista wszystkich przerw (także wyłączonych), sortowana po `sort_order`,
+godzinie i nazwie.
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Długa przerwa",
+    "start_time": "11:30",
+    "end_time": "11:50",
+    "active": true,
+    "sort_order": 1
+  }
+]
+```
+
+`GET /api/staff/breaks` zwraca tylko aktywne przerwy i jest dostępny dla
+kuchni oraz administratora.
+
+### `POST /api/admin/breaks` i `PUT /api/admin/breaks/:id`
+
+```json
+{
+  "name": "Długa przerwa",
+  "start_time": "11:30",
+  "end_time": "11:50",
+  "active": true,
+  "sort_order": 1
+}
+```
+
+- `name`: 1–60 znaków, unikalna (duplikat → `409`),
+- `start_time`/`end_time`: `HH:MM`, koniec musi być później niż początek,
+- `active`: czy przerwa jest widoczna dla uczniów,
+- `sort_order`: -1000…1000.
+
+Nowa przerwa → `201`; aktualizacja → `200` z pełnym obiektem.
+
+### `DELETE /api/admin/breaks/:id`
+
+Usuwa przerwę tylko wtedy, gdy nie ma do niej przypisanych zamówień
+(`204`). Przerwę z historią należy **wyłączyć** (`active: false`) —
+w przeciwnym razie API zwraca `409`. Dzięki temu raporty i karty
+zamówień zachowują nazwę przerwy.
+
 ### `GET /api/admin/settings`
 
 ```json
@@ -1058,6 +1183,7 @@ kont uczniów (`400` dla innych ról); brak konta → `404`. Audyt zapisuje
   "cancel_window_minutes": "30",
   "pickup_limit_minutes": "120",
   "max_uncollected": "0",
+  "order_days_ahead": "0",
   "max_item_quantity_per_break": "0",
   "one_active_order_per_break": "0"
 }
@@ -1079,6 +1205,7 @@ Wszystkie pola opcjonalne; podaje się tylko zmieniane.
   "cancel_window_minutes": 30,
   "pickup_limit_minutes": 120,
   "max_uncollected": 0,
+  "order_days_ahead": 0,
   "max_item_quantity_per_break": 0,
   "one_active_order_per_break": false
 }
@@ -1092,8 +1219,9 @@ Wszystkie pola opcjonalne; podaje się tylko zmieniane.
 | `max_open_orders` | 1–10 |
 | `max_order_items` | 1–50 |
 | `cancel_window_minutes` | 0–1440; 0 = bez terminu |
-| `pickup_limit_minutes` | 0–720; 0 = auto-oznaczanie wyłączone |
+| `pickup_limit_minutes` | 0–720; termin = koniec przerwy odbioru + minuty; 0 = auto-oznaczanie wyłączone |
 | `max_uncollected` | 0–20; 0 = brak blokady |
+| `order_days_ahead` | 0–7; 0 = tylko dziś; przy > 0 stan przyszłych dni nie jest rezerwowany ani kontrolowany |
 | `max_item_quantity_per_break` | 0–10; 0 = bez limitu; dotyczy sztuk jednej pozycji na przerwę |
 | `one_active_order_per_break` | bool; jedno aktywne zamówienie na przerwę |
 
@@ -1168,6 +1296,9 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   "payment_status": "unpaid",
   "total_cents": 2800,
   "pickup_time": "12:30",
+  "pickup_date": "2026-11-17",
+  "break_id": 1,
+  "break_name": "Długa przerwa",
   "created_at": 1762450000,
   "updated_at": 1762450000,
   "paid_at": null,
@@ -1197,6 +1328,12 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   oznaczyła płatność; `null` dla nieopłaconych.
 - `issued_at` — moment wydania; `null` dla niewydanych. Historyczne
   zamówienia mają `issued_at` uzupełnione przy migracji.
+- `pickup_date` — dzień odbioru (`RRRR-MM-DD`); `null` tylko dla
+  historycznych zamówień sprzed migracji 0008 (wtedy obowiązuje dzień
+  złożenia). `break_id`/`break_name` — przerwa i jej nazwa; `null`, gdy
+  zamówienie nie ma przerwy lub przerwa została usunięta.
+- Kod QR i wydanie działają wyłącznie w dniu `pickup_date`; zamówienia na
+  przyszły dzień nie są oznaczać nieodebranych przed tym dniem.
 - `code` ma 6 wielkich liter; `qr_token` nie jest zwracany w JSON
   (dostępny wyłącznie jako obraz QR).
 
@@ -1276,7 +1413,7 @@ szczegółów SQL, ścieżek ani stack trace.
 | `pickup_time` | `""` lub `HH:MM`, 00:00–23:59 |
 | `idempotency_key` | 8–128 znaków `[A-Za-z0-9._:-]`, wymagane |
 | `cancel_window_minutes` | 0–1440 |
-| `pickup_limit_minutes` | 0–720 |
+| `pickup_limit_minutes` | 0–720; liczone od końca przerwy; 0 = wyłączone |
 | `max_uncollected` | 0–20 |
 | kwota zamówienia | ≤ 200 000 gr |
 | `code` (pickup) | ≤ 128 znaków, przycinany |

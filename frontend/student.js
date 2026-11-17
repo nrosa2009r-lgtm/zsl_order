@@ -7,6 +7,7 @@
     let cart = new Map();
     let info = null;
     let checkoutKey = null;
+    let selectedDate = "";
 
     function newIdempotencyKey() {
         if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -43,14 +44,92 @@
         );
         const checkoutButton = App.$("#checkoutButton");
         if (checkoutButton) checkoutButton.disabled = !enabled;
+        setupOrderOptions();
         renderMenu();
         renderCart();
     }
 
-    function stockRemaining(item) {
+    function addDays(key, days) {
+        const date = new Date(key + "T00:00:00Z");
+        date.setUTCDate(date.getUTCDate() + days);
+        return date.toISOString().slice(0, 10);
+    }
+
+    function todayKey() {
+        return (info && info.today) || selectedDate;
+    }
+
+    function isFutureOrder() {
+        return !!info && !!selectedDate && selectedDate !== info.today;
+    }
+
+    function setupOrderOptions() {
+        const dateField = App.$("#pickupDateField");
+        const dateInput = App.$("#pickupDate");
+        const ahead = info ? Number(info.order_days_ahead || 0) : 0;
+
+        if (ahead > 0 && info.today) {
+            dateField.hidden = false;
+            dateInput.min = info.today;
+            dateInput.max = addDays(info.today, ahead);
+            if (!dateInput.value || dateInput.value < info.today) {
+                dateInput.value = info.today;
+            } else if (dateInput.value > dateInput.max) {
+                dateInput.value = dateInput.max;
+            }
+        } else if (info) {
+            dateField.hidden = true;
+            dateInput.value = info.today || dateInput.value;
+        }
+        selectedDate = dateInput.value || (info && info.today) || "";
+
+        const breakField = App.$("#breakField");
+        const breakSelect = App.$("#breakSelect");
+        const breaks = (info && info.breaks) || [];
+        if (breaks.length) {
+            const previous = breakSelect.value;
+            App.clear(breakSelect);
+            breakSelect.append(
+                App.h("option", { text: "Wybierz przerwę", attrs: { value: "" } })
+            );
+            breaks.forEach(function (entry) {
+                breakSelect.append(App.h("option", {
+                    text: entry.name + " (" + entry.start_time + "–" + entry.end_time + ")",
+                    attrs: { value: String(entry.id) },
+                }));
+            });
+            if (previous && breaks.some(function (entry) { return String(entry.id) === previous; })) {
+                breakSelect.value = previous;
+            }
+            breakField.hidden = false;
+            breakSelect.required = true;
+        } else {
+            breakField.hidden = true;
+            breakSelect.required = false;
+            App.clear(breakSelect);
+        }
+
+        const banner = App.$("#futureStockBanner");
+        if (banner) {
+            const future = isFutureOrder();
+            banner.hidden = !future;
+            banner.textContent = future
+                ? "Zamówienie na przyszły dzień: stan magazynowy jest kontrolowany tylko " +
+                  "dla dzisiejszych zamówień, więc dostępność na wybrany dzień może się zmienić."
+                : "";
+        }
+    }
+
+    function rawStockRemaining(item) {
         return item.stock_remaining === null || item.stock_remaining === undefined
             ? null
             : item.stock_remaining;
+    }
+
+    function stockRemaining(item) {
+        // Przyszłe dni nie są kontrolowane — nie blokujemy koszyka stanem
+        // dzisiejszym.
+        return isFutureOrder() ? null : rawStockRemaining(item);
     }
 
     function renderMenu() {
@@ -95,13 +174,16 @@
 
             const inCart = cart.get(item.id) || 0;
             const remaining = stockRemaining(item);
-            if (remaining !== null) {
+            const todayRemaining = rawStockRemaining(item);
+            if (todayRemaining !== null) {
                 card.append(
                     App.h("p", {
-                        class: remaining > 0 ? "stock-note" : "stock-note sold-out",
-                        text: remaining > 0
-                            ? "Zostało " + remaining + " szt."
-                            : "Wyprzedane na dziś",
+                        class: todayRemaining > 0 ? "stock-note" : "stock-note sold-out",
+                        text: isFutureOrder()
+                            ? "Dziś: " + todayRemaining + " szt. — dzień przyszły bez limitu"
+                            : todayRemaining > 0
+                                ? "Zostało " + todayRemaining + " szt."
+                                : "Wyprzedane na dziś",
                     })
                 );
             }
@@ -148,6 +230,14 @@
             App.toast("Maksymalnie 10 sztuk jednej pozycji.", "error");
             return;
         }
+        const perBreak = perBreakLimit();
+        if (perBreak > 0 && current >= perBreak) {
+            App.toast(
+                "Limit na tę przerwę: maksymalnie " + perBreak + " szt. tej pozycji.",
+                "error"
+            );
+            return;
+        }
         if (current === 0 && cart.size >= maxItems) {
             App.toast("Zamówienie może zawierać maksymalnie " + maxItems + " różnych pozycji.", "error");
             return;
@@ -157,15 +247,28 @@
         renderCart();
     }
 
+    function perBreakLimit() {
+        const select = App.$("#breakSelect");
+        if (!info || !select || !select.value) return 0;
+        return Number(info.max_item_quantity_per_break || 0);
+    }
+
     function changeQuantity(id, delta) {
         const current = cart.get(id) || 0;
         const next = current + delta;
         const item = menu.find(function (entry) { return entry.id === id; });
         const remaining = item ? stockRemaining(item) : null;
+        const perBreak = perBreakLimit();
         if (next <= 0) {
             cart.delete(id);
         } else if (next > 10) {
             App.toast("Maksymalnie 10 sztuk jednej pozycji.", "error");
+            return;
+        } else if (perBreak > 0 && next > perBreak) {
+            App.toast(
+                "Limit na tę przerwę: maksymalnie " + perBreak + " szt. tej pozycji.",
+                "error"
+            );
             return;
         } else if (remaining !== null && next > remaining) {
             App.toast("Zostało tylko " + remaining + " szt. tej pozycji.", "error");
@@ -254,6 +357,18 @@
         const paymentInput = App.$('input[name="payment_method"]:checked');
         const paymentMethod = paymentInput ? paymentInput.value : "cash";
         const pickupTime = App.$("#pickupTime").value || "";
+        const dateInput = App.$("#pickupDate");
+        const breakSelect = App.$("#breakSelect");
+        const pickupDate = dateInput ? dateInput.value || "" : "";
+        const breakId = breakSelect && breakSelect.value
+            ? Number.parseInt(breakSelect.value, 10)
+            : null;
+
+        if (info && info.breaks && info.breaks.length && !breakId) {
+            errorNode.textContent = "Wybierz przerwę, na której chcesz odebrać zamówienie.";
+            errorNode.hidden = false;
+            return;
+        }
 
         // Ten sam klucz przy ponowieniu po timeoucie zwraca istniejące
         // zamówienie zamiast tworzyć drugie.
@@ -261,6 +376,8 @@
         const payload = {
             payment_method: paymentMethod,
             pickup_time: pickupTime,
+            pickup_date: pickupDate,
+            break_id: breakId,
             idempotency_key: checkoutKey,
             items: entries.map(function (entry) {
                 return { menu_item_id: entry.item.id, quantity: entry.quantity };
@@ -291,7 +408,9 @@
         const title = App.h("h2", { text: "Zamówienie przyjęte" });
         const subtitle = App.h("p", {
             class: "muted",
-            text: "Pokaż ten kod lub QR przy ladzie. Płatność przy odbiorze.",
+            text: "Pokaż ten kod lub QR przy ladzie. Płatność przy odbiorze." +
+                (order.pickup_date ? " Dzień odbioru: " + App.fmtDay(order.pickup_date) +
+                    (order.break_name ? " (" + order.break_name + ")" : "") + "." : ""),
         });
 
         const codeBox = App.h("div", { class: "pickup-code" });
@@ -364,6 +483,8 @@
         const meta = App.h("dl", { class: "order-meta" });
         [
             ["Złożono", App.fmtDate(order.created_at)],
+            ["Dzień odbioru", order.pickup_date ? App.fmtDay(order.pickup_date) : "Dzień złożenia"],
+            ["Przerwa", order.break_name || "—"],
             ["Odbiór", order.pickup_time || "Bez godziny"],
             ["Płatność", App.paymentLabels[order.payment_method] || order.payment_method],
             ["Opłacono", order.paid_at ? App.fmtDate(order.paid_at) : "—"],
@@ -458,6 +579,28 @@
         });
 
         App.$("#checkoutForm").addEventListener("submit", checkout);
+        const dateInput = App.$("#pickupDate");
+        if (dateInput) {
+            dateInput.addEventListener("change", function () {
+                selectedDate = dateInput.value || todayKey();
+                setupOrderOptions();
+                renderMenu();
+                renderCart();
+            });
+        }
+        const breakSelect = App.$("#breakSelect");
+        if (breakSelect) {
+            breakSelect.addEventListener("change", function () {
+                const limit = perBreakLimit();
+                if (limit > 0) {
+                    cart.forEach(function (quantity, id) {
+                        if (quantity > limit) cart.set(id, limit);
+                    });
+                    App.toast("Ilości w koszyku dopasowane do limitu przerwy.", "success");
+                }
+                renderCart();
+            });
+        }
         App.$('.tab[data-tab="orders"]').addEventListener("click", function () {
             loadOrders().catch(function (error) { App.toast(error.message, "error"); });
         });

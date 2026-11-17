@@ -35,6 +35,7 @@
                 <button id="refreshMenuButton" class="btn btn-ghost btn-small" type="button">Odśwież</button>
             </div>
             <div id="orderingBanner" class="banner banner-warning" hidden></div>
+            <div id="futureStockBanner" class="banner banner-warning" hidden></div>
 
             <div class="menu-layout">
                 <div id="menuList" class="menu-grid" aria-live="polite"></div>
@@ -64,6 +65,15 @@
                                 <span>Karta</span>
                             </label>
                         </fieldset>
+                        <div class="field" id="pickupDateField" hidden>
+                            <label for="pickupDate">Dzień odbioru</label>
+                            <input id="pickupDate" name="pickup_date" type="date">
+                        </div>
+                        <div class="field" id="breakField" hidden>
+                            <label for="breakSelect">Przerwa</label>
+                            <select id="breakSelect" name="break_id"></select>
+                            <small class="muted">Okno wydawania wybranej przerwy.</small>
+                        </div>
                         <div class="field">
                             <label for="pickupTime">Godzina odbioru (opcjonalnie)</label>
                             <input id="pickupTime" name="pickup_time" type="time" step="60">

@@ -164,6 +164,13 @@
         });
     }
 
+    function fmtDay(value) {
+        if (!value) return "—";
+        const parts = String(value).split("-");
+        if (parts.length !== 3) return String(value);
+        return parts[2] + "." + parts[1] + "." + parts[0];
+    }
+
     function fmtTime(timestamp) {
         if (!timestamp) return "—";
         return new Date(Number(timestamp) * 1000).toLocaleTimeString("pl-PL", {
@@ -502,6 +509,7 @@
         toast: toast,
         fmtPLN: fmtPLN,
         fmtDate: fmtDate,
+        fmtDay: fmtDay,
         fmtTime: fmtTime,
         statusLabels: statusLabels,
         paymentLabels: paymentLabels,

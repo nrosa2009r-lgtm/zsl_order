@@ -45,6 +45,7 @@
             summarySelector: "#reportSummary",
             tableSelector: "#reportTableBody",
             stockTableSelector: "#reportStockBody",
+            breakTableSelector: "#reportBreakBody",
             updatedSelector: "#reportUpdated",
             exportButtonSelector: "#exportReportButton",
         });

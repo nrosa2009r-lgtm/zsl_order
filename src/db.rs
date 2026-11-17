@@ -95,6 +95,7 @@ async fn seed_settings(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ("cancel_window_minutes", "30"),
         ("pickup_limit_minutes", "120"),
         ("max_uncollected", "0"),
+        ("order_days_ahead", "0"),
         ("max_item_quantity_per_break", "0"),
         ("one_active_order_per_break", "0"),
     ];
@@ -473,7 +474,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 7);
+        assert_eq!(applied, 8);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")
@@ -494,6 +495,7 @@ mod tests {
             ("order_items", "stock_reserved"),
             ("orders", "break_id"),
             ("orders", "issued_at"),
+            ("orders", "pickup_date"),
         ] {
             let columns: Vec<String> =
                 sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))

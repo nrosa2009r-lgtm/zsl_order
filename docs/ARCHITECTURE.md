@@ -69,7 +69,9 @@ rozdzielanie usług.
 | `src/handlers/auth.rs` | login, wydanie tokenu JWT, logout, `me`, zmiana hasła, logowanie zdarzeń bezpieczeństwa |
 | `src/handlers/public.rs` | publiczne informacje o stołówce i `/api/healthz` |
 | `src/handlers/menu.rs` | menu ucznia i personelu, CRUD pozycji, szybka korekta stanu (`/menu/:id/stock`) |
-| `src/handlers/orders.rs` | składanie/anulowanie zamówień z rezerwacją stanu, QR, kolejka kuchni, pickup, zmiana statusów, raport |
+| `src/handlers/orders.rs` | składanie/anulowanie zamówień z rezerwacją stanu, limity przerw, QR, kolejka kuchni, pickup, zmiana statusów, raport |
+| `src/handlers/breaks.rs` | API przerw: CRUD dla admina, lista aktywnych dla personelu |
+| `src/breaks.rs` | walidacja przerw, okna czasowe, dzień odbioru z fallbackiem na `created_at` |
 | `src/stock.rs` | dzienny stan magazynowy: leniwy reset dobowy, warunkowa rezerwacja w transakcji, zwrot przy anulowaniu |
 | `src/handlers/admin.rs` | statystyki, aktywność, konta, generowanie, reset haseł, usuwanie kont, eksport CSV, ustawienia, audyt |
 
@@ -165,15 +167,14 @@ POST /api/student/orders
   → auth + CSRF + rola student
   → sprawdź ordering_enabled, limity otwartych zamówień
   → sprawdź klucz idempotencji (powtórka zwraca istniejące zamówienie)
-  → waliduj płatność, godzinę, pozycje (1–10 szt., bez duplikatów)
-  → SELECT menu_items WHERE id IN (...) (QueryBuilder, bindowane)
-  → sprawdź istnienie i available
-  → policz total_cents po stronie serwera (cena z bazy)
+  → waliduj płatność, dzień odbioru (0–order_days_ahead) i pozycje
   → BEGIN IMMEDIATE
+      → sprawdź przerwę (wymagana, gdy są aktywne) i okno pickup_time
+      → sprawdź limity per przerwa (dzień + przerwa + uczeń)
       → leniwy reset stanu na dziś (stock::reset_daily_stock)
-      → rezerwacja stanu (stock::reserve, warunkowy UPDATE)
+      → rezerwacja stanu tylko dla zamówień na dziś (stock::reserve)
       → wygeneruj unikalny code (6 liter) i qr_token (24 B)
-      → INSERT orders
+      → INSERT orders (pickup_date, break_id)
       → INSERT order_items (snapshot nazwy i ceny, stock_reserved)
     COMMIT
   → audit(order_created)
@@ -202,8 +203,12 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
   zamówienia, zmianie stanu i raporcie. Doba jest liczona w
   `Europe/Warsaw`, także w dniach zmiany czasu.
 - Anulowanie przez ucznia i administratora zwraca stan tylko wtedy, gdy
-  zamówienie jest z dzisiejszego dnia i nie zostało wydane ani
-  nieodebrane.
+  dzień odbioru zamówienia to dziś (dla starych wierszy: dzień złożenia)
+  i nie zostało wydane ani nieodebrane.
+- Zamówienie na przyszły dzień nie rezerwuje stanu
+  (`order_items.stock_reserved = 0`); stan przyszłych dni nie jest
+  rezerwowany ani kontrolowany — to świadome ograniczenie pierwszej
+  wersji.
 - Stan jest widoczny w menu ucznia (`stock_remaining`), na kartach menu
   personelu i w raporcie dziennym. CSV raportu pieniężnego pozostaje bez
   zmian.
@@ -219,9 +224,9 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
   szukaj). `POST /api/staff/pickup` normalizuje krótki kod do wielkich
   liter, opcjonalnie usuwa starszy prefiks `ZSL:` i szuka po `qr_token`
   lub `code`.
-- Pickup akceptuje tylko zamówienie z dzisiejszego dnia w statusie
-  `ordered`; po `issued` kod jest jednorazowo zużyty. Pickup **nie
-  zmienia** statusu — wydanie następuje przez
+- Pickup akceptuje tylko zamówienie, którego `pickup_date` to dziś,
+  w statusie `ordered`; po `issued` kod jest jednorazowo zużyty. Pickup
+  **nie zmienia** statusu — wydanie następuje przez
   `PATCH /api/staff/orders/:id`.
 - Każde udane wyszukanie trafia do audytu; nieudane próby zasilają
   `PickupLimiter`.
@@ -233,10 +238,16 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 - Kuchnia: `ordered → issued`; `issued` automatycznie ustawia `paid`
   i zapisuje `issued_at`.
 - Kuchnia nie może modyfikować zamówień `issued`/`cancelled`/
-  `uncollected`.
+  `uncollected` ani zamówień, których dzień odbioru nie jest dzisiejszy.
 - Student może anulować tylko własne nieopłacone `ordered`.
 - Administrator może ustawić `ordered`/`issued`/`cancelled` i płatność;
   korekta nieodebranego zdejmuje `uncollected_at`.
+- `mark_uncollected` zamyka zamówienie po **końcu przerwy +
+  `pickup_limit_minutes`** (strefa szkoły), a nie po samym upływie czasu
+  od `created_at`. Zamówienia z poprzednich dni zamyka zawsze; dzisiejsze
+  bez przerwy (stare dane) pomija. `pickup_limit_minutes = 0` wyłącza
+  auto-oznaczanie. Blokada `max_uncollected` liczy tylko zamówienia
+  `uncollected` z `uncollected_at` ustawionym przez tę regułę.
 
 ### 5.7. Statystyki aktywności
 
@@ -336,9 +347,11 @@ Kluczowe decyzje:
   w momencie zakupu. Edycja lub ukrycie menu nie zmienia historii.
 - **Miękkie ukrywanie menu** — `available = 0` zamiast `DELETE`, aby nie
   tracić referencji.
-- **Brak kaskadowego usuwania użytkownika z zamówieniami** —
-  `orders.user_id` ma `ON DELETE RESTRICT`; historia zamówień jest
-  zachowana.
+- **Historia zamówień przeżywa konto** — `orders.user_id` ma
+  `ON DELETE SET NULL`, a API pokazuje `konto usunięte`.
+- **Przerwy bez kopiowania nazwy** — `orders.break_id` wskazuje
+  `breaks.id` z `ON DELETE SET NULL`; przerwy z historią wyłącza się
+  zamiast usuwać, więc raporty zachowują nazwę.
 - **Tokeny tylko jako skróty** — sesje nie zawierają jawnego tokenu;
   `qr_token` jest jawny w bazie (potrzebny do generowania QR), ale baza
   powinna być chroniona jak każdy zbiór danych.
@@ -358,11 +371,13 @@ Kluczowe decyzje:
   - funkcje DOM (`h`, `textContent`, bez `innerHTML`), formatowanie PLN,
     dat, statusów, toasty.
 - `staff-common.js` — wspólne komponenty kuchni i admina: menedżer menu,
-  karty zamówień, wynik wyszukiwania pickup.
+  karty zamówień (dzień odbioru i przerwa), raport z rozbiciem na przerwy,
+  wynik wyszukiwania pickup.
 - `charts.js` — lekkie wykresy na canvasie (linia, słupki, słupki poziome),
   świadome DPR, responsywne, kolory z CSS variables; bez zewnętrznych
   bibliotek i bez CDN.
-- `student.js` — menu, koszyk, checkout, potwierdzenie z QR, lista zamówień.
+- `student.js` — menu, koszyk, wybór dnia odbioru i przerwy, checkout,
+  potwierdzenie z QR, lista zamówień.
 - `kitchen.js` — kolejka, formularz pickup, skaner QR kamery
   (`BarcodeDetector`, a gdy go brak — lokalny `vendor/jsQR.js` ładowany
   dynamicznie tylko na stronie kuchni) z fallbackiem na pole tekstowe.

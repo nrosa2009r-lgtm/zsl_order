@@ -97,6 +97,8 @@ pub struct SettingsRequest {
     #[serde(default)]
     pub max_uncollected: Option<i64>,
     #[serde(default)]
+    pub order_days_ahead: Option<i64>,
+    #[serde(default)]
     pub max_item_quantity_per_break: Option<i64>,
     #[serde(default)]
     pub one_active_order_per_break: Option<bool>,
@@ -204,12 +206,18 @@ pub async fn stats(
         .bind(util::start_of_today())
         .fetch_one(&state.db)
         .await?;
+    // Przychód dnia to pieniądze faktycznie przyjęte dziś. Zamówienie
+    // złożone wcześniej, ale opłacone przy odbiorze, liczy się w dniu
+    // `paid_at`, a nie w dniu złożenia.
     let revenue_today: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(total_cents), 0) FROM orders
-         WHERE created_at >= ? AND payment_status = 'paid'
+         WHERE paid_at >= ? AND paid_at < ? AND payment_status = 'paid'
            AND status <> 'cancelled'",
     )
     .bind(util::start_of_today())
+    .bind(util::start_of_local_date(
+        util::today() + chrono::Duration::days(1),
+    ))
     .fetch_one(&state.db)
     .await?;
     let open_orders: i64 =
@@ -1244,6 +1252,14 @@ pub async fn update_settings(
             ));
         }
         updates.push(("max_uncollected".to_string(), value.to_string()));
+    }
+    if let Some(value) = body.order_days_ahead {
+        if !(0..=7).contains(&value) {
+            return Err(AppError::bad(
+                "Zamawianie z wyprzedzeniem musi wynosić od 0 do 7 dni (0 = tylko dziś).",
+            ));
+        }
+        updates.push(("order_days_ahead".to_string(), value.to_string()));
     }
     if let Some(value) = body.max_item_quantity_per_break {
         if !(0..=10).contains(&value) {

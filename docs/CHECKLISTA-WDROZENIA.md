@@ -113,10 +113,34 @@ dlaczego).
 - [ ] **Stan magazynowy**: pozycja z limitem 1, dwa równoczesne
       zamówienia (jedno `201`, jedno `409`, brak `500`), zwrot po
       anulowaniu i reset następnego dnia z `stock_default`.
-- [ ] **Migracja 0007**: przed startem wykonany backup, po migracji
+- [ ] **Migracje 0007 i 0008**: przed startem wykonany backup, po migracji
       `PRAGMA foreign_key_check` i `integrity_check` bez błędów, liczba
       `order_items` i suma `total_cents` zgodne z kopią, historia
-      zamówień widoczna po usunięciu konta (jeśli testowane).
+      zamówień widoczna po usunięciu konta (jeśli testowane), a kolumna
+      `orders.pickup_date` istnieje i indeks `orders_pickup_idx` jest
+      widoczny w `PRAGMA index_list('orders')`.
+- [ ] **Skonfiguruj przerwy**: co najmniej jedna aktywna przerwa dodana
+      w panelu **Przerwy** przed pierwszym dniem pracy. Uczeń widzi wybór
+      przerwy, a zamówienie z godziną poza oknem jest odrzucane (`400`).
+      Próba usunięcia przerwy z historią daje `409`, a wyłączenie ukrywa
+      ją w formularzu ucznia. Pusta lista przerw jest widoczna jako
+      ostrzeżenie w panelu admina.
+- [ ] **Test nieodebranych**: zamówienie na **późniejszą** przerwę nie
+      zmienia statusu po restarcie aplikacji ani po samym upływie
+      `pickup_limit_minutes` od złożenia; staje się `uncollected` dopiero
+      po końcu swojej przerwy + limit. Zamówienie z poprzedniego dnia jest
+      zamykane zawsze. Przy `pickup_limit_minutes = 0` nic nie jest
+      zamykane automatycznie, a `max_uncollected` blokuje tylko
+      zamówienia zamknięte tą regułą. Sprawdź dzień zmiany czasu.
+- [ ] **Zamawianie z wyprzedzeniem**: `order_days_ahead` ustawione
+      świadomie. Przy wartości > 0 sprawdzono, że zamówienie na przyszły
+      dzień nie zmniejsza dzisiejszego stanu, nie generuje QR, nie da się
+      go wydać w kuchni i nie jest oznaczane jako nieodebrane przed
+      swoim dniem. Zespół zna ograniczenie: stan przyszłych dni nie jest
+      kontrolowany.
+- [ ] **Raport i CSV po przebudowie**: tabela przerw zgadza się z liczbą
+      zamówień dnia, a suma `orders` w sekcji przerw równa się sumie
+      łącznej.
 - [ ] **Test obciążeniowy** dla spodziewanego szczytu (np. 200–1000
       uczniów, przerwa obiadowa): zdefiniowane kryterium (np. p95 < 1 s,
       brak błędów 5xx, stabilna baza) i wynik zapisany.

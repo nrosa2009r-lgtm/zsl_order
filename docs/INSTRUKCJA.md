@@ -253,8 +253,8 @@ Konfiguracja dzieli się na trzy warstwy:
    Czytane przez systemd; wymagają restartu usługi.
 2. **`config.json`** — ustawienia bazy, sesji, backupu i limiterów.
    Czytane przy starcie; wymagają restartu usługi.
-3. **Ustawienia w panelu admina** — nazwa stołówki, menu, terminy i limity
-   biznesowe. Działają natychmiast, bez restartu.
+3. **Ustawienia w panelu admina** — nazwa stołówki, menu, przerwy, terminy
+   i limity biznesowe. Działają natychmiast, bez restartu.
 
 ### 3.1. Plik `.env` — każde pole
 
@@ -338,12 +338,34 @@ Szybkie przyciski **−1 szt.**, **+1 szt.** i **Bez limitu** na karcie
 pozycji pozwalają skorygować stan bez otwierania dialogu. Każda zmiana
 trafia do audytu jako `menu_stock_changed`.
 
-Na razie zamówienia dotyczą tylko dzisiejszego dnia i limit dotyczy
-dzisiejszego stanu. Gdy w kolejnej wersji pojawi się zamawianie
-z wyprzedzeniem, limit będzie kontrolowany wyłącznie dla zamówień na
-dziś — stan przyszłych dni nie będzie kontrolowany; panel administratora
-pokaże to ostrzeżenie. W panelu ucznia widoczne jest „Zostało N szt.”
+Stan magazynowy jest **dzienny**. Gdy w ustawieniach włączysz zamawianie
+z wyprzedzeniem (`order_days_ahead > 0`), limit będzie kontrolowany
+wyłącznie dla zamówień na dziś — zamówienie na przyszły dzień nie
+rezerwuje dzisiejszych sztuk, a jego stan nie jest kontrolowany. Panel
+admina pokazuje to ostrzeżenie przy ustawieniu, a uczeń widzi komunikat
+po wybraniu przyszłej daty. W panelu ucznia widoczne jest „Zostało N szt.”
 albo „Wyprzedane na dziś”.
+
+### 3.3.1. Przerwy (okna wydawania)
+
+W panelu admina przejdź do zakładki **Przerwy** i dodaj co najmniej jedną
+aktywną przerwę przed pierwszym dniem pracy. Przerwy **nie są seedowane**
+— pusta lista oznacza, że uczeń nie wybiera okna odbioru, a limity
+`*_per_break` nie działają (panel pokazuje ostrzeżenie).
+
+| Pole | Znaczenie | Uwagi |
+| --- | --- | --- |
+| `name` | nazwa przerwy | unikalna, 1–60 znaków, np. `Długa przerwa` |
+| `start_time` | początek okna | `HH:MM`, np. `11:30` |
+| `end_time` | koniec okna | `HH:MM`, musi być później niż początek |
+| `active` | widoczna dla uczniów | wyłączenie ukrywa przerwę w formularzu |
+| `sort_order` | kolejność | mniejsza liczba = wyżej |
+
+Przerwy obowiązują codziennie. Uczeń wybiera dzień odbioru i przerwę;
+godzina odbioru (jeśli podana) musi mieścić się w oknie przerwy. Przerwy
+z historią zamówień **nie należy usuwać** — zamiast tego wyłącz ją
+(`active = false`), aby raporty zachowały nazwę. Usunięcie jest możliwe
+tylko dla nieużywanej przerwy.
 
 ### 3.4. Godziny, terminy i limity
 
@@ -357,22 +379,42 @@ W panelu admina **Ustawienia**:
 | `max_open_orders` | `3` | 1–10 | limit otwartych zamówień jednego ucznia |
 | `max_order_items` | `20` | 1–50 | limit pozycji w jednym zamówieniu |
 | `cancel_window_minutes` | `30` | 0–1440 | jak długo uczeń może anulować; `0` = bez limitu |
-| `pickup_limit_minutes` | `120` | 0–720 | po ilu minutach od przyjęcia (`ordered`) zamówienie staje się nieodebrane; `0` = wyłączone |
+| `pickup_limit_minutes` | `120` | 0–720 | ile minut po **końcu przerwy odbioru** zamówienie staje się nieodebrane; `0` = wyłączone |
 | `max_uncollected` | `0` | 0–20 | ile nieodebranych blokuje kolejne zamówienia; `0` = brak blokady |
+| `order_days_ahead` | `0` | 0–7 | ile dni naprzód można zamawiać; `0` = tylko dziś |
 | `max_item_quantity_per_break` | `0` | 0–10 | limit sztuk jednej pozycji na przerwę; `0` = bez limitu |
-| `one_active_order_per_break` | `false` | — | jedno aktywne zamówienie na przerwę |
+| `one_active_order_per_break` | `false` | — | jedno aktywne zamówienie na parę (dzień, przerwa) |
 
-Pola `*_per_break` są już widoczne i zapisywane, a tabela przerw
-istnieje w bazie. Egzekwowanie limitów „na przerwę” wchodzi w kolejnym
-kroku przebudowy; do tego czasu nie zmieniają działania zamówień.
+Limity „na przerwę” działają tylko dla zamówień z wybraną przerwą i liczą
+się osobno dla każdego dnia. Obejmują zamówienia w statusie `ordered`
+i `issued`. `max_item_quantity_per_break` sumuje sztuki danej pozycji
+u jednego ucznia; `one_active_order_per_break` blokuje drugie aktywne
+zamówienie na tę samą przerwę i dzień. Gdy nie ma aktywnej przerwy, oba
+limity nie mają zastosowania.
+
+Przy `order_days_ahead > 0` uczeń może wybrać przyszły dzień odbioru,
+ale stan magazynowy przyszłych dni **nie jest kontrolowany** — rezerwacja
+dotyczy wyłącznie dzisiejszego dnia.
 
 Semantyka:
 
 - Anulowanie działa tylko dla nieopłaconego zamówienia w statusie
   `ordered` i w oknie `cancel_window_minutes` liczonym od złożenia.
-- „Nieodebrane” ustawia się automatycznie, gdy zamówienie pozostaje
-  niewydane dłużej niż `pickup_limit_minutes`. Sprawdzenie odbywa się
-  przy starcie i cyklicznie w tle.
+- „Nieodebrane” ustawia się automatycznie po **końcu przerwy odbioru +
+  `pickup_limit_minutes`** (strefa szkoły). Sprawdzenie odbywa się przy
+  starcie i cyklicznie w tle. Limit nie jest liczony od złożenia
+  zamówienia, więc zamówienie na późniejszą przerwę złożone rano nie
+  zostanie zamknięte przed swoim oknem.
+- Zamówienia z poprzednich dni są zamykane zawsze — także te bez przerwy
+  i historyczne wiersze bez `pickup_date`. Dzisiejsze zamówienie bez
+  przerwy (stare dane) nie jest zamykane automatycznie.
+- Zamówienie na przyszły dzień nie jest oznaczane jako nieodebrane przed
+  swoim dniem odbioru.
+- `pickup_limit_minutes = 0` wyłącza automatyczne oznaczanie nieodebranych
+  **całkowicie** — także dla poprzednich dni. Blokada `max_uncollected`
+  liczy tylko zamówienia zamknięte tą regułą.
+- Kod QR i wydanie w kuchni działają wyłącznie w dniu odbioru
+  (`pickup_date`); zamówienie na jutro nie zostanie wydane dziś.
 - Po przekroczeniu `max_uncollected` uczeń nie złoży nowego zamówienia,
   dopóki administrator nie zdejmie blokady (rozdział 7.6).
 - Ustawienia działają natychmiast; nie wymagają restartu.
@@ -652,9 +694,10 @@ kamery. Jeśli chcesz kamerę, wdróż HTTPS w sieci lokalnej albo tryb
 
 ### 6.5. Zamówienia nieodebrane
 
-Gdy zamówienie pozostaje niewydane dłużej niż `pickup_limit_minutes`,
-system oznacza je jako `uncollected`. Kuchnia widzi taki status, ale nie
-może go zmienić. Administrator może:
+Gdy minie koniec przerwy odbioru i dodatkowo `pickup_limit_minutes`,
+system oznacza zamówienie jako `uncollected`. Zamówienia z poprzednich dni
+są zamykane zawsze; dzisiejsze zamówienie bez przerwy (stare dane) nie jest
+zamykane automatycznie. Kuchnia widzi taki status, ale nie może go zmienić. Administrator może:
 
 - zdjąć blokadę u ucznia (jeśli limit `max_uncollected` blokuje kolejne
   zamówienia),
@@ -722,6 +765,8 @@ sprawdź wpływ na otwarte zamówienia:
 - skrócenie `cancel_window_minutes` działa od razu,
 - zwiększenie `pickup_limit_minutes` nie przywraca już oznaczonych
   nieodebranych,
+- `pickup_limit_minutes = 0` wyłącza automatyczne oznaczanie nieodebranych
+  (także dla poprzednich dni); ustaw rozsądną wartość przed pilotażem,
 - `ordering_enabled = false` blokuje nowe zamówienia, ale nie zamyka
   istniejących.
 
@@ -1231,6 +1276,10 @@ potwierdzony przez osobę odpowiedzialną.
 
 - [ ] Limity logowania i odbioru są włączone.
 - [ ] `max_uncollected` jest ustawione zgodnie z polityką szkoły.
+- [ ] Co najmniej jedna **aktywna przerwa** jest skonfigurowana, a limity
+      `*_per_break` mają wartości zgodne z polityką.
+- [ ] `order_days_ahead` jest ustawione świadomie; przy wartości > 0 zespół
+      wie, że stan przyszłych dni nie jest rezerwowany ani kontrolowany.
 - [ ] Monitoring sprawdza `/api/healthz` i wiek najnowszej kopii.
 - [ ] Alert o nieudanym backupie trafia do człowieka, który go czyta.
 - [ ] Dysk ma monitorowany próg zapełnienia (np. 80%).
