@@ -46,7 +46,11 @@ VALUES ('s-1a-abcdefghij','hash','student','UCZ-1A-AAAAA',1,1,100),
 INSERT INTO menu_items (name,description,price_cents,category,allergens,available,sort_order,created_at,updated_at)
 VALUES ('Zupa','Test',500,'Zupy','',1,1,100,100);
 INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at)
-VALUES (1,'ABC123','tok123','completed','cash','paid',500,'12:00',100,100);
+VALUES (1,'ABC123','tok123','completed','cash','paid',500,'12:00',100,100),
+       (1,'NEW001','toknew001','new','cash','unpaid',500,'12:01',unixepoch(),unixepoch()),
+       (1,'PREP01','tokprep01','preparing','card','unpaid',500,'12:02',unixepoch(),unixepoch()),
+       (1,'READY1','tokready1','ready','cash','unpaid',500,'12:03',unixepoch(),unixepoch()),
+       (1,'CANC01','tokcanc01','cancelled','cash','unpaid',500,'12:04',unixepoch(),unixepoch());
 INSERT INTO order_items (order_id,menu_item_id,name,price_cents,quantity) VALUES (1,1,'Zupa',500,1);
 INSERT INTO settings (key,value) VALUES ('cafeteria_name','Testowa stołówka');
 SQL
@@ -69,8 +73,8 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "6" ] \
-  && pass "pusta baza: 6 migracji zastosowanych" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "7" ] \
+  && pass "pusta baza: 7 migracji zastosowanych" \
   || fail "pusta baza: brak migracji"
 
 for index in orders_created_idx orders_idempotency_created_idx; do
@@ -79,15 +83,15 @@ for index in orders_created_idx orders_idempotency_created_idx; do
     || fail "pusta baza: brak indeksu $index"
 done
 
-for table in users sessions menu_items orders order_items settings audit_log; do
+for table in users sessions menu_items orders order_items breaks settings audit_log; do
   [ "$(sqlite3 "$empty_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='$table';")" = "1" ] \
     && pass "pusta baza: tabela $table" \
     || fail "pusta baza: brak tabeli $table"
 done
 
-[ "$(sqlite3 "$legacy_db" 'SELECT COUNT(*) FROM orders;')" = "1" ] \
-  && pass "legacy: zamówienie zachowane" \
-  || fail "legacy: utracono zamówienie"
+[ "$(sqlite3 "$legacy_db" 'SELECT COUNT(*) FROM orders;')" = "5" ] \
+  && pass "legacy: zamówienia zachowane" \
+  || fail "legacy: utracono zamówienia"
 
 for column in stock_remaining stock_default stock_date; do
   [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('menu_items') WHERE name='$column';")" = "1" ] \
@@ -111,7 +115,7 @@ done
   && pass "legacy: foreign_key_check bez błędów" \
   || fail "legacy: foreign_key_check zgłasza problemy"
 
-for column in paid_at paid_by ready_at uncollected_at idempotency_key; do
+for column in paid_at paid_by ready_at issued_at uncollected_at idempotency_key break_id; do
   [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('orders') WHERE name='$column';")" = "1" ] \
     && pass "legacy: kolumna orders.$column" \
     || fail "legacy: brak kolumny orders.$column"
@@ -120,6 +124,46 @@ done
 [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM orders WHERE payment_status='paid' AND paid_at IS NOT NULL;")" = "1" ] \
   && pass "legacy: paid_at uzupełnione dla opłaconych" \
   || fail "legacy: brak paid_at dla opłaconego zamówienia"
+
+[ "$(sqlite3 "$legacy_db" "SELECT group_concat(status || ':' || n, ',') FROM (SELECT status, COUNT(*) AS n FROM orders GROUP BY status ORDER BY status);")" = "cancelled:1,issued:1,ordered:3" ] \
+  && pass "legacy: statusy zmapowane na ordered/issued/cancelled" \
+  || fail "legacy: złe statusy po migracji ($(sqlite3 "$legacy_db" "SELECT group_concat(status, ',') FROM orders;"))"
+
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM orders WHERE status='issued' AND issued_at IS NOT NULL;")" = "1" ] \
+  && pass "legacy: issued_at uzupełnione dla wydanych" \
+  || fail "legacy: brak issued_at"
+
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('breaks') WHERE name IN ('name','start_time','end_time','active','sort_order');")" = "5" ] \
+  && pass "legacy: tabela breaks ma wymagane kolumny" \
+  || fail "legacy: brak kolumn tabeli breaks"
+
+[ "$(sqlite3 "$legacy_db" "SELECT [notnull] FROM pragma_table_info('orders') WHERE name='user_id';")" = "0" ] \
+  && pass "legacy: orders.user_id dopuszcza NULL" \
+  || fail "legacy: orders.user_id nadal NOT NULL"
+
+[ "$(sqlite3 "$legacy_db" 'SELECT COUNT(*) FROM order_items;')" = "1" ] \
+  && pass "legacy: pozycje zamówień zachowane" \
+  || fail "legacy: utracono pozycje zamówień"
+
+# Ponowne uruchomienie kopii mapuje stary wiersz cancelled+uncollected_at.
+sqlite3 "$legacy_db" "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at,uncollected_at)
+VALUES (1,'UNCOL1','tokuncol1','cancelled','cash','paid',500,'12:05',105,105,105);"
+sqlite3 "$legacy_db" < "$ROOT/migrations/0007_orders_rebuild_breaks.sql"
+[ "$(sqlite3 "$legacy_db" "SELECT status FROM orders WHERE code='UNCOL1';")" = "uncollected" ] \
+  && pass "legacy: cancelled + uncollected_at -> status uncollected" \
+  || fail "legacy: nie zmapowano nieodebranego"
+
+# Usunięcie konta nie usuwa historii zamówień (ON DELETE SET NULL).
+# Test na osobnym koncie, aby nie zmieniać liczników kont używanych wyżej.
+sqlite3 "$legacy_db" "PRAGMA foreign_keys=ON;
+INSERT INTO users (login,password_hash,role,display_code,created_at)
+VALUES ('s-del000000','x','student','UCZ-DEL01',106);
+INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at)
+VALUES (last_insert_rowid(),'DEL001','tokdel001','ordered','cash','unpaid',500,'12:06',106,106);
+DELETE FROM users WHERE login='s-del000000';"
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM orders WHERE code='DEL001' AND user_id IS NULL;")" = "1" ] \
+  && pass "legacy: usunięcie konta zeruje user_id, zostawia zamówienia" \
+  || fail "legacy: usunięcie konta zmieniło historię"
 
 [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM users WHERE role != 'admin';")" = "4" ] \
   && pass "legacy: konta zachowane" \

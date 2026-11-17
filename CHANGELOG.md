@@ -36,6 +36,11 @@ Autorem projektu jest **natan-rosa**.
 - Nowe ustawienia `max_item_quantity_per_break` i
   `one_active_order_per_break` (zapisywane teraz, egzekwowane po
   wdrożeniu przerw).
+- Migracja `0007_orders_rebuild_breaks.sql`: statusy `ordered`, `issued`,
+  `cancelled`, `uncollected`, pole `issued_at`, tabela `breaks` oraz
+  `orders.user_id` dopuszczające `NULL` (`ON DELETE SET NULL`). Historia
+  zamówień może przetrwać usunięcie konta; API pokazuje wtedy
+  `konto usunięte`.
 
 ### Zmienione
 
@@ -44,6 +49,10 @@ Autorem projektu jest **natan-rosa**.
   kuchnia i admin 12 znaków, limit 128. `/api/auth/me` zwraca
   `password_min_length` i gotowy komunikat, więc panel nie zaszywa już
   liczby „10” w JavaScript.
+- Cykl życia zamówienia uproszczony do `ordered → issued`, z osobnymi
+  statusami `cancelled` i `uncollected`; kuchnia wydaje jednym przyciskiem
+  „Wydaj i opłacone”. Raport i statystyki używają pola `issued_orders`
+  zamiast `completed_orders`, a opłacone nieodebrane pozostają w utargu.
 
 ### Naprawione
 
@@ -63,9 +72,10 @@ przez Cloudflare Tunnel.
 
 - Trzy niezależne panele: uczeń, kuchnia i administrator, w czystym
   HTML/CSS/JS bez frameworka i bez CDN.
-- Zamówienia z cyklem życia `new → preparing → ready → completed`,
-  anulowaniem przez ucznia, limitami otwartych zamówień i konfigurowalnymi
-  terminami odbioru.
+- Zamówienia z cyklem życia `new → preparing → ready → completed`
+  (w wersji 1.0; od kolejnej wersji `ordered → issued`), anulowaniem
+  przez ucznia, limitami otwartych zamówień i konfigurowalnymi terminami
+  odbioru.
 - Odbiór QR: krótki kod i nieprzejrzysty token 48 hex, wyłącznie dla
   dzisiejszych zamówień `ready`, jednorazowo zużywany przez zmianę statusu.
 - Skaner QR w kuchni: `BarcodeDetector`, lokalny fallback **jsQR 1.4.0**

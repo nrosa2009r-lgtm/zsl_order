@@ -357,22 +357,22 @@ W panelu admina **Ustawienia**:
 | `max_open_orders` | `3` | 1–10 | limit otwartych zamówień jednego ucznia |
 | `max_order_items` | `20` | 1–50 | limit pozycji w jednym zamówieniu |
 | `cancel_window_minutes` | `30` | 0–1440 | jak długo uczeń może anulować; `0` = bez limitu |
-| `pickup_limit_minutes` | `120` | 0–720 | po ilu minutach od `ready` zamówienie staje się nieodebrane; `0` = wyłączone |
+| `pickup_limit_minutes` | `120` | 0–720 | po ilu minutach od przyjęcia (`ordered`) zamówienie staje się nieodebrane; `0` = wyłączone |
 | `max_uncollected` | `0` | 0–20 | ile nieodebranych blokuje kolejne zamówienia; `0` = brak blokady |
 | `max_item_quantity_per_break` | `0` | 0–10 | limit sztuk jednej pozycji na przerwę; `0` = bez limitu |
 | `one_active_order_per_break` | `false` | — | jedno aktywne zamówienie na przerwę |
 
-Pola `*_per_break` są już widoczne i zapisywane, ale zaczną obowiązywać
-po wdrożeniu przerw (kolejna aktualizacja). Do tego czasu nie zmieniają
-działania zamówień.
+Pola `*_per_break` są już widoczne i zapisywane, a tabela przerw
+istnieje w bazie. Egzekwowanie limitów „na przerwę” wchodzi w kolejnym
+kroku przebudowy; do tego czasu nie zmieniają działania zamówień.
 
 Semantyka:
 
-- Anulowanie działa tylko dla zamówienia w statusie `new` i w oknie
-  `cancel_window_minutes` liczonym od złożenia.
-- „Nieodebrane” ustawia się automatycznie, gdy zamówienie jest `ready`
-  dłużej niż `pickup_limit_minutes`. Sprawdzenie odbywa się przy starcie
-  i cyklicznie w tle.
+- Anulowanie działa tylko dla nieopłaconego zamówienia w statusie
+  `ordered` i w oknie `cancel_window_minutes` liczonym od złożenia.
+- „Nieodebrane” ustawia się automatycznie, gdy zamówienie pozostaje
+  niewydane dłużej niż `pickup_limit_minutes`. Sprawdzenie odbywa się
+  przy starcie i cyklicznie w tle.
 - Po przekroczeniu `max_uncollected` uczeń nie złoży nowego zamówienia,
   dopóki administrator nie zdejmie blokady (rozdział 7.6).
 - Ustawienia działają natychmiast; nie wymagają restartu.
@@ -557,7 +557,7 @@ jako opłacone; jeśli było nieopłacone, system zrobi to automatycznie.
 - QR zawiera wyłącznie losowy token — **bez** loginu, danych ucznia,
   ceny i adresu. Sam kod nie daje dostępu bez zalogowanego konta
   personelu.
-- QR działa tylko dla **dzisiejszego** zamówienia w statusie `ready`.
+- QR działa tylko dla **dzisiejszego** zamówienia w statusie `ordered`.
 - Po wydaniu kod jest jednorazowo zużyty; ponowne skanowanie zwróci błąd.
 - Nie publikuj QR w mediach społecznościowych. Traktuj go jak bilet.
 
@@ -565,8 +565,9 @@ jako opłacone; jeśli było nieopłacone, system zrobi to automatycznie.
 
 Zamówienie możesz anulować tylko wtedy, gdy:
 
-- ma status `new` (nie zostało jeszcze przyjęte do przygotowania),
-- nie minął termin `cancel_window_minutes` od złożenia.
+- ma status `ordered` (nie zostało jeszcze wydane),
+- nie minął termin `cancel_window_minutes` od złożenia,
+- nie jest jeszcze opłacone.
 
 Po anulowaniu kod QR przestaje działać. Jeśli zamówienie złożono
 dzisiaj i nie zostało jeszcze wydane, anulowanie zwraca sztuki na
@@ -578,11 +579,9 @@ rozpoczęciu przygotowania anulowanie nie jest możliwe.
 
 | Status | Znaczenie |
 | --- | --- |
-| `new` | przyjęte, czeka na przygotowanie |
-| `preparing` | w przygotowaniu |
-| `ready` | gotowe do odbioru |
-| `completed` | wydane |
-| `cancelled` | anulowane |
+| `ordered` | przyjęte, czeka na wydanie |
+| `issued` | wydane |
+| `cancelled` | anulowane jawnie |
 | `uncollected` | nieodebrane w terminie |
 
 ---
@@ -600,12 +599,12 @@ zmiany zamówienia z innego dnia kończy się `403`.
 
 ### 6.2. Lista zamówień i statusy
 
-- Domyślnie widoczne są zamówienia otwarte: `new`, `preparing`, `ready`.
-- Przejście statusów: `new → preparing → ready → completed`.
-- `completed` oznacza wydanie i automatycznie oznacza płatność jako
+- Domyślnie widoczne są zamówienia otwarte, czyli `ordered`.
+- Przejście statusów: `ordered → issued` (przycisk **Wydaj i opłacone**).
+- `issued` oznacza wydanie i automatycznie oznacza płatność jako
   opłaconą, jeśli była nieopłacona.
-- Anulowane (`cancelled`) i nieodebrane (`uncollected`) są zamknięte —
-  kuchnia nie może ich ponownie otworzyć.
+- Anulowane (`cancelled`), wydane (`issued`) i nieodebrane
+  (`uncollected`) są zamknięte — kuchnia nie może ich ponownie otworzyć.
 
 Nie cofaj płatności bez zgody administratora. Kuchnia nie może cofnąć
 oznaczenia „opłacone”; robi to wyłącznie administrator.
@@ -630,8 +629,8 @@ oznaczenia „opłacone”; robi to wyłącznie administrator.
 Błędy:
 
 - **404** — kod nie istnieje. Sprawdź, czy nie ma literówki.
-- **409** — zamówienie nie jest dzisiaj, nie jest jeszcze `ready`, zostało
-  już wydane, anulowane lub nieodebrane. Komunikat wyjaśnia powód.
+- **409** — zamówienie jest z innego dnia, zostało już wydane,
+  anulowane lub nieodebrane. Komunikat wyjaśnia powód.
 - **429** — zbyt wiele błędnych prób. Odczekaj czas podany w komunikacie
   (domyślnie 15 minut) i poproś administratora, jeśli blokada przeszkadza.
 
@@ -653,9 +652,9 @@ kamery. Jeśli chcesz kamerę, wdróż HTTPS w sieci lokalnej albo tryb
 
 ### 6.5. Zamówienia nieodebrane
 
-Gdy zamówienie jest `ready` dłużej niż `pickup_limit_minutes`, system
-oznacza je jako `uncollected`. Kuchnia widzi taki status, ale nie może
-go zmienić. Administrator może:
+Gdy zamówienie pozostaje niewydane dłużej niż `pickup_limit_minutes`,
+system oznacza je jako `uncollected`. Kuchnia widzi taki status, ale nie
+może go zmienić. Administrator może:
 
 - zdjąć blokadę u ucznia (jeśli limit `max_uncollected` blokuje kolejne
   zamówienia),
@@ -731,8 +730,8 @@ sprawdź wpływ na otwarte zamówienia:
 Zakładka **Raport**:
 
 1. Wybierz datę.
-2. Odczytaj podsumowanie: liczba zamówień, opłacone, nieopłacone,
-   anulowane, nieodebrane, sumy gotówka/karta/razem.
+2. Odczytaj podsumowanie: liczba zamówień, wydane, opłacone,
+   nieopłacone, anulowane, nieodebrane, sumy gotówka/karta/razem.
 3. Sprawdź tabelę **Stan magazynu**: bieżący stan, sprzedaż w dniu
    raportu i domyślny stan pozycji. Stan jest bieżący, nie historyczny.
 4. Pobierz CSV przyciskiem **Eksport CSV**. CSV zawiera wyłącznie
@@ -743,7 +742,9 @@ gotówkę, kartę i razem. Formuły w komórkach są neutralizowane apostrofem
 — nie otwieraj CSV w narzędziach, które ignorują to zabezpieczenie.
 
 Raport liczony jest z bazy dla wybranej doby `Europe/Warsaw`. Zamówienie
-opłacone, a potem nieodebrane, jest liczone raz — jako nieodebrane.
+opłacone, a potem nieodebrane, jest liczone raz — jako nieodebrane — ale
+pozostaje w utargu, bo pieniądze wpłynęły do kasy. Jawnie anulowane
+zamówienie nie jest liczone jako wydane ani w utargu.
 
 ### 7.6. Audyt
 
@@ -1134,7 +1135,7 @@ Najczęstsze przyczyny:
 
 ### 10.8. QR nie działa
 
-- Kod działa tylko dla dzisiejszego zamówienia `ready`.
+- Kod działa tylko dla dzisiejszego zamówienia `ordered`.
 - Po wydaniu jest jednorazowo zużyty.
 - Sprawdź, czy nie minął termin i czy zamówienie nie jest nieodebrane.
 - Przy `429` odczekaj blokadę limitera.

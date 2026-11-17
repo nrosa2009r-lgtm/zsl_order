@@ -243,7 +243,7 @@ administratora i dostęp do bazy, z zachowaniem backupu i audytu.
 ## 10. QR, kody i logi
 
 - QR: 48 znaków hex — nieprzejrzysty losowy token, bez danych ucznia.
-  Traktuj jak bilet; działa tylko dla dzisiejszego zamówienia `ready`.
+  Traktuj jak bilet; działa tylko dla dzisiejszego zamówienia `ordered`.
 - Krótki kod: 6 liter, wygoda personelu; nie publikuj.
 - Logi aplikacji: **JSON w journald**, bez plików `logs/`. Zawierają
   metodę, ścieżkę bez query, status i czas odpowiedzi oraz techniczne

@@ -203,7 +203,7 @@ STATUS1=$(printf '%s' "$BODY" | jq -r '.status // empty')
 PAY1=$(printf '%s' "$BODY" | jq -r '.payment_status // empty')
 [ "$STATUS" = "201" ] && pass "zamówienie: utworzone (201)" || fail "zamówienie: create $STATUS ($BODY)"
 [ "$TOTAL1" = "$ITEM_PRICE" ] && pass "cena: policzona z bazy, nie z żądania" || fail "cena: total=$TOTAL1 oczekiwano $ITEM_PRICE"
-[ "$STATUS1" = "new" ] && [ "$PAY1" = "unpaid" ] \
+[ "$STATUS1" = "ordered" ] && [ "$PAY1" = "unpaid" ] \
   && pass "uczeń: nie ustawia statusu ani płatności" \
   || fail "uczeń: status=$STATUS1 płatność=$PAY1"
 
@@ -314,10 +314,10 @@ AUDIT_STOCK=$(db_scalar "SELECT COUNT(*) FROM audit_log WHERE action='menu_stock
 [ "$AUDIT_STOCK" -ge 1 ] && pass "stan: zmiany zapisane w audycie" || fail "stan: brak audytu ($AUDIT_STOCK)"
 
 # Zamknij zwycięskie zamówienie z testu równoległości, aby nie zajmowało
-# limitu otwartych zamówień w dalszej części scenariusza. Status `completed`
+# limitu otwartych zamówień w dalszej części scenariusza. Status `issued`
 # (a nie `cancelled`) zostawia je w raporcie sprzedaży.
 STOCK_WINNER=$(db_scalar "SELECT o.id FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE oi.menu_item_id = $STOCK_ITEM AND oi.stock_reserved = 1 LIMIT 1;")
-request PATCH "/api/staff/orders/$STOCK_WINNER" "$ADMIN_JAR" "$ADMIN_CSRF" '{"status":"completed"}'
+request PATCH "/api/staff/orders/$STOCK_WINNER" "$ADMIN_JAR" "$ADMIN_CSRF" '{"status":"issued"}'
 [ "$STATUS" = "200" ] && pass "stan: zamówienie testowe zamknięte po sprawdzeniu stanu" \
   || fail "stan: zamknięcie zamówienia testowego -> $STATUS ($BODY)"
 
@@ -342,8 +342,8 @@ create_order card smoke-idem-0003
 ORDER3=$(printf '%s' "$BODY" | jq -r '.id // empty')
 [ "$STATUS" = "201" ] && pass "płatność: zamówienie kartą" || fail "płatność: create3 $STATUS"
 
-async_request status-a PATCH "/api/staff/orders/$ORDER3" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
-async_request status-b PATCH "/api/staff/orders/$ORDER3" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
+async_request status-a PATCH "/api/staff/orders/$ORDER3" "$K_JAR" "$K_CSRF" '{"status":"issued"}'
+async_request status-b PATCH "/api/staff/orders/$ORDER3" "$K_JAR" "$K_CSRF" '{"status":"issued"}'
 wait_async
 BAD_STATUS=$(cat "$TMP/status-a.status" "$TMP/status-b.status" | grep -cvE '^(200|409)$')
 AT_LEAST_ONE=$(cat "$TMP/status-a.status" "$TMP/status-b.status" | grep -c '^200$')
@@ -351,15 +351,17 @@ AT_LEAST_ONE=$(cat "$TMP/status-a.status" "$TMP/status-b.status" | grep -c '^200
   && pass "wyścig: równoległe zmiany statusu bez błędu 5xx" \
   || fail "wyścig: statusy $(cat "$TMP/status-a.status" "$TMP/status-b.status" | tr '\n' ' ')"
 
-request PATCH "/api/staff/orders/$ORDER3" "$K_JAR" "$K_CSRF" '{"status":"ready"}'
-[ "$STATUS" = "200" ] && pass "kuchnia: gotowe do odbioru" || fail "kuchnia: ready $STATUS ($BODY)"
-request PATCH "/api/staff/orders/$ORDER3" "$K_JAR" "$K_CSRF" '{"status":"completed"}'
-PAID_BY=$(printf '%s' "$BODY" | jq -r '.paid_by // empty')
-PAID_AT=$(printf '%s' "$BODY" | jq -r '.paid_at // empty')
-PAY_STATUS=$(printf '%s' "$BODY" | jq -r '.payment_status // empty')
-[ "$STATUS" = "200" ] && [ "$PAY_STATUS" = "paid" ] && [ "$PAID_BY" = "$K_LOGIN" ] && [ -n "$PAID_AT" ] \
-  && pass "płatność: wydanie zapisuje paid_at i paid_by" \
-  || fail "płatność: $STATUS paid=$PAY_STATUS by=$PAID_BY at=$PAID_AT"
+request GET "/api/staff/orders?scope=all" "$K_JAR" "" ""
+ORDER3_STATUS=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER3" '.[] | select(.id == $id) | .status // empty')
+PAID_BY=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER3" '.[] | select(.id == $id) | .paid_by // empty')
+PAID_AT=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER3" '.[] | select(.id == $id) | .paid_at // empty')
+PAY_STATUS=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER3" '.[] | select(.id == $id) | .payment_status // empty')
+ISSUED_AT=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER3" '.[] | select(.id == $id) | .issued_at // empty')
+[ "$ORDER3_STATUS" = "issued" ] && pass "kuchnia: wydanie zamyka zamówienie" \
+  || fail "kuchnia: status=$ORDER3_STATUS"
+[ "$PAY_STATUS" = "paid" ] && [ "$PAID_BY" = "$K_LOGIN" ] && [ -n "$PAID_AT" ] && [ -n "$ISSUED_AT" ] \
+  && pass "płatność: wydanie zapisuje issued_at, paid_at i paid_by" \
+  || fail "płatność: paid=$PAY_STATUS by=$PAID_BY at=$PAID_AT issued=$ISSUED_AT"
 DB_PAID_BY=$(db_scalar "SELECT paid_by FROM orders WHERE id=$ORDER3;")
 DB_K_ID=$(db_scalar "SELECT id FROM users WHERE login='$K_LOGIN';")
 [ "$DB_PAID_BY" = "$DB_K_ID" ] && pass "płatność: paid_by wskazuje konto kuchni" || fail "płatność: paid_by=$DB_PAID_BY"
@@ -384,9 +386,9 @@ request PATCH "/api/staff/orders/$ORDER3" "$ADMIN_JAR" "$ADMIN_CSRF" '{"payment_
 create_order cash smoke-idem-qr-0001
 QR_ORDER=$(printf '%s' "$BODY" | jq -r '.id // empty')
 [ "$STATUS" = "201" ] && pass "QR: zamówienie testowe" || fail "QR: create $STATUS ($BODY)"
-request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
-request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"ready"}'
-[ "$STATUS" = "200" ] && pass "QR: zamówienie gotowe do wydania" || fail "QR: ready $STATUS"
+QR_STATE=$(db_scalar "SELECT status FROM orders WHERE id=$QR_ORDER;")
+[ "$QR_STATE" = "ordered" ] && pass "QR: zamówienie gotowe do wydania" \
+  || fail "QR: stan=$QR_STATE (oczekiwano ordered)"
 
 QR_TOKEN=$(db_scalar "SELECT qr_token FROM orders WHERE id=$QR_ORDER;")
 printf '%s' "$QR_TOKEN" | grep -Eq '^[0-9a-f]{48}$' \
@@ -412,7 +414,7 @@ request POST /api/staff/pickup "$S1_JAR" "$S1_CSRF" "{\"code\":\"$QR_TOKEN\"}"
 [ "$STATUS" = "403" ] && pass "QR: uczeń nie może skanować (403)" \
   || fail "QR: uczeń skanuje -> $STATUS ($BODY)"
 
-request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"completed"}'
+request PATCH "/api/staff/orders/$QR_ORDER" "$K_JAR" "$K_CSRF" '{"status":"issued"}'
 [ "$STATUS" = "200" ] && pass "QR: wydanie zamyka zamówienie" || fail "QR: wydanie $STATUS ($BODY)"
 request POST /api/staff/pickup "$K_JAR" "$K_CSRF" "{\"code\":\"$QR_TOKEN\"}"
 [ "$STATUS" = "409" ] && pass "QR: kod już wydany przestaje działać (409)" \
@@ -425,10 +427,10 @@ request POST /api/staff/pickup "$K_JAR" "$K_CSRF" '{"code":"NIE000"}'
 # ---------------------------------------------------------------- inny dzień
 S1_ID=$(db_scalar "SELECT id FROM users WHERE login='$S1_LOGIN';")
 YDAY=$(TZ=Europe/Warsaw date -d 'yesterday 12:00' +%s)
-OLD_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at) VALUES ($S1_ID,'OLD999','oldtoken999','ready','cash','unpaid',$ITEM_PRICE,'12:00',$YDAY,$YDAY); SELECT last_insert_rowid();")
-request PATCH "/api/staff/orders/$OLD_ID" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
+OLD_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at) VALUES ($S1_ID,'OLD999','oldtoken999','ordered','cash','unpaid',$ITEM_PRICE,'12:00',$YDAY,$YDAY); SELECT last_insert_rowid();")
+request PATCH "/api/staff/orders/$OLD_ID" "$K_JAR" "$K_CSRF" '{"status":"issued"}'
 OLD_STATUS=$(db_scalar "SELECT status FROM orders WHERE id=$OLD_ID;")
-[ "$STATUS" = "403" ] && [ "$OLD_STATUS" = "ready" ] \
+[ "$STATUS" = "403" ] && [ "$OLD_STATUS" = "ordered" ] \
   && pass "kuchnia: nie zmienia zamówień z innych dni (403)" \
   || fail "kuchnia: inny dzień -> $STATUS/$OLD_STATUS"
 request POST /api/staff/pickup "$K_JAR" "$K_CSRF" '{"code":"oldtoken999"}'
@@ -478,16 +480,17 @@ request PUT /api/admin/settings "$ADMIN_JAR" "$ADMIN_CSRF" \
 
 create_order cash smoke-idem-0005
 ORDER5=$(printf '%s' "$BODY" | jq -r '.id // empty')
-request PATCH "/api/staff/orders/$ORDER5" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
-request PATCH "/api/staff/orders/$ORDER5" "$K_JAR" "$K_CSRF" '{"status":"ready"}'
-[ "$STATUS" = "200" ] && pass "nieodebrane: zamówienie gotowe" || fail "nieodebrane: ready $STATUS"
+ORDER5_STATUS=$(db_scalar "SELECT status FROM orders WHERE id=$ORDER5;")
+[ "$ORDER5_STATUS" = "ordered" ] && pass "nieodebrane: zamówienie przyjęte" \
+  || fail "nieodebrane: status=$ORDER5_STATUS"
 # Najpierw opłacone, potem nieodebrane — raport nie może policzyć go dwa razy.
 request PATCH "/api/staff/orders/$ORDER5" "$K_JAR" "$K_CSRF" '{"payment_status":"paid"}'
 PAID_AT_5=$(printf '%s' "$BODY" | jq -r '.paid_at // empty')
 [ "$STATUS" = "200" ] && [ -n "$PAID_AT_5" ] \
   && pass "nieodebrane: zamówienie opłacone przed nieodebraniem" \
   || fail "nieodebrane: paid -> $STATUS at=$PAID_AT_5"
-db_scalar "UPDATE orders SET ready_at = unixepoch() - 120 WHERE id=$ORDER5;" >/dev/null
+# Nowe zamówienia nie mają ready_at: limit odbioru liczy się od created_at.
+db_scalar "UPDATE orders SET created_at = unixepoch() - 120 WHERE id=$ORDER5;" >/dev/null
 
 stop_server
 start_server || { echo "Restart nieudany"; exit 1; }
@@ -502,6 +505,12 @@ request GET /api/student/orders "$S1_JAR" "" ""
 EFFECTIVE=$(printf '%s' "$BODY" | jq -r --argjson id "$ORDER5" '.[] | select(.id == $id) | .status')
 [ "$EFFECTIVE" = "uncollected" ] && pass "nieodebrane: API pokazuje status uncollected" || fail "nieodebrane: status=$EFFECTIVE"
 
+# Wyłącz automatyczne nieodebrane, aby kolejne świeże zamówienia w teście
+# nie zostały zamknięte przez cykliczne zadanie w tle.
+request PUT /api/admin/settings "$ADMIN_JAR" "$ADMIN_CSRF" '{"pickup_limit_minutes":0}'
+[ "$STATUS" = "200" ] && pass "nieodebrane: limit odbioru wyłączony po teście" \
+  || fail "nieodebrane: wyłączenie limitu -> $STATUS ($BODY)"
+
 create_order cash smoke-idem-0006
 BLOCK_MSG=$(printf '%s' "$BODY" | jq -r '.error // .message // empty')
 [ "$STATUS" = "409" ] \
@@ -510,7 +519,7 @@ BLOCK_MSG=$(printf '%s' "$BODY" | jq -r '.error // .message // empty')
   && pass "nieodebrane: blokada z komunikatem dla ucznia (409)" \
   || fail "nieodebrane: blokada -> $STATUS ($BLOCK_MSG)"
 
-request PATCH "/api/staff/orders/$ORDER5" "$K_JAR" "$K_CSRF" '{"status":"preparing"}'
+request PATCH "/api/staff/orders/$ORDER5" "$K_JAR" "$K_CSRF" '{"status":"issued"}'
 [ "$STATUS" = "409" ] && pass "nieodebrane: kuchnia nie zmienia zamkniętego (409)" || fail "nieodebrane: kuchnia -> $STATUS"
 request PATCH "/api/staff/orders/$ORDER5" "$K_JAR" "$K_CSRF" '{"payment_status":"paid"}'
 [ "$STATUS" = "409" ] && pass "nieodebrane: kuchnia nie opłaca nieodebranego (409)" \
@@ -546,8 +555,8 @@ NEXT_END=$(TZ=Europe/Warsaw date -d "$NEXT_NEXT_DATE 00:00" +%s)
 # Granica doby: 23:59 należy do REPORT_DATE, 00:01 już do NEXT_DATE.
 BOUND_BEFORE_AT=$((DAY_END - 60))
 BOUND_AFTER_AT=$((DAY_END + 60))
-BOUND_BEFORE_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at,paid_at,paid_by) VALUES ($S1_ID,'BND001','bndtoken001','completed','cash','paid',$ITEM_PRICE,'23:59',$BOUND_BEFORE_AT,$BOUND_BEFORE_AT,$BOUND_BEFORE_AT,$DB_K_ID); SELECT last_insert_rowid();")
-BOUND_AFTER_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at,paid_at,paid_by) VALUES ($S1_ID,'BND002','bndtoken002','completed','cash','paid',$ITEM_PRICE,'00:01',$BOUND_AFTER_AT,$BOUND_AFTER_AT,$BOUND_AFTER_AT,$DB_K_ID); SELECT last_insert_rowid();")
+BOUND_BEFORE_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at,paid_at,paid_by) VALUES ($S1_ID,'BND001','bndtoken001','issued','cash','paid',$ITEM_PRICE,'23:59',$BOUND_BEFORE_AT,$BOUND_BEFORE_AT,$BOUND_BEFORE_AT,$DB_K_ID); SELECT last_insert_rowid();")
+BOUND_AFTER_ID=$(db_scalar "INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at,paid_at,paid_by) VALUES ($S1_ID,'BND002','bndtoken002','issued','cash','paid',$ITEM_PRICE,'00:01',$BOUND_AFTER_AT,$BOUND_AFTER_AT,$BOUND_AFTER_AT,$DB_K_ID); SELECT last_insert_rowid();")
 
 request GET "/api/staff/orders?scope=today" "$K_JAR" "" ""
 HAS_BEFORE=$(printf '%s' "$BODY" | jq --argjson id "$BOUND_BEFORE_ID" '[.[] | select(.id == $id)] | length')
@@ -572,13 +581,13 @@ REPORT_CASH_INVARIANT=$(printf '%s' "$BODY" | jq -r '.cash.paid_orders + .cash.u
 REPORT_CARD_INVARIANT=$(printf '%s' "$BODY" | jq -r '.card.paid_orders + .card.unpaid_orders + .card.cancelled_orders + .card.uncollected_orders')
 
 DB_ORDERS=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END;")
-DB_PAID=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='paid' AND NOT (status='cancelled' AND uncollected_at IS NULL);")
-DB_PAID_ORDERS=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='paid' AND uncollected_at IS NULL AND NOT (status='cancelled' AND uncollected_at IS NULL);")
-DB_UNPAID_ORDERS=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='unpaid' AND uncollected_at IS NULL AND NOT (status='cancelled' AND uncollected_at IS NULL);")
-DB_CANCELLED=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND status='cancelled' AND uncollected_at IS NULL;")
-DB_CASH=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_method='cash' AND payment_status='paid' AND NOT (status='cancelled' AND uncollected_at IS NULL);")
-DB_CARD=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_method='card' AND payment_status='paid' AND NOT (status='cancelled' AND uncollected_at IS NULL);")
-DB_UNCOLLECTED=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND uncollected_at IS NOT NULL;")
+DB_PAID=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='paid' AND status <> 'cancelled';")
+DB_PAID_ORDERS=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='paid' AND status NOT IN ('cancelled','uncollected');")
+DB_UNPAID_ORDERS=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='unpaid' AND status NOT IN ('cancelled','uncollected');")
+DB_CANCELLED=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND status='cancelled';")
+DB_CASH=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_method='cash' AND payment_status='paid' AND status <> 'cancelled';")
+DB_CARD=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_method='card' AND payment_status='paid' AND status <> 'cancelled';")
+DB_UNCOLLECTED=$(db_scalar "SELECT COUNT(*) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND status='uncollected';")
 
 [ "$REPORT_ORDERS" = "$DB_ORDERS" ] && pass "raport: liczba zamówień zgodna z bazą" || fail "raport: orders=$REPORT_ORDERS db=$DB_ORDERS"
 [ "$REPORT_PAID" = "$DB_PAID" ] && pass "raport: suma opłaconych zgodna z bazą" || fail "raport: paid=$REPORT_PAID db=$DB_PAID"
@@ -632,9 +641,9 @@ request GET "/api/staff/report?date=2026-13-40" "$K_JAR" "" ""
 [ "$STATUS" = "400" ] && pass "raport: nieprawidłowa data odrzucona (400)" || fail "raport: zła data -> $STATUS"
 
 # ---------------------------------------------------------------- korekta i odblokowanie
-request PATCH "/api/staff/orders/$ORDER5" "$ADMIN_JAR" "$ADMIN_CSRF" '{"status":"completed"}'
+request PATCH "/api/staff/orders/$ORDER5" "$ADMIN_JAR" "$ADMIN_CSRF" '{"status":"issued"}'
 CORRECTED=$(db_scalar "SELECT COALESCE(uncollected_at,'') || '|' || status FROM orders WHERE id=$ORDER5;")
-[ "$STATUS" = "200" ] && [ "$CORRECTED" = "|completed" ] \
+[ "$STATUS" = "200" ] && [ "$CORRECTED" = "|issued" ] \
   && pass "korekta: admin zdejmuje znacznik nieodebranego" \
   || fail "korekta: $STATUS/$CORRECTED"
 
@@ -646,7 +655,7 @@ REPORT_PAID2=$(printf '%s' "$BODY" | jq -r '.paid_cents // empty')
 REPORT_AFTER_UNCOLLECTED=$(printf '%s' "$BODY" | jq -r '.uncollected_orders // empty')
 REPORT_AFTER_INVARIANT=$(printf '%s' "$BODY" | jq -r '.paid_orders + .unpaid_orders + .cancelled_orders + .uncollected_orders')
 REPORT_AFTER_ORDERS=$(printf '%s' "$BODY" | jq -r '.orders // empty')
-DB_PAID2=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='paid' AND NOT (status='cancelled' AND uncollected_at IS NULL);")
+DB_PAID2=$(db_scalar "SELECT COALESCE(SUM(total_cents),0) FROM orders WHERE created_at >= $DAY_START AND created_at < $DAY_END AND payment_status='paid' AND status <> 'cancelled';")
 [ "$REPORT_PAID2" = "$DB_PAID2" ] && pass "raport: sumy nadal zgodne po korekcie" || fail "raport: po korekcie $REPORT_PAID2 != $DB_PAID2"
 [ "$REPORT_AFTER_UNCOLLECTED" = "0" ] && pass "korekta: nieodebrane zniknęło z raportu" \
   || fail "korekta: uncollected=$REPORT_AFTER_UNCOLLECTED"

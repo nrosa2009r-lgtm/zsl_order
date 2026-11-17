@@ -40,8 +40,9 @@ Płatność następuje przy odbiorze — zgodnie z wyborem w zamówieniu.
 
 Możesz anulować tylko:
 
-- zanim kuchnia zacznie przygotowanie (status `new`),
-- w terminie ustalonym przez szkołę (domyślnie 30 minut).
+- zanim kuchnia wyda posiłek (status `ordered`),
+- w terminie ustalonym przez szkołę (domyślnie 30 minut),
+- gdy zamówienie nie jest jeszcze opłacone.
 
 Po anulowaniu kod QR przestaje działać. Jeśli zamówienie złożono
 dzisiaj i nie zostało jeszcze wydane, anulowanie zwraca sztukę na stan
@@ -51,10 +52,8 @@ menu. Jeśli przycisk jest nieaktywny, poproś kuchnię o pomoc.
 
 | Status | Co to znaczy |
 | --- | --- |
-| `new` | przyjęte, czeka |
-| `preparing` | w przygotowaniu |
-| `ready` | gotowe do odbioru |
-| `completed` | wydane |
+| `ordered` | przyjęte, czeka na wydanie |
+| `issued` | wydane |
 | `cancelled` | anulowane |
 | `uncollected` | nieodebrane |
 
@@ -72,7 +71,7 @@ menu. Jeśli przycisk jest nieaktywny, poproś kuchnię o pomoc.
 | Nie pamiętam hasła | Poproś administratora/stołówkę o reset hasła. |
 | Konto zablokowane | Odczekaj 15 minut albo poproś administratora. |
 | Nie widzę zamówienia | Sprawdź, czy jesteś zalogowany na swoje konto. |
-| QR nie działa | Sprawdź, czy zamówienie jest `ready` i z dzisiaj; po wydaniu kod jest zużyty. |
+| QR nie działa | Sprawdź, czy zamówienie jest `ordered` i z dzisiaj; po wydaniu kod jest zużyty. |
 | Pozycja jest wyprzedana | Wybierz inną pozycję albo poproś kuchnię o uzupełnienie stanu. |
 | Zła godzina/cena | Zgłoś kuchni przed wydaniem. |
 

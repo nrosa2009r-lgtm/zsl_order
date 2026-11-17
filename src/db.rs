@@ -459,6 +459,7 @@ mod tests {
             "menu_items",
             "orders",
             "order_items",
+            "breaks",
             "settings",
             "audit_log",
         ] {
@@ -472,7 +473,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 6);
+        assert_eq!(applied, 7);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")
@@ -491,6 +492,8 @@ mod tests {
             ("menu_items", "stock_default"),
             ("menu_items", "stock_date"),
             ("order_items", "stock_reserved"),
+            ("orders", "break_id"),
+            ("orders", "issued_at"),
         ] {
             let columns: Vec<String> =
                 sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))
@@ -502,5 +505,22 @@ mod tests {
                 "brak kolumny {table}.{expected}"
             );
         }
+
+        let user_id_not_null: i64 = sqlx::query_scalar(
+            "SELECT [notnull] FROM pragma_table_info('orders') WHERE name = 'user_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("kolumna orders.user_id");
+        assert_eq!(user_id_not_null, 0, "user_id musi dopuszczać NULL");
+
+        let fk_violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&pool)
+            .await
+            .expect("foreign_key_check");
+        assert!(
+            fk_violations.is_empty(),
+            "foreign_key_check zgłasza problemy"
+        );
     }
 }

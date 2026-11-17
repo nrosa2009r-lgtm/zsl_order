@@ -206,7 +206,7 @@ mod tests {
         let order_id: i64 = sqlx::query_scalar(
             "INSERT INTO orders (user_id, code, qr_token, status, payment_method, payment_status,
                                  total_cents, pickup_time, created_at, updated_at)
-             VALUES (?, ?, ?, 'new', 'cash', 'unpaid', 500, '', 1, 1)
+             VALUES (?, ?, ?, 'ordered', 'cash', 'unpaid', 500, '', 1, 1)
              RETURNING id",
         )
         .bind(user_id)

@@ -23,7 +23,7 @@
             role: "kitchen",
             onLoaded: function (orders) {
                 const open = orders.filter(function (order) {
-                    return ["new", "preparing", "ready"].includes(order.status);
+                    return order.status === "ordered";
                 }).length;
                 App.setText(
                     "#ordersUpdated",

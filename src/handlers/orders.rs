@@ -22,12 +22,13 @@ use std::sync::Arc;
 
 const ORDER_SELECT: &str = "SELECT o.id, o.code, o.status, o.payment_method, o.payment_status,
         o.total_cents, o.pickup_time, o.created_at, o.updated_at,
-        o.paid_at, o.uncollected_at,
-        u.login AS user_login, u.display_code AS user_display_code,
+        o.paid_at, o.issued_at, o.uncollected_at,
+        COALESCE(u.login, '') AS user_login,
+        COALESCE(u.display_code, 'konto usunięte') AS user_display_code,
         p.login AS paid_by_login,
         oi.name AS item_name, oi.price_cents AS item_price, oi.quantity AS item_qty
  FROM orders o
- JOIN users u ON u.id = o.user_id
+ LEFT JOIN users u ON u.id = o.user_id
  LEFT JOIN users p ON p.id = o.paid_by
  LEFT JOIN order_items oi ON oi.order_id = o.id";
 
@@ -51,6 +52,7 @@ pub struct OrderView {
     pub updated_at: i64,
     pub paid_at: Option<i64>,
     pub paid_by: Option<String>,
+    pub issued_at: Option<i64>,
     pub uncollected_at: Option<i64>,
     pub student: String,
     pub student_code: String,
@@ -69,6 +71,7 @@ struct OrderRow {
     created_at: i64,
     updated_at: i64,
     paid_at: Option<i64>,
+    issued_at: Option<i64>,
     uncollected_at: Option<i64>,
     user_login: String,
     user_display_code: String,
@@ -94,7 +97,7 @@ struct OrderState {
     created_at: i64,
     paid_at: Option<i64>,
     paid_by: Option<i64>,
-    ready_at: Option<i64>,
+    issued_at: Option<i64>,
     uncollected_at: Option<i64>,
 }
 
@@ -145,7 +148,6 @@ struct ReportOrderRow {
     payment_method: String,
     payment_status: String,
     total_cents: i64,
-    uncollected_at: Option<i64>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -157,7 +159,7 @@ pub struct PaymentTotals {
     pub unpaid_cents: i64,
     pub cancelled_orders: i64,
     pub uncollected_orders: i64,
-    pub completed_orders: i64,
+    pub issued_orders: i64,
     pub open_orders: i64,
 }
 
@@ -312,8 +314,7 @@ pub async fn create_order(
     let max_open_orders = setting_i64(&mut transaction, "max_open_orders", 3).await?;
     let open_orders: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM orders
-         WHERE user_id = ? AND status IN ('new','preparing','ready')
-           AND uncollected_at IS NULL",
+         WHERE user_id = ? AND status = 'ordered'",
     )
     .bind(user.id)
     .fetch_one(&mut *transaction)
@@ -432,7 +433,7 @@ pub async fn create_order(
         "INSERT INTO orders
          (user_id, code, qr_token, status, payment_method, payment_status, total_cents,
           pickup_time, idempotency_key, created_at, updated_at)
-         VALUES (?, ?, ?, 'new', ?, 'unpaid', ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, 'ordered', ?, 'unpaid', ?, ?, ?, ?, ?)",
     )
     .bind(user.id)
     .bind(&code)
@@ -491,7 +492,8 @@ pub async fn cancel_order(
     let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
 
     let current: Option<OrderState> = sqlx::query_as(
-        "SELECT status, payment_status, created_at, paid_at, paid_by, ready_at, uncollected_at
+        "SELECT status, payment_status, created_at, paid_at, paid_by,
+                issued_at, uncollected_at
          FROM orders WHERE id = ? AND user_id = ?",
     )
     .bind(id)
@@ -510,10 +512,10 @@ pub async fn cancel_order(
             "To zamówienie zostało oznaczone jako nieodebrane.",
         ));
     }
-    if current.status != "new" {
+    if current.status != "ordered" {
         transaction.rollback().await?;
         return Err(AppError::conflict(
-            "Można anulować tylko zamówienie, które nie zostało jeszcze przyjęte przez kuchnię.",
+            "Można anulować tylko zamówienie, które nie zostało jeszcze wydane.",
         ));
     }
     if current.payment_status == "paid" {
@@ -534,7 +536,7 @@ pub async fn cancel_order(
     let result = sqlx::query(
         "UPDATE orders
          SET status = 'cancelled', updated_at = ?
-         WHERE id = ? AND user_id = ? AND status = 'new'
+         WHERE id = ? AND user_id = ? AND status = 'ordered'
            AND payment_status = 'unpaid' AND uncollected_at IS NULL",
     )
     .bind(util::now())
@@ -584,7 +586,7 @@ pub async fn order_qr(
 
     let (token, status, created_at) =
         row.ok_or_else(|| AppError::not_found("Nie znaleziono zamówienia."))?;
-    if matches!(status.as_str(), "cancelled" | "completed" | "uncollected") {
+    if matches!(status.as_str(), "cancelled" | "issued" | "uncollected") {
         return Err(AppError::conflict(
             "To zamówienie jest już zamknięte — kod QR nie jest aktywny.",
         ));
@@ -629,8 +631,7 @@ pub async fn staff_orders(
             "{ORDER_SELECT} WHERE o.created_at >= ? AND o.created_at < ? ORDER BY o.created_at DESC, o.id DESC, oi.id ASC LIMIT 300"
         ),
         _ => format!(
-            "{ORDER_SELECT} WHERE o.status IN ('new','preparing','ready')
-             AND o.uncollected_at IS NULL
+            "{ORDER_SELECT} WHERE o.status = 'ordered'
              ORDER BY o.created_at ASC, o.id ASC, oi.id ASC LIMIT 300"
         ),
     };
@@ -721,16 +722,13 @@ fn pickup_token(raw: &str) -> &str {
 /// po `completed` nie działa ponownie, a kod z innego dnia nie jest ważny.
 fn pickup_rejection(order: &OrderView) -> Option<AppError> {
     match order.status.as_str() {
-        "completed" => Some(AppError::conflict(
+        "issued" => Some(AppError::conflict(
             "To zamówienie zostało już wydane — kod jest jednorazowy.",
         )),
         "cancelled" | "uncollected" => Some(AppError::conflict(
             "To zamówienie zostało anulowane lub nieodebrane.",
         )),
-        "new" | "preparing" => Some(AppError::conflict(
-            "Zamówienie nie jest jeszcze gotowe do wydania.",
-        )),
-        "ready" => {
+        "ordered" => {
             if order.created_at < util::start_of_today() {
                 Some(AppError::conflict("Kod dotyczy zamówienia z innego dnia."))
             } else {
@@ -781,10 +779,7 @@ pub async fn staff_update_order(
     }
 
     if let Some(value) = &status
-        && !matches!(
-            value.as_str(),
-            "new" | "preparing" | "ready" | "completed" | "cancelled"
-        )
+        && !matches!(value.as_str(), "ordered" | "issued" | "cancelled")
     {
         return Err(AppError::bad("Nieprawidłowy status zamówienia."));
     }
@@ -795,7 +790,8 @@ pub async fn staff_update_order(
     }
 
     let current: Option<OrderState> = sqlx::query_as(
-        "SELECT status, payment_status, created_at, paid_at, paid_by, ready_at, uncollected_at
+        "SELECT status, payment_status, created_at, paid_at, paid_by,
+                issued_at, uncollected_at
          FROM orders WHERE id = ?",
     )
     .bind(id)
@@ -825,21 +821,20 @@ pub async fn staff_update_order(
                 "Kuchnia może zmieniać tylko dzisiejsze zamówienia.",
             ));
         }
-        if matches!(current.status.as_str(), "completed" | "cancelled") {
+        if matches!(
+            current.status.as_str(),
+            "issued" | "cancelled" | "uncollected"
+        ) {
             return Err(AppError::conflict(
                 "To zamówienie jest już zamknięte i nie można go zmienić.",
             ));
         }
         if let Some(value) = &status {
-            let allowed = match current.status.as_str() {
-                "new" => matches!(value.as_str(), "new" | "preparing"),
-                "preparing" => matches!(value.as_str(), "preparing" | "ready"),
-                "ready" => matches!(value.as_str(), "ready" | "completed"),
-                _ => false,
-            };
+            let allowed =
+                current.status == "ordered" && matches!(value.as_str(), "ordered" | "issued");
             if !allowed {
                 return Err(AppError::forbidden(
-                    "Niedozwolona zmiana statusu. Kuchnia prowadzi zamówienie krok po kroku.",
+                    "Niedozwolona zmiana statusu. Kuchnia wydaje tylko dzisiejsze zamówienia.",
                 ));
             }
         }
@@ -852,15 +847,15 @@ pub async fn staff_update_order(
         }
         let final_status = status.as_deref().unwrap_or(&current.status);
         if payment_status.as_deref() == Some("paid")
-            && !matches!(final_status, "ready" | "completed")
+            && matches!(final_status, "cancelled" | "uncollected")
         {
             return Err(AppError::conflict(
-                "Płatność można oznaczyć dopiero przy wydaniu zamówienia.",
+                "Anulowanego lub nieodebranego zamówienia nie można opłacić.",
             ));
         }
     }
 
-    if status.as_deref() == Some("completed") && payment_status.is_none() {
+    if status.as_deref() == Some("issued") && payment_status.is_none() {
         payment_status = Some("paid".to_string());
     }
 
@@ -881,12 +876,10 @@ pub async fn staff_update_order(
         (None, None)
     };
 
-    let new_ready_at = if final_status == "ready" {
-        if current.status == "ready" {
-            current.ready_at
-        } else {
-            Some(now)
-        }
+    // `ready_at` zostaje jako znacznik historyczny (migracja z `ready`);
+    // nowe zamówienia korzystają z `issued_at`.
+    let new_issued_at = if final_status == "issued" {
+        current.issued_at.or(Some(now))
     } else {
         None
     };
@@ -905,7 +898,7 @@ pub async fn staff_update_order(
     let result = sqlx::query(
         "UPDATE orders
          SET status = ?, payment_status = ?, paid_at = ?, paid_by = ?,
-             ready_at = ?, uncollected_at = ?, updated_at = ?
+             issued_at = ?, uncollected_at = ?, updated_at = ?
          WHERE id = ? AND status = ? AND payment_status = ?
            AND COALESCE(uncollected_at, 0) = ?",
     )
@@ -913,7 +906,7 @@ pub async fn staff_update_order(
     .bind(&final_payment)
     .bind(new_paid_at)
     .bind(new_paid_by)
-    .bind(new_ready_at)
+    .bind(new_issued_at)
     .bind(new_uncollected_at)
     .bind(now)
     .bind(id)
@@ -933,7 +926,7 @@ pub async fn staff_update_order(
     // Anulowanie przed wydaniem zwraca stan — tylko admin/uczeń i tylko
     // dla dzisiejszego zamówienia. Wydane i nieodebrane nie wracają.
     let cancelled_before_issue = final_status == "cancelled"
-        && !matches!(current.status.as_str(), "cancelled" | "completed")
+        && current.status == "ordered"
         && current.uncollected_at.is_none();
     if cancelled_before_issue && stock::is_from_today(current.created_at) {
         stock::return_order_stock(&mut transaction, id, util::today()).await?;
@@ -1051,7 +1044,7 @@ async fn build_daily_report(
     let end = util::start_of_local_date(date + Duration::days(1));
 
     let rows = sqlx::query_as::<_, ReportOrderRow>(
-        "SELECT status, payment_method, payment_status, total_cents, uncollected_at
+        "SELECT status, payment_method, payment_status, total_cents
          FROM orders WHERE created_at >= ? AND created_at < ?",
     )
     .bind(start)
@@ -1067,7 +1060,9 @@ async fn build_daily_report(
     let stock_rows = sqlx::query_as::<_, StockReportRow>(
         "SELECT m.id AS menu_item_id, m.name, m.stock_remaining, m.stock_default,
                 COALESCE(SUM(CASE
-                    WHEN o.id IS NOT NULL AND o.status <> 'cancelled' THEN oi.quantity
+                    WHEN o.id IS NOT NULL
+                     AND o.status NOT IN ('cancelled', 'uncollected')
+                    THEN oi.quantity
                     ELSE 0
                 END), 0) AS sold
          FROM menu_items m
@@ -1095,17 +1090,17 @@ fn aggregate_totals<'a>(rows: impl Iterator<Item = &'a ReportOrderRow>) -> Payme
     for row in rows {
         totals.orders += 1;
 
-        let uncollected = row.uncollected_at.is_some();
-        let cancelled = row.status == "cancelled" && !uncollected;
+        let uncollected = row.status == "uncollected";
+        let cancelled = row.status == "cancelled";
         // Kategorie liczby zamówień są rozłączne:
         // paid + unpaid + cancelled + uncollected = orders.
         if uncollected {
             totals.uncollected_orders += 1;
         } else if cancelled {
             totals.cancelled_orders += 1;
-        } else if row.status == "completed" {
-            totals.completed_orders += 1;
-        } else if matches!(row.status.as_str(), "new" | "preparing" | "ready") {
+        } else if row.status == "issued" {
+            totals.issued_orders += 1;
+        } else if row.status == "ordered" {
             totals.open_orders += 1;
         }
 
@@ -1143,10 +1138,11 @@ fn csv_cell(value: &str) -> String {
 }
 
 /// Oznacza jako nieodebrane zamówienia, które przez `pickup_limit_minutes`
-/// od ustawienia statusu `ready` nie zostały wydane. W bazie zostają
-/// `cancelled` z ustawionym `uncollected_at`; API pokazuje je jako
-/// `uncollected`. Funkcja jest odporna na wyścig z kuchnią dzięki
-/// warunkowemu `UPDATE ... WHERE status = 'ready'`.
+/// od przyjęcia nie zostały wydane. Dla historycznych zamówień liczy się
+/// `ready_at` z migracji, dla nowych `created_at`. Docelowo moment
+/// nieodebrania wyznaczy koniec przerwy (kolejny krok przebudowy).
+/// Funkcja jest odporna na wyścig z kuchnią dzięki warunkowemu
+/// `UPDATE ... WHERE status = 'ordered'`.
 pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error> {
     let limit = parse_setting(state, "pickup_limit_minutes", 120).await;
     if limit <= 0 {
@@ -1157,9 +1153,9 @@ pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error>
     let cutoff = now - limit * 60;
     let ids: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM orders
-         WHERE status = 'ready' AND uncollected_at IS NULL
-           AND ready_at IS NOT NULL AND ready_at <= ?
-         ORDER BY ready_at ASC LIMIT 200",
+         WHERE status = 'ordered' AND uncollected_at IS NULL
+           AND COALESCE(ready_at, created_at) <= ?
+         ORDER BY COALESCE(ready_at, created_at) ASC LIMIT 200",
     )
     .bind(cutoff)
     .fetch_all(&state.db)
@@ -1170,8 +1166,8 @@ pub async fn mark_uncollected(state: &Arc<AppState>) -> Result<u64, sqlx::Error>
     for id in ids {
         let result = sqlx::query(
             "UPDATE orders
-             SET status = 'cancelled', uncollected_at = ?, updated_at = ?
-             WHERE id = ? AND status = 'ready' AND uncollected_at IS NULL",
+             SET status = 'uncollected', uncollected_at = ?, updated_at = ?
+             WHERE id = ? AND status = 'ordered' AND uncollected_at IS NULL",
         )
         .bind(now)
         .bind(now)
@@ -1230,15 +1226,10 @@ fn group_orders(rows: Vec<OrderRow>) -> Vec<OrderView> {
             None => {
                 let position = orders.len();
                 index.insert(row.id, position);
-                let status = if row.uncollected_at.is_some() {
-                    "uncollected".to_string()
-                } else {
-                    row.status
-                };
                 orders.push(OrderView {
                     id: row.id,
                     code: row.code,
-                    status,
+                    status: row.status,
                     payment_method: row.payment_method,
                     payment_status: row.payment_status,
                     total_cents: row.total_cents,
@@ -1247,6 +1238,7 @@ fn group_orders(rows: Vec<OrderRow>) -> Vec<OrderView> {
                     updated_at: row.updated_at,
                     paid_at: row.paid_at,
                     paid_by: row.paid_by_login,
+                    issued_at: row.issued_at,
                     uncollected_at: row.uncollected_at,
                     student: row.user_login,
                     student_code: row.user_display_code,
@@ -1354,35 +1346,28 @@ mod tests {
         assert!(resolve_idempotency_key(&headers, None).is_ok());
     }
 
-    fn report_row(
-        status: &str,
-        method: &str,
-        payment: &str,
-        total_cents: i64,
-        uncollected: bool,
-    ) -> ReportOrderRow {
+    fn report_row(status: &str, method: &str, payment: &str, total_cents: i64) -> ReportOrderRow {
         ReportOrderRow {
             status: status.to_string(),
             payment_method: method.to_string(),
             payment_status: payment.to_string(),
             total_cents,
-            uncollected_at: uncollected.then_some(1_700_000_000),
         }
     }
 
     #[test]
     fn report_totals_match_orders_and_split_payment_methods() {
         let rows = [
-            report_row("completed", "cash", "paid", 1500, false),
-            report_row("completed", "card", "paid", 2500, false),
-            report_row("ready", "cash", "unpaid", 800, false),
-            report_row("cancelled", "cash", "paid", 999, false),
-            report_row("cancelled", "card", "paid", 1200, true),
+            report_row("issued", "cash", "paid", 1500),
+            report_row("issued", "card", "paid", 2500),
+            report_row("ordered", "cash", "unpaid", 800),
+            report_row("cancelled", "cash", "paid", 999),
+            report_row("uncollected", "card", "paid", 1200),
         ];
 
         let summary = aggregate_totals(rows.iter());
         assert_eq!(summary.orders, 5);
-        assert_eq!(summary.completed_orders, 2);
+        assert_eq!(summary.issued_orders, 2);
         assert_eq!(summary.open_orders, 1);
         assert_eq!(summary.cancelled_orders, 1);
         assert_eq!(summary.uncollected_orders, 1);
@@ -1413,7 +1398,7 @@ mod tests {
 
     #[test]
     fn report_paid_then_uncollected_counts_once() {
-        let rows = [report_row("cancelled", "cash", "paid", 1500, true)];
+        let rows = [report_row("uncollected", "cash", "paid", 1500)];
 
         let summary = aggregate_totals(rows.iter());
         assert_eq!(summary.orders, 1);
@@ -1455,6 +1440,7 @@ mod tests {
             updated_at: created_at,
             paid_at: None,
             paid_by: None,
+            issued_at: None,
             uncollected_at: None,
             student: "s-test".to_string(),
             student_code: "UCZ-TEST".to_string(),
@@ -1463,16 +1449,14 @@ mod tests {
     }
 
     #[test]
-    fn pickup_accepts_only_ready_order_from_today() {
-        assert!(pickup_rejection(&order_with("ready", util::now())).is_none());
+    fn pickup_accepts_only_ordered_order_from_today() {
+        assert!(pickup_rejection(&order_with("ordered", util::now())).is_none());
 
         let yesterday = util::start_of_today() - 60;
-        assert!(pickup_rejection(&order_with("ready", yesterday)).is_some());
-        assert!(pickup_rejection(&order_with("completed", util::now())).is_some());
+        assert!(pickup_rejection(&order_with("ordered", yesterday)).is_some());
+        assert!(pickup_rejection(&order_with("issued", util::now())).is_some());
         assert!(pickup_rejection(&order_with("cancelled", util::now())).is_some());
         assert!(pickup_rejection(&order_with("uncollected", util::now())).is_some());
-        assert!(pickup_rejection(&order_with("new", util::now())).is_some());
-        assert!(pickup_rejection(&order_with("preparing", util::now())).is_some());
     }
 
     #[test]

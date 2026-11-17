@@ -128,7 +128,7 @@ pub struct DailyActivity {
     pub date: String,
     pub orders: i64,
     pub revenue_cents: i64,
-    pub completed: i64,
+    pub issued: i64,
     pub cancelled: i64,
 }
 
@@ -206,19 +206,20 @@ pub async fn stats(
         .await?;
     let revenue_today: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(total_cents), 0) FROM orders
-         WHERE created_at >= ? AND payment_status = 'paid' AND status <> 'cancelled'",
+         WHERE created_at >= ? AND payment_status = 'paid'
+           AND status <> 'cancelled'",
     )
     .bind(util::start_of_today())
     .fetch_one(&state.db)
     .await?;
-    let open_orders: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM orders WHERE status IN ('new','preparing','ready')",
-    )
-    .fetch_one(&state.db)
-    .await?;
+    let open_orders: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE status = 'ordered'")
+            .fetch_one(&state.db)
+            .await?;
     let awaiting_payment: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM orders
-         WHERE payment_status = 'unpaid' AND status <> 'cancelled'",
+         WHERE payment_status = 'unpaid'
+           AND status NOT IN ('cancelled', 'uncollected')",
     )
     .fetch_one(&state.db)
     .await?;
@@ -270,7 +271,7 @@ pub async fn activity(
                 date: date.format("%Y-%m-%d").to_string(),
                 orders: 0,
                 revenue_cents: 0,
-                completed: 0,
+                issued: 0,
                 cancelled: 0,
             }
         })
@@ -285,7 +286,7 @@ pub async fn activity(
         .map(|hour| HourlyActivity { hour, orders: 0 })
         .collect();
     let mut status_counts: BTreeMap<String, i64> =
-        ["new", "preparing", "ready", "completed", "cancelled"]
+        ["ordered", "issued", "cancelled", "uncollected"]
             .into_iter()
             .map(|status| (status.to_string(), 0))
             .collect();
@@ -306,7 +307,7 @@ pub async fn activity(
         *status_counts.entry(status.clone()).or_insert(0) += 1;
         *payment_counts.entry(payment_status.clone()).or_insert(0) += 1;
 
-        if status != "cancelled" {
+        if !matches!(status.as_str(), "cancelled" | "uncollected") {
             non_cancelled_orders += 1;
             non_cancelled_total += total_cents;
         }
@@ -319,8 +320,8 @@ pub async fn activity(
         if let Some(&index) = daily_index.get(&key) {
             let point = &mut daily[index];
             point.orders += 1;
-            if status == "completed" {
-                point.completed += 1;
+            if status == "issued" {
+                point.issued += 1;
             }
             if status == "cancelled" {
                 point.cancelled += 1;
@@ -343,7 +344,8 @@ pub async fn activity(
                 SUM(oi.quantity * oi.price_cents) AS revenue_cents
          FROM order_items oi
          JOIN orders o ON o.id = oi.order_id
-         WHERE o.created_at >= ? AND o.status <> 'cancelled'
+         WHERE o.created_at >= ?
+           AND o.status NOT IN ('cancelled', 'uncollected')
          GROUP BY oi.name
          ORDER BY quantity DESC, revenue_cents DESC
          LIMIT 8",
@@ -362,7 +364,7 @@ pub async fn activity(
     }
 
     let total_orders: i64 = daily.iter().map(|point| point.orders).sum();
-    let total_completed: i64 = daily.iter().map(|point| point.completed).sum();
+    let total_issued: i64 = daily.iter().map(|point| point.issued).sum();
     let total_cancelled: i64 = daily.iter().map(|point| point.cancelled).sum();
     let total_revenue: i64 = daily.iter().map(|point| point.revenue_cents).sum();
     let average_order_cents = if non_cancelled_orders > 0 {
@@ -382,7 +384,7 @@ pub async fn activity(
         "top_items": top_items,
         "totals": {
             "orders": total_orders,
-            "completed": total_completed,
+            "issued": total_issued,
             "cancelled": total_cancelled,
             "revenue_cents": total_revenue,
             "non_cancelled_orders": non_cancelled_orders,

@@ -239,11 +239,10 @@
         );
 
         const statusMeta = [
-            ["new", "Nowe", "#3b82f6"],
-            ["preparing", "W przygotowaniu", "#f59e0b"],
-            ["ready", "Gotowe", "#16a34a"],
-            ["completed", "Wydane", "#6b7280"],
+            ["ordered", "Zamówione", "#3b82f6"],
+            ["issued", "Wydane", "#6b7280"],
             ["cancelled", "Anulowane", "#dc2626"],
+            ["uncollected", "Nieodebrane", "#ea580c"],
         ];
         const statusCounts = data.status_counts || {};
         Charts.horizontal(
@@ -277,7 +276,7 @@
             (totals.orders || 0) + " zamówień · " +
             App.fmtPLN(totals.revenue_cents || 0) + " utargu · " +
             "średnio " + App.fmtPLN(totals.average_order_cents || 0) + " · " +
-            (totals.completed || 0) + " wydanych · " +
+            (totals.issued || 0) + " wydanych · " +
             (totals.cancelled || 0) + " anulowanych"
         );
     }

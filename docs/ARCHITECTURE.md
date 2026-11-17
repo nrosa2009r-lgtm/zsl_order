@@ -220,7 +220,7 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
   liter, opcjonalnie usuwa starszy prefiks `ZSL:` i szuka po `qr_token`
   lub `code`.
 - Pickup akceptuje tylko zamówienie z dzisiejszego dnia w statusie
-  `ready`; po `completed` kod jest jednorazowo zużyty. Pickup **nie
+  `ordered`; po `issued` kod jest jednorazowo zużyty. Pickup **nie
   zmienia** statusu — wydanie następuje przez
   `PATCH /api/staff/orders/:id`.
 - Każde udane wyszukanie trafia do audytu; nieudane próby zasilają
@@ -228,11 +228,15 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 
 ### 5.6. Zmiana statusu i płatności
 
-- Kuchnia: `new → preparing → ready → completed` (lub pominięcie stanów),
-  `completed` automatycznie ustawia `paid`.
-- Kuchnia nie może modyfikować zamówień `completed`/`cancelled`.
-- Student może anulować tylko własne `new`.
-- Administrator może ustawić dowolny dozwolony status i płatność.
+- Statusy: `ordered` (przyjęte), `issued` (wydane), `cancelled`
+  (anulowane jawnie), `uncollected` (nieodebrane w terminie).
+- Kuchnia: `ordered → issued`; `issued` automatycznie ustawia `paid`
+  i zapisuje `issued_at`.
+- Kuchnia nie może modyfikować zamówień `issued`/`cancelled`/
+  `uncollected`.
+- Student może anulować tylko własne nieopłacone `ordered`.
+- Administrator może ustawić `ordered`/`issued`/`cancelled` i płatność;
+  korekta nieodebranego zdejmuje `uncollected_at`.
 
 ### 5.7. Statystyki aktywności
 
@@ -242,10 +246,10 @@ losowane z ponawianiem przy kolizji (unikalne indeksy w bazie).
 → wybierz zakres [początek doby Europe/Warsaw (dziś - days + 1), teraz]
 → jedno zapytanie o zamówienia z zakresu (created_at, status, payment_status, total)
 → agregacja w Rust:
-    ├─ daily[] — liczba, ukończone, anulowane, utarg (tylko paid i nie-cancelled)
+    ├─ daily[] — liczba, wydane, anulowane, utarg (tylko paid, bez cancelled)
     ├─ hourly_today[] — 24 kubełki dla dzisiejszych zamówień
     ├─ status_counts / payment_counts
-    └─ totals (orders, completed, cancelled, revenue, średnia)
+    └─ totals (orders, issued, cancelled, revenue, średnia)
 → drugie zapytanie: TOP 8 pozycji (JOIN order_items, bez anulowanych)
 → JSON gotowy do wykresów canvas
 ```
@@ -273,6 +277,10 @@ osobowych.
 
 Operacja jest nieodwracalna i celowo usuwa także historię zamówień oraz
 sesje, aby nie pozostawiać osieroconych danych powiązanych z kontem.
+Schemat (`0007`) dopuszcza już `orders.user_id = NULL` z
+`ON DELETE SET NULL`; API pokazuje wtedy `konto usunięte`. Zmiana samej
+akcji panelu na zachowanie historii jest osobnym krokiem zarządzania
+kontami.
 
 ### 5.9. Eksport CSV metadanych
 

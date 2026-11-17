@@ -174,10 +174,8 @@
     }
 
     const statusLabels = {
-        new: "Nowe",
-        preparing: "W przygotowaniu",
-        ready: "Gotowe",
-        completed: "Wydane",
+        ordered: "Zamówione",
+        issued: "Wydane",
         cancelled: "Anulowane",
         uncollected: "Nieodebrane",
     };

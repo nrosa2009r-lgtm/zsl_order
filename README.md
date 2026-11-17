@@ -57,7 +57,7 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 - **Kody QR do odbioru**: każde zamówienie ma krótki kod (`K7M2QP`) oraz
   nieprzejrzysty token QR (48 znaków hex) bez danych osobowych. Kuchnia
   może zeskanować QR kamerą, użyć czytnika USB albo wpisać kod ręcznie.
-  QR działa tylko dla dzisiejszego zamówienia w statusie `ready` i tylko
+  QR działa tylko dla dzisiejszego zamówienia w statusie `ordered` i tylko
   raz — po wydaniu skan zwraca błąd.
 - **Bezpieczne sesje**: tokeny 256-bit, w bazie tylko skrót SHA-256,
   ciasteczka `HttpOnly` + `SameSite=Strict`, opcjonalnie `Secure`.
@@ -94,8 +94,8 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 
 | Rola | Panel | Uprawnienia |
 | --- | --- | --- |
-| `student` | `/student` | przegląd menu, składanie zamówień, anulowanie własnego zamówienia w statusie `new`, podgląd własnych zamówień i QR, zmiana własnego hasła |
-| `kitchen` | `/kitchen` | przegląd zamówień, wyszukiwanie po kodzie/QR, zmiana statusu `preparing → ready → completed`, oznaczanie płatności jako opłaconej, zarządzanie menu |
+| `student` | `/student` | przegląd menu, składanie zamówień, anulowanie własnego zamówienia w statusie `ordered`, podgląd własnych zamówień i QR, zmiana własnego hasła |
+| `kitchen` | `/kitchen` | przegląd zamówień, wyszukiwanie po kodzie/QR, wydanie zamówienia (`ordered → issued`), oznaczanie płatności jako opłaconej, zarządzanie menu |
 | `admin` | `/admin` | wszystko powyższe + statystyki, konta, reset haseł, ustawienia, audyt, pełne zarządzanie zamówieniami i menu |
 
 Nie ma publicznej rejestracji. Uczeń nie podaje żadnych danych — dostaje
@@ -258,7 +258,7 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 
 ### Panel kuchni — `/kitchen`
 
-- zamówienia otwarte (`new`, `preparing`, `ready`), dzisiejsze lub wszystkie,
+- zamówienia otwarte (`ordered`), dzisiejsze lub wszystkie,
 - karty zamówień z pozycjami, kwotą, sposobem płatności i godziną odbioru,
 - wyszukiwanie po krótkim kodzie lub tokenie QR,
 - skaner QR kamery (`BarcodeDetector`, a gdy go brak — lokalny jsQR
@@ -293,30 +293,23 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 
 ```text
                  ┌──────────────┐
-                 │     new      │  (uczeń może anulować)
+                 │   ordered    │  (uczeń może anulować)
                  └──────┬───────┘
-                        │ kuchnia przyjmuje
+                        │ kuchnia wydaje
                         ▼
                  ┌──────────────┐
-                 │  preparing   │
-                 └──────┬───────┘
-                        │ kuchnia kończy przygotowanie
-                        ▼
-                 ┌──────────────┐
-                 │    ready     │  (gotowe do odbioru)
-                 └──────┬───────┘
-                        │ wydanie
-                        ▼
-                 ┌──────────────┐
-                 │  completed   │  płatność automatycznie = paid
+                 │   issued     │  płatność automatycznie = paid
                  └──────────────┘
 
-      anulowane w dowolnym momencie przez admina:
-                 new / preparing / ready → cancelled
+      zamknięte bez wydania:
+                 ordered → cancelled   (uczeń przed wydaniem lub admin)
+                 ordered → uncollected (minął pickup_limit_minutes)
 ```
 
 Płatność: `unpaid` → `paid`. Kuchnia może tylko oznaczyć `paid`; admin może
-ustawić oba stany. Wydanie zamówienia automatycznie ustawia `paid`.
+ustawić oba stany. Wydanie zamówienia automatycznie ustawia `paid`
+i zapisuje `issued_at`. Zamówienie nieodebrane jest osobnym statusem
+`uncollected`; administrator może je skorygować na `issued`.
 
 ## Konfiguracja
 

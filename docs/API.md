@@ -435,7 +435,7 @@ pozycje w kolejności `order_items.id`.
 - Suma jest liczona po stronie serwera na podstawie aktualnych cen.
 - Maksymalna kwota zamówienia: 200 000 gr (2000 zł).
 - Limit otwartych zamówień użytkownika: `max_open_orders` (domyślnie 3);
-  statusy liczone jako otwarte: `new`, `preparing`, `ready`.
+  jedynym statusem otwartym jest `ordered`.
 - `max_uncollected > 0` blokuje nowe zamówienia, jeśli uczeń ma co najmniej
   tyle nieodebranych zamówień w ostatnich 30 dniach. Blokadę można zdjąć
   akcją administratora `POST /api/admin/users/:id/clear-uncollected-block`;
@@ -463,7 +463,7 @@ zamówienie dla powtórzonego klucza idempotencji.
 ### `POST /api/student/orders/:id/cancel`
 
 Puste ciało `{}`. Anulować można wyłącznie **własne**, nieopłacone
-zamówienie w statusie `new`, w terminie `cancel_window_minutes` od
+zamówienie w statusie `ordered`, w terminie `cancel_window_minutes` od
 złożenia (`0` = bez limitu). Operacja jest transakcyjna i warunkowa —
 przy dwóch równoczesnych anulowaniach jedno kończy się `200`, drugie
 `409`. Zwraca zaktualizowany `OrderView` ze statusem `cancelled`.
@@ -574,8 +574,9 @@ Pozycja pozostaje widoczna dla personelu i w historycznych zamówieniach
 
 ### `GET /api/staff/orders?scope=open|all|today`
 
-- `open` (domyślnie): statusy `new`, `preparing`, `ready` bez znacznika
-  nieodebranego, sortowanie najstarsze pierwsze (kolejka),
+- `open` (domyślnie): zamówienia `ordered`, sortowanie najstarsze
+  pierwsze (kolejka). Kuchnia i tak zmienia tylko dzisiejsze; zaległe
+  zamówienia są automatycznie zamykane jako nieodebrane,
 - `today`: zamówienia od początku doby `Europe/Warsaw`, najnowsze pierwsze,
 - `all`: wszystkie, najnowsze pierwsze, maks. 300.
 
@@ -585,7 +586,7 @@ Każdy wariant zwraca maks. 300 zamówień. Odpowiedź to tablica
 ### `PATCH /api/staff/orders/:id`
 
 ```json
-{"status": "ready"}
+{"status": "issued"}
 ```
 
 lub
@@ -596,38 +597,39 @@ lub
 
 lub oba pola. Dozwolone wartości:
 
-- `status`: `new`, `preparing`, `ready`, `completed`, `cancelled`,
+- `status`: `ordered`, `issued`, `cancelled` (administrator); `ordered`,
+  `issued` (kuchnia),
 - `payment_status`: `unpaid`, `paid`.
 
 Ograniczenia dla roli `kitchen`:
 
 - nie może zmieniać zamówień z innych dni niż dzisiejszy (`403`),
-- nie może zmieniać zamówień `completed`, `cancelled` ani nieodebranych
+- nie może zmieniać zamówień `issued`, `cancelled` ani nieodebranych
   (`409`),
-- prowadzi zamówienie krok po kroku: `new → preparing → ready →
-  completed` (`403` przy pominięciu kroku),
-- może ustawić płatność tylko na `paid` i tylko gdy zamówienie jest
-  `ready` lub `completed` (`403`/`409` dla innych przypadków),
+- może tylko wydać zamówienie: `ordered → issued` (`403` przy próbie
+  innego przejścia),
+- może ustawić płatność tylko na `paid` (`403` dla `unpaid`),
 - nie może oznaczyć jako opłacone zamówienia anulowanego ani nieodebranego,
 - nie może cofnąć płatności (`paid → unpaid`); robi to wyłącznie
   administrator, a zdarzenie trafia do audytu jako
   `order_payment_reverted`,
-- `completed` automatycznie ustawia `paid`, jeśli nie podano płatności,
-- przy przejściu na `paid` serwer zapisuje `paid_at` i `paid_by`.
+- `issued` automatycznie ustawia `paid`, jeśli nie podano płatności,
+- przy przejściu na `paid` serwer zapisuje `paid_at` i `paid_by`, a przy
+  `issued` także `issued_at`.
 
 Administrator nie ma ograniczeń dnia ani przejść (poza walidacją wartości).
 Zmiana statusu nieodebranego zamówienia przez administratora zdejmuje
-znacznik `uncollected_at` i przywraca je do obiegu. Wszystkie zmiany są
-transakcyjne; równoległa zmiana tego samego zamówienia kończy się `409`
-zamiast nadpisania danych. Zwraca zaktualizowany `OrderView`. Brak
-zamówienia → `404`.
+znacznik `uncollected_at` i przywraca je do obiegu (`uncollected` →
+`issued`). Wszystkie zmiany są transakcyjne; równoległa zmiana tego samego
+zamówienia kończy się `409` zamiast nadpisania danych. Zwraca
+zaktualizowany `OrderView`. Brak zamówienia → `404`.
 
 ### `POST /api/staff/pickup`
 
 Wyszukuje zamówienie po krótkim kodzie lub tokenie QR. Nie zmienia
 statusu. Wymaga zalogowanego konta `kitchen` lub `admin`; uczeń otrzymuje
 `403`. Zwraca wyłącznie zamówienie **z dzisiejszego dnia w statusie
-`ready`** — kod jest ważny do wydania i po `completed` przestaje działać.
+`ordered`** — kod jest ważny do wydania i po `issued` przestaje działać.
 
 ```json
 {"code": "K7M2QP"}
@@ -639,9 +641,9 @@ Akceptowane postacie:
 - `<48 znaków hex>` — pełna zawartość QR,
 - `ZSL:<48 znaków hex>` — starszy wariant z prefiksem (zgodność wstecz).
 
-Błędy: nieistniejący kod → `404`; zamówienie z innego dnia, jeszcze
-niegotowe (`new`/`preparing`), już wydane, anulowane lub nieodebrane →
-`409`; przekroczenie limitu prób → `429`.
+Błędy: nieistniejący kod → `404`; zamówienie z innego dnia, już wydane
+(`issued`), anulowane lub nieodebrane → `409`; przekroczenie limitu prób →
+`429`.
 
 **Odpowiedź 200**
 
@@ -675,7 +677,7 @@ podział na gotówkę i kartę:
   "unpaid_cents": 1400,
   "cancelled_orders": 1,
   "uncollected_orders": 1,
-  "completed_orders": 9,
+  "issued_orders": 9,
   "open_orders": 1,
   "cash": { "orders": 7, "paid_orders": 5, "paid_cents": 9800, "...": "..." },
   "card": { "orders": 5, "paid_orders": 4, "paid_cents": 8800, "...": "..." },
@@ -701,8 +703,10 @@ podział na gotówkę i kartę:
   tej sumy (mimo że nie zwiększa `paid_orders`). Analogicznie
   `unpaid_cents` obejmuje nieopłacone nieodebrane.
 - `cancelled_orders` nie zawiera nieodebranych (te mają osobny licznik),
-- `completed_orders + open_orders + cancelled_orders + uncollected_orders =
+- `issued_orders + open_orders + cancelled_orders + uncollected_orders =
   orders` (podział według realizacji),
+- `issued_orders` to zamówienia wydane w danym dniu (także opłacone
+  nieodebrane są liczone osobno jako `uncollected_orders`),
 - `cash.*` + `card.*` = wartości łączne,
 - `stock` to **bieżący** stan pozycji menu (nie historyczny) oraz liczba
   sprzedanych sztuk w dniu raportu; anulowane zamówienia nie zwiększają
@@ -744,9 +748,10 @@ nieopłacone, kwota nieopłacona w groszach, anulowane, nieodebrane.
 
 - `students`, `kitchen`, `admins` — tylko aktywne konta,
 - `orders_today`, `revenue_today_cents` — od początku doby `Europe/Warsaw`;
-  utarg liczy tylko `payment_status = 'paid'` i status inny niż `cancelled`,
-- `open_orders` — `new`, `preparing`, `ready`,
-- `awaiting_payment` — `unpaid` i status inny niż `cancelled`,
+  utarg liczy tylko `payment_status = 'paid'` i status inny niż
+  `cancelled` (opłacone nieodebrane zostają w utargu),
+- `open_orders` — `ordered`,
+- `awaiting_payment` — `unpaid` i status inny niż `cancelled`/`uncollected`,
 - `active_sessions` — sesje niewygasłe.
 
 ### `GET /api/admin/stats/activity?days=7|14|30|90`
@@ -767,7 +772,7 @@ Statystyki aktywności dla wykresów. `days` jest przycinane do zakresu
       "date": "2026-10-25",
       "orders": 42,
       "revenue_cents": 51200,
-      "completed": 38,
+      "issued": 38,
       "cancelled": 2
     }
   ],
@@ -775,23 +780,22 @@ Statystyki aktywności dla wykresów. `days` jest przycinane do zakresu
     {"hour": 0, "orders": 0}
   ],
   "status_counts": {
-    "new": 3,
-    "preparing": 2,
-    "ready": 1,
-    "completed": 38,
-    "cancelled": 2
+    "ordered": 6,
+    "issued": 38,
+    "cancelled": 2,
+    "uncollected": 1
   },
-  "payment_counts": {"unpaid": 4, "paid": 42},
+  "payment_counts": {"unpaid": 6, "paid": 42},
   "top_items": [
     {"name": "Kotlet schabowy z ziemniakami", "quantity": 21, "revenue_cents": 29400}
   ],
   "totals": {
-    "orders": 46,
-    "completed": 38,
+    "orders": 47,
+    "issued": 38,
     "cancelled": 2,
     "revenue_cents": 51200,
-    "non_cancelled_orders": 44,
-    "average_order_cents": 1163
+    "non_cancelled_orders": 45,
+    "average_order_cents": 1138
   }
 }
 ```
@@ -800,8 +804,9 @@ Statystyki aktywności dla wykresów. `days` jest przycinane do zakresu
   od `from` do `to` włącznie.
 - `hourly_today` zawsze zawiera 24 punkty (godziny 0–23).
 - `revenue_cents` liczy tylko zamówienia `payment_status = 'paid'` i status
-  inny niż `cancelled`.
-- `top_items` to maks. 8 pozycji w zakresie, bez anulowanych zamówień.
+  inny niż `cancelled` (opłacone nieodebrane zostają w kasie).
+- `non_cancelled_orders` i `top_items` pomijają także `uncollected`.
+- `issued` to liczba zamówień wydanych w danym dniu.
 - Odpowiedź nie zawiera danych osobowych.
 
 ### `GET /api/admin/users`
@@ -1103,7 +1108,7 @@ Brak zmian → `400`. Zwraca pełny obiekt ustawień.
   {
     "id": 501,
     "action": "order_updated",
-    "details": "Zamówienie id=12, status new -> preparing, płatność unpaid -> unpaid",
+    "details": "Zamówienie id=12, status ordered -> issued, płatność unpaid -> paid",
     "created_at": 1762451234,
     "actor_login": "k-9m2x7q4p1a"
   }
@@ -1158,7 +1163,7 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
 {
   "id": 12,
   "code": "K7M2QP",
-  "status": "new",
+  "status": "ordered",
   "payment_method": "cash",
   "payment_status": "unpaid",
   "total_cents": 2800,
@@ -1167,6 +1172,7 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   "updated_at": 1762450000,
   "paid_at": null,
   "paid_by": null,
+  "issued_at": null,
   "uncollected_at": null,
   "student": "s-a7k2m9p4qx",
   "student_code": "UCZ-AB12C",
@@ -1177,14 +1183,20 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
 ```
 
 - `student` to pseudonimowy login, `student_code` to pseudonimowy kod —
-  brak imion/nazwisk.
+  brak imion/nazwisk. Schemat dopuszcza `orders.user_id = NULL`
+  (`ON DELETE SET NULL`): jeśli konto zniknie z bazy, pola są puste,
+  `student_code` ma wartość `konto usunięte`, a historia zamówienia
+  zostaje. Obecna akcja `DELETE /api/admin/users/:id` nadal usuwa
+  zamówienia konta — zmianę zachowania wprowadzi osobny krok
+  zarządzania kontami.
 - `items` to snapshoty z momentu złożenia zamówienia (nazwa i cena nie
   zmieniają się po edycji menu).
-- `status` może przyjąć także `uncollected` (zamówienie gotowe, ale
-  nieodebrane w terminie); w bazie pozostaje `cancelled` z ustawionym
-  `uncollected_at`.
+- `status`: `ordered` (przyjęte do wydania), `issued` (wydane),
+  `cancelled` (anulowane jawnie), `uncollected` (nieodebrane w terminie).
 - `paid_at` / `paid_by` — czas i pseudonimowy login osoby, która
   oznaczyła płatność; `null` dla nieopłaconych.
+- `issued_at` — moment wydania; `null` dla niewydanych. Historyczne
+  zamówienia mają `issued_at` uzupełnione przy migracji.
 - `code` ma 6 wielkich liter; `qr_token` nie jest zwracany w JSON
   (dostępny wyłącznie jako obraz QR).
 

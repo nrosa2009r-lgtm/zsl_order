@@ -388,7 +388,7 @@
         detail.append(meta, items);
         body.append(detail);
 
-        if (["new", "preparing", "ready"].includes(order.status)) {
+        if (order.status === "ordered") {
             const qrBox = App.h("div", { class: "order-qr" });
             qrBox.append(
                 App.h("img", {
@@ -410,7 +410,7 @@
             App.h("strong", { text: "Razem: " + App.fmtPLN(order.total_cents) })
         );
 
-        if (order.status === "new" && order.payment_status !== "paid") {
+        if (order.status === "ordered" && order.payment_status !== "paid") {
             const cancel = App.h("button", {
                 class: "btn btn-danger btn-small",
                 text: "Anuluj zamówienie",

@@ -343,49 +343,14 @@
         }
 
         if (role === "kitchen") {
-            if (order.status === "new") {
-                actions.append(App.h("button", {
-                    class: "btn btn-primary btn-small",
-                    text: "Przyjmij do realizacji",
-                    attrs: { type: "button" },
-                    on: {
-                        click: function () {
-                            updateOrder(order.id, { status: "preparing" }, options);
-                        },
-                    },
-                }));
-            } else if (order.status === "preparing") {
-                actions.append(App.h("button", {
-                    class: "btn btn-primary btn-small",
-                    text: "Gotowe do odbioru",
-                    attrs: { type: "button" },
-                    on: {
-                        click: function () {
-                            updateOrder(order.id, { status: "ready" }, options);
-                        },
-                    },
-                }));
-            } else if (order.status === "ready") {
+            if (order.status === "ordered") {
                 actions.append(App.h("button", {
                     class: "btn btn-success btn-small",
-                    text: "Wydano i opłacone",
+                    text: "Wydaj i opłacone",
                     attrs: { type: "button" },
                     on: {
                         click: function () {
-                            updateOrder(order.id, { status: "completed" }, options);
-                        },
-                    },
-                }));
-            }
-
-            if (order.payment_status === "unpaid" && order.status === "ready") {
-                actions.append(App.h("button", {
-                    class: "btn btn-secondary btn-small",
-                    text: "Oznacz jako opłacone",
-                    attrs: { type: "button" },
-                    on: {
-                        click: function () {
-                            updateOrder(order.id, { payment_status: "paid" }, options);
+                            updateOrder(order.id, { status: "issued" }, options);
                         },
                     },
                 }));
@@ -398,7 +363,7 @@
                 on: {
                     click: function () {
                         if (!window.confirm("Przywrócić zamówienie jako wydane i zdjąć znacznik nieodebranego?")) return;
-                        updateOrder(order.id, { status: "completed" }, options);
+                        updateOrder(order.id, { status: "issued" }, options);
                     },
                 },
             }));
@@ -407,10 +372,8 @@
                 attrs: { "aria-label": "Status zamówienia" },
             });
             [
-                ["new", "Nowe"],
-                ["preparing", "W przygotowaniu"],
-                ["ready", "Gotowe"],
-                ["completed", "Wydane"],
+                ["ordered", "Zamówione"],
+                ["issued", "Wydane"],
                 ["cancelled", "Anulowane"],
             ].forEach(function (pair) {
                 const option = App.h("option", { text: pair[1], attrs: { value: pair[0] } });
@@ -700,7 +663,7 @@
                     App.setBusy(issue, true, "Wydawanie…");
                     try {
                         await App.api.patch("/api/staff/orders/" + order.id, {
-                            status: "completed",
+                            status: "issued",
                         });
                         App.toast("Zamówienie wydane.", "success");
                         if (onIssued) await onIssued();

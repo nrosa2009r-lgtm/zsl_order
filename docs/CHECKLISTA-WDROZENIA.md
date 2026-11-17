@@ -103,8 +103,9 @@ dlaczego).
       sprawdzono, że hasła nie trafiły do audytu ani logów.
 - [ ] Wydruk kart jednostronny w zamkniętym pomieszczeniu; wydawanie
       przez wychowawców; zniszczenie niewydanych kart.
-- [ ] Zamówienie ucznia, zmiana statusów, odbiór QR tylko dla
-      dzisiejszego `ready`, jednorazowość, czytnik USB i wpis ręczny.
+- [ ] Zamówienie ucznia, wydanie (`ordered → issued`), odbiór QR tylko
+      dla dzisiejszego `ordered`, jednorazowość, czytnik USB i wpis
+      ręczny.
 - [ ] Kamera na HTTP pokazuje komunikat o HTTPS/localhost, a nie
       udaje, że działa; czytnik USB jest alternatywą.
 - [ ] Menu, raport dnia (w tym tabela stanu magazynu), eksport metadanych
@@ -112,6 +113,10 @@ dlaczego).
 - [ ] **Stan magazynowy**: pozycja z limitem 1, dwa równoczesne
       zamówienia (jedno `201`, jedno `409`, brak `500`), zwrot po
       anulowaniu i reset następnego dnia z `stock_default`.
+- [ ] **Migracja 0007**: przed startem wykonany backup, po migracji
+      `PRAGMA foreign_key_check` i `integrity_check` bez błędów, liczba
+      `order_items` i suma `total_cents` zgodne z kopią, historia
+      zamówień widoczna po usunięciu konta (jeśli testowane).
 - [ ] **Test obciążeniowy** dla spodziewanego szczytu (np. 200–1000
       uczniów, przerwa obiadowa): zdefiniowane kryterium (np. p95 < 1 s,
       brak błędów 5xx, stabilna baza) i wynik zapisany.

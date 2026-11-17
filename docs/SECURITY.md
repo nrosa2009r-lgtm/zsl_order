@@ -224,7 +224,7 @@ mechanizmem — to warstwa dodatkowa.
   `/api/admin`.
 - Zapytania o zamówienia ucznia zawsze zawierają `user_id` z sesji:
   `GET /api/student/orders/:id/...` nie pozwala na dostęp po samym ID.
-- Anulowanie sprawdza właściciela i status `new`.
+- Anulowanie sprawdza właściciela i status `ordered`.
 - Kuchnia ma dodatkowe ograniczenia statusów/płatności; administrator
   może więcej, ale nadal w ramach dozwolonych wartości.
 - Administrator nie może odebrać uprawnień własnemu kontu (dezaktywacja
@@ -319,9 +319,9 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   `404`.
 - Anulowane, wydane i nieodebrane zamówienie nie generuje QR (`409`).
 - Pickup wymaga `kitchen`/`admin`; uczeń dostaje `403`. Akceptuje tylko
-  dzisiejsze zamówienie w statusie `ready` — po wydaniu kod jest
-  jednorazowo zużyty. Pickup nie zmienia statusu; wydanie jest osobną
-  akcją personelu.
+  dzisiejsze zamówienie w statusie `ordered` — po wydaniu (`issued`) kod
+  jest jednorazowo zużyty. Pickup nie zmienia statusu; wydanie jest
+  osobną akcją personelu.
 - Token QR jest przechowywany jawnie w bazie (konieczny do generowania
   obrazu). Ochrona bazy = ochrona kodów odbioru.
 

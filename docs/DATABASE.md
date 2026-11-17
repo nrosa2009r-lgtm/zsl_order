@@ -149,21 +149,23 @@ CREATE INDEX IF NOT EXISTS menu_items_stock_date_idx ON menu_items(stock_date);
 ```sql
 CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     code TEXT NOT NULL UNIQUE,
     qr_token TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL DEFAULT 'new'
-        CHECK (status IN ('new','preparing','ready','completed','cancelled')),
+    status TEXT NOT NULL DEFAULT 'ordered'
+        CHECK (status IN ('ordered','issued','cancelled','uncollected')),
     payment_method TEXT NOT NULL CHECK (payment_method IN ('cash','card')),
     payment_status TEXT NOT NULL DEFAULT 'unpaid'
         CHECK (payment_status IN ('unpaid','paid')),
     total_cents INTEGER NOT NULL CHECK (total_cents >= 0),
     pickup_time TEXT NOT NULL DEFAULT '',
+    break_id INTEGER REFERENCES breaks(id) ON DELETE SET NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     paid_at INTEGER,
     paid_by INTEGER,
     ready_at INTEGER,
+    issued_at INTEGER,
     uncollected_at INTEGER,
     idempotency_key TEXT
 );
@@ -171,6 +173,7 @@ CREATE INDEX IF NOT EXISTS orders_user_idx ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS orders_uncollected_idx ON orders(uncollected_at);
 CREATE INDEX IF NOT EXISTS orders_ready_idx ON orders(status, ready_at);
+CREATE INDEX IF NOT EXISTS orders_break_idx ON orders(break_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_idx
     ON orders(user_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
@@ -178,25 +181,55 @@ CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_idx
 
 | Kolumna | Opis |
 | --- | --- |
-| `user_id` | właściciel (pseudonimowe konto) |
+| `user_id` | właściciel (pseudonimowe konto); `NULL` po usunięciu konta |
 | `code` | 6 wielkich liter, unikalny kod odbioru |
 | `qr_token` | 48 znaków hex (24 B), unikalny token QR |
-| `status` | `new`, `preparing`, `ready`, `completed`, `cancelled` |
+| `status` | `ordered`, `issued`, `cancelled`, `uncollected` |
 | `payment_method` | `cash`, `card` |
 | `payment_status` | `unpaid`, `paid` |
 | `total_cents` | suma policzona po stronie serwera |
 | `pickup_time` | `""` lub `HH:MM` (godzina lokalna) |
+| `break_id` | przerwa, na którą złożono zamówienie; `NULL` gdy brak lub usunięta |
 | `created_at`, `updated_at` | Unix UTC |
 | `paid_at` | czas oznaczenia płatności (Unix UTC) lub `NULL` |
 | `paid_by` | techniczne ID konta, które oznaczyło płatność (bez FK) |
-| `ready_at` | czas ustawienia statusu `ready`; podstawa limitu odbioru |
-| `uncollected_at` | znacznik nieodebrania; API pokazuje wtedy status `uncollected` |
+| `ready_at` | znacznik historyczny z migracji starych statusów; nowe zamówienia go nie ustawiają |
+| `issued_at` | moment wydania zamówienia |
+| `uncollected_at` | znacznik nieodebrania (status `uncollected`) |
 | `idempotency_key` | klucz klienta, unikalny per `user_id` (indeks częściowy) |
 
-Zamówienie nieodebrane pozostaje w bazie jako `cancelled` z ustawionym
-`uncollected_at`. Dzięki temu nie trzeba przebudowywać tabeli z
-ograniczeniem `CHECK`; API i raporty rozróżniają anulowanie od
-nieodebrania po znaczniku.
+`uncollected` jest osobnym statusem w bazie. Zamówienie nieodebrane nie
+jest liczone jednocześnie jako anulowane ani opłacone w kategoriach
+liczbowych raportu (opłacone nieodebrane zostaje natomiast w utargu).
+
+`user_id` dopuszcza `NULL`, a klucz obcy ma `ON DELETE SET NULL`: usunięcie
+konta nie kasuje historii zamówień. API pokazuje wtedy `student_code =
+"konto usunięte"`, a `student` jest puste. `break_id` analogicznie zeruje
+się przy usunięciu przerwy.
+
+### `breaks`
+
+```sql
+CREATE TABLE IF NOT EXISTS breaks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 60),
+    start_time TEXT NOT NULL CHECK (start_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+    end_time TEXT NOT NULL CHECK (end_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK (start_time < end_time)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS breaks_name_idx ON breaks(name);
+CREATE INDEX IF NOT EXISTS breaks_active_idx ON breaks(active, sort_order);
+```
+
+Przerwy definiują okna wydawania zamówień (np. „Długa przerwa”
+11:30–11:50). `name` jest unikalna, godziny w formacie `HH:MM` czasu
+szkoły, a `CHECK` wymaga `start_time < end_time`. Tabela jest gotowa już
+w migracji 0007; limity „na przerwę” egzekwuje kolejny krok przebudowy.
+Usunięcie przerwy nie usuwa zamówień — tylko zeruje `orders.break_id`.
 
 Uwaga: `qr_token` jest przechowywany jawnie, ponieważ serwer musi
 wygenerować obraz QR. Ochrona pliku bazy jest ochroną kodów odbioru.
@@ -244,14 +277,15 @@ Domyślne wpisy (seed `INSERT OR IGNORE`):
 | `max_open_orders` | `3` | limit otwartych zamówień na użytkownika |
 | `max_order_items` | `20` | limit pozycji w zamówieniu |
 | `cancel_window_minutes` | `30` | termin anulowania od złożenia; `0` = bez limitu |
-| `pickup_limit_minutes` | `120` | czas od `ready` do nieodebrania; `0` = wyłączone |
+| `pickup_limit_minutes` | `120` | czas od przyjęcia (`ordered`) do nieodebrania; `0` = wyłączone |
 | `max_uncollected` | `0` | blokada po N nieodebranych z 30 dni; `0` = brak |
 | `max_item_quantity_per_break` | `0` | limit sztuk jednej pozycji na przerwę; `0` = bez limitu |
 | `one_active_order_per_break` | `0` | `1` = jedno aktywne zamówienie na przerwę |
 
-Klucze `*_per_break` są zapisywane już teraz, ale egzekwowane dopiero po
-wdrożeniu tabeli przerw (kolejna migracja). Do tego czasu nie zmieniają
-zachowania zamówień.
+Tabela `breaks` jest już utworzona w migracji 0007. Klucze `*_per_break`
+są zapisywane i widoczne w panelu administratora, ale egzekwowanie
+limitów „na przerwę” wchodzi w kolejnym kroku przebudowy. Do tego czasu
+nie zmieniają zachowania zamówień.
 
 Wartości są stringami; API administracyjne waliduje zakresy i konwertuje
 `ordering_enabled` z bool na `1`/`0`.
@@ -286,10 +320,13 @@ CREATE INDEX IF NOT EXISTS audit_created_idx ON audit_log(created_at);
 | `menu_items_stock_date_idx` | `menu_items` | `stock_date` | leniwy reset stanu |
 | `orders_user_idx` | `orders` | `user_id, created_at` | historia ucznia |
 | `orders_status_idx` | `orders` | `status, created_at` | kolejka kuchni |
-| `orders_ready_idx` | `orders` | `status, ready_at` | automatyczne nieodebrane |
+| `orders_ready_idx` | `orders` | `status, ready_at` | historyczne znaczniki gotowości |
+| `orders_break_idx` | `orders` | `break_id, created_at` | zamówienia przerwy |
 | `orders_uncollected_idx` | `orders` | `uncollected_at` | licznik nieodebranych |
 | `orders_user_idempotency_idx` | `orders` | `user_id, idempotency_key` (częściowy) | ochrona przed duplikatem |
 | `order_items_order_idx` | `order_items` | `order_id` | składanie zamówień |
+| `breaks_name_idx` | `breaks` | `name` (unikalny) | nazwy przerw |
+| `breaks_active_idx` | `breaks` | `active, sort_order` | aktywne przerwy |
 | `audit_created_idx` | `audit_log` | `created_at` | retencja, lista |
 
 Unikalne ograniczenia (`UNIQUE`) tworzą dodatkowe indeksy na `users.login`,
@@ -329,7 +366,7 @@ Kolejka kuchni:
 ```sql
 SELECT id, code, status, payment_method, total_cents, pickup_time
 FROM orders
-WHERE status IN ('new','preparing','ready')
+WHERE status = 'ordered'
 ORDER BY created_at ASC, id ASC;
 ```
 
@@ -509,6 +546,56 @@ Wszystkie zmiany są addytywne: istniejące pozycje dostają `NULL`
 (bez limitu), a historyczne pozycje zamówień `stock_reserved = 0`.
 Przed migracją wykonaj backup i sprawdź po niej `PRAGMA
 foreign_key_check;` oraz `PRAGMA integrity_check;`.
+
+`0007_orders_rebuild_breaks.sql` przebudowuje `orders` (SQLite nie
+pozwala zmienić `CHECK` ani kluczy obcych przez `ALTER TABLE`):
+
+- nowe statusy `ordered`, `issued`, `cancelled`, `uncollected`,
+- `issued_at` — moment wydania; dla historycznych `completed` brany jest
+  `paid_at`, potem `ready_at`, a na końcu `updated_at`,
+- `user_id` może być `NULL` (`ON DELETE SET NULL`), więc usunięcie konta
+  nie kasuje historii zamówień,
+- `break_id` → `breaks(id)` (`ON DELETE SET NULL`) i tabela `breaks`.
+
+Mapowanie starych statusów:
+
+| Stary | Nowy |
+| --- | --- |
+| `new`, `preparing`, `ready` | `ordered` |
+| `completed` | `issued` |
+| `cancelled` z `uncollected_at` | `uncollected` |
+| `cancelled` bez `uncollected_at` | `cancelled` |
+
+`ready_at` zostaje jako znacznik historyczny; nowe zamówienia korzystają
+z `issued_at`. Migracja jest odporna na ponowne uruchomienie: `CASE`
+rozpoznaje także wartości nowego schematu, a tabele powstają przez
+`CREATE TABLE IF NOT EXISTS`.
+
+Procedura migracji 0007 (wykonaj **przed** startem nowej wersji):
+
+```bash
+# 1. Zatrzymaj aplikację i zrób spójną kopię.
+sqlite3 baza.db ".backup 'baza-przed-0007.db'"
+
+# 2. Zapisz liczby kontrolne.
+sqlite3 baza.db "SELECT COUNT(*) FROM orders;"
+sqlite3 baza.db "SELECT COUNT(*) FROM order_items;"
+sqlite3 baza.db "SELECT COALESCE(SUM(total_cents),0) FROM orders;"
+
+# 3. Uruchom nową wersję (migracja przy starcie), potem sprawdź:
+sqlite3 baza.db "PRAGMA foreign_key_check;"
+sqlite3 baza.db "PRAGMA integrity_check;"
+sqlite3 baza.db "SELECT status, COUNT(*) FROM orders GROUP BY status;"
+sqlite3 baza.db "SELECT COUNT(*) FROM order_items;"
+sqlite3 baza.db "SELECT COALESCE(SUM(total_cents),0) FROM orders;"
+
+# 4. Porównaj liczby z kroku 2. W razie różnicy odtwórz kopię.
+```
+
+Migracja nie tworzy widoków ani triggerów; jedyne klucze obce do `orders`
+to `order_items.order_id` (kaskadowy) i `orders.user_id`/`break_id`.
+Przebudowa kopiuje `order_items` razem z `stock_reserved`, aby nie
+uruchomić kaskady na nowych wierszach.
 
 ## 9. Ograniczenia SQLite w tym projekcie
 

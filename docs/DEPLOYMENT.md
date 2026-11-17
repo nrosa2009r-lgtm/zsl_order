@@ -1058,7 +1058,7 @@ nie została przypadkowo użyta. Testy API można rozszerzyć o:
 - dwa równoczesne anulowania (jedno `200`, jedno `409`),
 - próbę ustawienia przez ucznia `status`/`price_cents`/`total_cents`,
 - zmianę zamówienia z innego dnia przez kuchnię (`403`),
-- przejście statusów do `completed`, `paid_at`/`paid_by` i sprawdzenie
+- przejście `ordered → issued`, `issued_at`, `paid_at`/`paid_by` i sprawdzenie
   raportu dziennego oraz CSV (gotówka/karta),
 - automatyczne oznaczenie nieodebranego i blokadę po `max_uncollected`,
 - pobranie QR i pickup po kodzie oraz tokenie (opcjonalnie z prefiksem
