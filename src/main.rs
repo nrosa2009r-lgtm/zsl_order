@@ -129,6 +129,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         dummy_hash,
         login_limiter: auth::LoginLimiter::from_config(&config),
         pickup_limiter: auth::PickupLimiter::from_config(&config),
+        bulk_limiter: auth::BulkActionLimiter::new(),
         jwt_secret,
         client_ip_warning: std::sync::Mutex::new(None),
     });

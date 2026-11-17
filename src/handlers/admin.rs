@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::auth::AuthUser;
+use crate::client_ip::ClientIp;
 use crate::db;
 use crate::error::AppError;
-use crate::handlers::auth::hash_password_async;
+use crate::handlers::auth::{hash_password_async, verify_password_async};
 use crate::security;
 use crate::state::AppState;
 use crate::util;
@@ -13,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, QueryBuilder, Row, Sqlite};
+use sqlx::{FromRow, QueryBuilder, Row, Sqlite, SqlitePool};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
@@ -877,19 +878,15 @@ pub async fn delete_user(
 
     let mut transaction = state.db.begin().await?;
 
-    sqlx::query(
-        "DELETE FROM order_items WHERE order_id IN
-         (SELECT id FROM orders WHERE user_id = ?)",
-    )
-    .bind(id)
-    .execute(&mut *transaction)
-    .await?;
-
-    let deleted_orders = sqlx::query("DELETE FROM orders WHERE user_id = ?")
-        .bind(id)
-        .execute(&mut *transaction)
-        .await?
-        .rows_affected();
+    // Historia zamówień zostaje: `orders.user_id` ma `ON DELETE SET NULL`,
+    // więc raporty i nieodebrane nadal są kompletne, a w interfejsie
+    // zamówienie pokazuje „konto usunięte”. Usuwamy też sesje (kaskada
+    // zrobi to samo, ale jawne usunięcie jest czytelniejsze).
+    let kept_orders: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE user_id = ?")
+            .bind(id)
+            .fetch_one(&mut *transaction)
+            .await?;
 
     sqlx::query("DELETE FROM sessions WHERE user_id = ?")
         .bind(id)
@@ -912,23 +909,543 @@ pub async fn delete_user(
         &state.db,
         Some(actor.id),
         "user_deleted",
-        &format!("Usunięto konto id={id}, rola={role}, zamówienia={deleted_orders}"),
+        &format!(
+            "Usunięto konto id={id}, rola={role}, zamówienia zachowane={kept_orders} (user_id NULL)"
+        ),
     )
     .await;
 
-    tracing::warn!(
+    tracing::info!(
         actor_id = actor.id,
         target_id = id,
         role = %role,
-        deleted_orders,
-        "Usunięto konto wraz z historią zamówień"
+        kept_orders,
+        "Usunięto konto; historia zamówień zachowana"
     );
 
     Ok(Json(serde_json::json!({
         "ok": true,
         "login": login,
-        "deleted_orders": deleted_orders
+        "kept_orders": kept_orders
     })))
+}
+
+// ==================== Akcje masowe na kontach ====================
+
+/// Maksymalna liczba kont w jednej operacji masowej.
+pub const BULK_MAX_ACCOUNTS: usize = 500;
+/// Ile kont pokazujemy szczegółowo w podglądzie (reszta tylko jako liczba).
+const BULK_PREVIEW_ACCOUNTS: usize = 50;
+/// Ile identyfikatorów trafia do wpisu audytu.
+const BULK_AUDIT_IDS: usize = 50;
+
+#[derive(Deserialize)]
+pub struct BulkSelectionRequest {
+    /// Jawna lista identyfikatorów (z podglądu). Pierwszeństwo przed
+    /// filtrem; pusta lista jest błędem.
+    #[serde(default)]
+    pub ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+}
+
+/// Krok 2 (potwierdzenie). Musi wskazywać **ten sam wybór** co krok 1:
+/// tę samą listę ID albo ten sam filtr, a `expected_count` musi zgadzać
+/// się z liczbą kont z podglądu. Zmiana liczby kont między krokami daje
+/// `409` i nie zmienia żadnych danych.
+#[derive(Deserialize)]
+pub struct BulkConfirmRequest {
+    #[serde(default)]
+    pub ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    pub expected_count: i64,
+    /// Hasło administratora wykonującego akcję (re-autoryzacja).
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct BulkAccountView {
+    pub id: i64,
+    pub login: String,
+    pub display_code: String,
+    pub role: String,
+    pub active: bool,
+    pub orders: i64,
+    pub open_orders: i64,
+}
+
+#[derive(Serialize)]
+pub struct ProtectedAccount {
+    pub id: i64,
+    pub login: String,
+    pub reason: String,
+}
+
+#[derive(Serialize)]
+pub struct BulkPreview {
+    pub mode: String,
+    /// Rozstrzygnięta lista ID — krok 2 może wysłać dokładnie tę listę.
+    pub ids: Vec<i64>,
+    pub count: i64,
+    pub accounts: Vec<BulkAccountView>,
+    pub accounts_truncated: bool,
+    pub protected: Vec<ProtectedAccount>,
+    pub total_orders: i64,
+    pub open_orders: i64,
+}
+
+struct NormalizedSelection {
+    ids: Option<Vec<i64>>,
+    role: Option<String>,
+    q: Option<String>,
+    active: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct BulkApplyResult {
+    pub action: String,
+    pub count: u64,
+    pub orders_orphaned: i64,
+    /// Rozstrzygnięta lista kont objętych akcją.
+    pub ids: Vec<i64>,
+}
+
+enum BulkAction {
+    Delete,
+    Deactivate,
+}
+
+fn normalize_selection(req: &BulkSelectionRequest) -> Result<NormalizedSelection, AppError> {
+    if let Some(ids) = &req.ids {
+        let mut cleaned: Vec<i64> = ids.iter().copied().filter(|id| *id > 0).collect();
+        cleaned.sort_unstable();
+        cleaned.dedup();
+        if cleaned.is_empty() {
+            return Err(AppError::bad("Lista ID jest pusta."));
+        }
+        if cleaned.len() > BULK_MAX_ACCOUNTS {
+            return Err(AppError::bad(format!(
+                "Maksymalnie {BULK_MAX_ACCOUNTS} kont w jednej operacji."
+            )));
+        }
+        return Ok(NormalizedSelection {
+            ids: Some(cleaned),
+            role: None,
+            q: None,
+            active: None,
+        });
+    }
+
+    if let Some(role) = req.role.as_deref()
+        && !matches!(role, "student" | "kitchen" | "admin")
+    {
+        return Err(AppError::bad("Nieprawidłowa rola użytkownika."));
+    }
+    let search = req.q.as_deref().map(str::trim).unwrap_or("");
+    let has_filter = req.role.is_some() || req.active.is_some() || !search.is_empty();
+    if !has_filter {
+        return Err(AppError::bad(
+            "Podaj listę ID albo filtr (rolę, aktywność lub wyszukiwanie).",
+        ));
+    }
+    Ok(NormalizedSelection {
+        ids: None,
+        role: req.role.clone(),
+        q: Some(search.to_string()),
+        active: req.active,
+    })
+}
+
+/// Chronione konta pasujące do tego samego wyboru: konto wykonujące akcję
+/// oraz wszyscy aktywni administratorzy (w tym ostatni aktywny). Akcje
+/// masowe ich nigdy nie dotykają.
+async fn bulk_protected<'e, E>(
+    db: E,
+    actor_id: i64,
+    selection: &NormalizedSelection,
+) -> Result<Vec<ProtectedAccount>, AppError>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT id, login, role, active FROM users
+         WHERE (id = "
+            )
+            .push_bind(actor_id)
+            .push(" OR (role = 'admin' AND active = 1))");
+    match &selection.ids {
+        Some(ids) => {
+            builder.push(" AND id IN (");
+            let mut separated = builder.separated(", ");
+            for id in ids {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
+        }
+        None => {
+            let query = UsersQuery {
+                role: selection.role.clone(),
+                q: selection.q.clone(),
+                active: selection.active,
+            };
+            append_user_filters(&mut builder, &query);
+        }
+    }
+    builder.push(" ORDER BY id ASC LIMIT 10");
+    let rows: Vec<(i64, String, String, bool)> =
+        builder.build_query_as().fetch_all(db).await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, login, role, active)| ProtectedAccount {
+            id,
+            login,
+            reason: if id == actor_id {
+                "własne konto".to_string()
+            } else {
+                format!("aktywny administrator ({role})")
+            },
+        })
+        .collect())
+}
+
+/// Rozstrzyga wybór do konkretnej listy kont przeznaczonych do akcji.
+async fn bulk_resolve<'e, E>(
+    db: E,
+    actor_id: i64,
+    selection: &NormalizedSelection,
+) -> Result<(Vec<i64>, Vec<BulkAccountView>, i64, i64), AppError>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT u.id, u.login, u.role, u.display_code, u.active,
+                (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS orders,
+                (SELECT COUNT(*) FROM orders o
+                 WHERE o.user_id = u.id AND o.status = 'ordered') AS open_orders
+         FROM users u
+         WHERE 1 = 1",
+    );
+    match &selection.ids {
+        Some(ids) => {
+            builder.push(" AND u.id IN (");
+            let mut separated = builder.separated(", ");
+            for id in ids {
+                separated.push_bind(id);
+            }
+            separated.push_unseparated(")");
+        }
+        None => {
+            let query = UsersQuery {
+                role: selection.role.clone(),
+                q: selection.q.clone(),
+                active: selection.active,
+            };
+            append_user_filters(&mut builder, &query);
+        }
+    }
+    builder
+        .push(" AND u.id <> ")
+        .push_bind(actor_id)
+        .push(" AND NOT (u.role = 'admin' AND u.active = 1)")
+        .push(" ORDER BY u.id ASC LIMIT ")
+        .push_bind(BULK_MAX_ACCOUNTS as i64 + 1);
+
+    let rows: Vec<(i64, String, String, String, bool, i64, i64)> =
+        builder.build_query_as().fetch_all(db).await?;
+    if rows.len() > BULK_MAX_ACCOUNTS {
+        return Err(AppError::bad(format!(
+            "Wybór obejmuje więcej niż {BULK_MAX_ACCOUNTS} kont. Zawęź filtr."
+        )));
+    }
+
+    let accounts = rows
+        .iter()
+        .map(|row| BulkAccountView {
+            id: row.0,
+            login: row.1.clone(),
+            display_code: row.3.clone(),
+            role: row.2.clone(),
+            active: row.4,
+            orders: row.5,
+            open_orders: row.6,
+        })
+        .collect();
+    let ids: Vec<i64> = rows.iter().map(|row| row.0).collect();
+    let total_orders: i64 = rows.iter().map(|row| row.5).sum();
+    let open_orders: i64 = rows.iter().map(|row| row.6).sum();
+    Ok((ids, accounts, total_orders, open_orders))
+}
+/// Krok 1: podgląd wyboru (filtr albo lista ID). Zwraca rozstrzygniętą
+/// listę ID, którą krok 2 może odesłać bez zmian, listę kont do pokazania
+/// w interfejsie oraz konta chronione pasujące do wyboru (nigdy nie
+/// objęte akcją).
+pub async fn bulk_users_preview(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    Json(req): Json<BulkSelectionRequest>,
+) -> Result<Json<BulkPreview>, AppError> {
+    let selection = normalize_selection(&req)?;
+    let (ids, accounts, total_orders, open_orders) =
+        bulk_resolve(&state.db, actor.id, &selection).await?;
+    let protected = bulk_protected(&state.db, actor.id, &selection).await?;
+    let accounts_truncated = accounts.len() > BULK_PREVIEW_ACCOUNTS;
+    let accounts = accounts
+        .into_iter()
+        .take(BULK_PREVIEW_ACCOUNTS)
+        .collect();
+    let mode = if selection.ids.is_some() { "ids" } else { "filter" };
+    Ok(Json(BulkPreview {
+        mode: mode.to_string(),
+        count: ids.len() as i64,
+        ids,
+        accounts,
+        accounts_truncated,
+        protected,
+        total_orders,
+        open_orders,
+    }))
+}
+
+pub async fn bulk_users_delete(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    Extension(ip): Extension<ClientIp>,
+    Json(req): Json<BulkConfirmRequest>,
+) -> Result<Json<BulkApplyResult>, AppError> {
+    bulk_users_confirm(&state, &actor, ip.0, req, BulkAction::Delete).await
+}
+
+pub async fn bulk_users_deactivate(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<AuthUser>,
+    Extension(ip): Extension<ClientIp>,
+    Json(req): Json<BulkConfirmRequest>,
+) -> Result<Json<BulkApplyResult>, AppError> {
+    bulk_users_confirm(&state, &actor, ip.0, req, BulkAction::Deactivate).await
+}
+
+async fn bulk_users_confirm(
+    state: &Arc<AppState>,
+    actor: &AuthUser,
+    ip: IpAddr,
+    req: BulkConfirmRequest,
+    action: BulkAction,
+) -> Result<Json<BulkApplyResult>, AppError> {
+    let selection = normalize_selection(&BulkSelectionRequest {
+        ids: req.ids,
+        role: req.role,
+        q: req.q,
+        active: req.active,
+    })?;
+    if req.password.trim().is_empty() {
+        return Err(AppError::bad("Podaj hasło administratora."));
+    }
+
+    // Rate limit: liczone tylko błędne hasła, ale blokada sprawdzana
+    // zanim zaczniemy kosztowną weryfikację.
+    if let Err(retry_after) = state.bulk_limiter.check(actor.id, ip) {
+        tracing::warn!(
+            event = "bulk_reauth_limited",
+            actor_id = actor.id,
+            ip = %ip,
+            retry_after,
+            "Akcje masowe zablokowane po nieudanych próbach re-autoryzacji"
+        );
+        return Err(AppError::TooManyRequests {
+            retry_after,
+            message: "Zbyt wiele nieudanych prób. Spróbuj ponownie za 15 minut.".to_string(),
+        });
+    }
+
+    let hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+        .bind(actor.id)
+        .fetch_one(&state.db)
+        .await?;
+    let valid = verify_password_async(req.password.clone(), hash).await;
+    if !valid {
+        state.bulk_limiter.failure(actor.id, ip);
+        tracing::warn!(
+            event = "bulk_reauth_failed",
+            actor_id = actor.id,
+            ip = %ip,
+            "Błędne hasło przy potwierdzeniu akcji masowej"
+        );
+        return Err(AppError::unauthorized(
+            "Błędne hasło administratora. Akcja nie została wykonana.",
+        ));
+    }
+    state.bulk_limiter.success(actor.id, ip);
+
+    let (action_code, audit_action) = match action {
+        BulkAction::Delete => ("delete", "bulk_users_deleted"),
+        BulkAction::Deactivate => ("deactivate", "bulk_users_deactivated"),
+    };
+
+    let result = bulk_confirm(&state.db, actor.id, &selection, req.expected_count, &action).await?;
+
+    let ids_in_audit: Vec<String> = result
+        .ids
+        .iter()
+        .take(BULK_AUDIT_IDS)
+        .map(|id| id.to_string())
+        .collect();
+    let ids_desc = if result.ids.len() > BULK_AUDIT_IDS {
+        format!("{}… ({} kont)", ids_in_audit.join(","), result.ids.len())
+    } else {
+        ids_in_audit.join(",")
+    };
+    db::audit(
+        &state.db,
+        Some(actor.id),
+        audit_action,
+        &format!(
+            "Liczba={}, zamówienia user_id=NULL={}, ID={}",
+            result.count, result.orders_orphaned, ids_desc
+        ),
+    )
+    .await;
+
+    tracing::warn!(
+        event = "bulk_users_applied",
+        actor_id = actor.id,
+        action = action_code,
+        count = result.count,
+        orders_orphaned = result.orders_orphaned,
+        "Akcja masowa na kontach wykonana"
+    );
+
+    Ok(Json(result))
+}
+
+/// Wspólna logika kroku 2 w jednej transakcji `BEGIN IMMEDIATE`:
+/// rozstrzygnięcie wyboru, kontrola zgodności liczby (i zbioru dla trybu
+/// ID) z podglądem, egzekucja. Wszelki rozbieżność daje `409` i nie
+/// zmienia danych.
+async fn bulk_confirm(
+    db: &SqlitePool,
+    actor_id: i64,
+    selection: &NormalizedSelection,
+    expected_count: i64,
+    action: &BulkAction,
+) -> Result<BulkApplyResult, AppError> {
+    if expected_count < 1 {
+        return Err(AppError::bad(
+            "Podaj liczbę kont z podglądu (expected_count, co najmniej 1).",
+        ));
+    }
+
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
+    let (ids, _accounts, _total_orders, _open_orders) =
+        bulk_resolve(&mut *tx, actor_id, selection).await?;
+
+    if let Some(requested) = &selection.ids {
+        let resolved: HashSet<i64> = ids.iter().copied().collect();
+        let requested_set: HashSet<i64> = requested.iter().copied().collect();
+        if resolved != requested_set {
+            let protected = bulk_protected(&mut *tx, actor_id, selection).await?;
+            let overlap: Vec<i64> = requested
+                .iter()
+                .filter(|id| protected.iter().any(|p| p.id == **id))
+                .copied()
+                .collect();
+            tx.rollback().await?;
+            return Err(if overlap.is_empty() {
+                AppError::conflict(
+                    "Lista kont zmieniła się między podglądem a potwierdzeniem. Uruchom podgląd ponownie.",
+                )
+            } else {
+                let shown: Vec<String> = overlap.iter().take(5).map(|id| id.to_string()).collect();
+                AppError::conflict(format!(
+                    "Wybór obejmuje konta chronione (ID {}). Akcje masowe nie dotykają własnego konta ani aktywnych administratorów.",
+                    shown.join(", ")
+                ))
+            });
+        }
+    }
+
+    if ids.len() as i64 != expected_count {
+        tx.rollback().await?;
+        return Err(AppError::conflict(format!(
+            "Liczba kont zmieniła się: podgląd wskazywał {expected_count}, teraz {}. Uruchom podgląd ponownie.",
+            ids.len()
+        )));
+    }
+    if ids.is_empty() {
+        tx.rollback().await?;
+        return Err(AppError::conflict(
+            "Wybór nie zawiera żadnych kont objętych akcją.",
+        ));
+    }
+
+    let (count, orders_orphaned) = bulk_execute(&mut *tx, action, &ids).await?;
+    tx.commit().await?;
+
+    Ok(BulkApplyResult {
+        action: match action {
+            BulkAction::Delete => "delete".to_string(),
+            BulkAction::Deactivate => "deactivate".to_string(),
+        },
+        count,
+        orders_orphaned,
+        ids,
+    })
+}
+
+/// Egzekucja w ramach otwartej transakcji. Uczniowie zachowują historię:
+/// `orders.user_id` ma `ON DELETE SET NULL`. Sesje usuwamy jawnie —
+/// przy usuwaniu kaskada zrobiłaby to sama, przy dezaktywacji jest to
+/// zgodne z pojedynczą dezaktywacją.
+async fn bulk_execute<'e, E>(
+    db: E,
+    action: &BulkAction,
+    ids: &[i64],
+) -> Result<(u64, i64), sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    let mut count_builder = QueryBuilder::<Sqlite>::new(
+        "SELECT COUNT(*) FROM orders WHERE user_id IN (",
+    );
+    let mut separated = count_builder.separated(", ");
+    for id in ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+    let orders_orphaned: i64 = count_builder.build_query_scalar().fetch_one(db).await?;
+
+    let mut statement = match action {
+        BulkAction::Delete => QueryBuilder::<Sqlite>::new("DELETE FROM users WHERE id IN ("),
+        BulkAction::Deactivate => {
+            QueryBuilder::<Sqlite>::new("UPDATE users SET active = 0 WHERE id IN (")
+        }
+    };
+    let mut separated = statement.separated(", ");
+    for id in ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+    let count = statement.build().execute(db).await?.rows_affected();
+
+    let mut sessions_builder = QueryBuilder::<Sqlite>::new(
+        "DELETE FROM sessions WHERE user_id IN (",
+    );
+    let mut separated = sessions_builder.separated(", ");
+    for id in ids {
+        separated.push_bind(*id);
+    }
+    separated.push_unseparated(")");
+    sessions_builder.build().execute(db).await?;
+
+    Ok((count, orders_orphaned))
 }
 
 /// Eksport metadanych kont do CSV. Hasła nie są i nie mogą być częścią

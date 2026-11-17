@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::auth::{LoginLimiter, PickupLimiter};
+use crate::auth::{BulkActionLimiter, LoginLimiter, PickupLimiter};
 use crate::config::Config;
 use sqlx::SqlitePool;
 use std::sync::Mutex;
@@ -12,6 +12,8 @@ pub struct AppState {
     pub dummy_hash: String,
     pub login_limiter: LoginLimiter,
     pub pickup_limiter: PickupLimiter,
+    /// Limit błędnych re-autoryzacji hasełem przy akcjach masowych.
+    pub bulk_limiter: BulkActionLimiter,
     /// Sekret HMAC do podpisywania i weryfikacji tokenów JWT.
     pub jwt_secret: Vec<u8>,
     /// Czas ostatniego ostrzeżenia o braku `CF-Connecting-IP` w trybie tunnel.
