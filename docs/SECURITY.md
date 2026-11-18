@@ -294,6 +294,11 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
 - Wejścia są przycinane i walidowane po stronie serwera (długości,
   zakresy, formaty, enumy). Frontend ma dodatkowe ograniczenia, ale nie
   jest zaufany.
+- Alergeny menu to **whitelist` 14 kodów UE** (`ALLERGEN_CODES`):
+  nieznany kod → `400`, wartości są normalizowane (trim, małe litery,
+  deduplikacja, sortowanie katalogowe), więc do bazy nie trafia wolny
+  tekst ani ciągi znaczące HTML; etykiety generuje frontend przez
+  `textContent`.
 - Kwoty są liczone po stronie serwera na podstawie cen z bazy; klient nie
   przesyła ceny.
 - Brak `unsafe` w kodzie aplikacji.

@@ -89,6 +89,9 @@ Kolejność rozwiązań:
 
 ## 8. Stan magazynowy
 
+- W dialogu pozycji menu zaznacz **Alergeny** — to gotowa lista 14
+  alergenów UE (checkboxy). Zaznaczenia trafiają do pozycji; wpisanie
+  własnego tekstu nie jest już możliwe, a uczeń widzi polskie etykiety.
 - Karta pozycji w **Menu** pokazuje **„Zostało N szt.”** albo
   **„Bez limitu”**.
 - Szybkie przyciski **−1 szt.**, **+1 szt.** i **Bez limitu** zmieniają

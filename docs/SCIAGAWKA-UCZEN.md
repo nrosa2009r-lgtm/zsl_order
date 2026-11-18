@@ -13,7 +13,9 @@
 ## 2. Zamówienie
 
 1. Wybierz pozycje z menu i ilości.
-2. Sprawdź alergeny i cenę.
+2. Sprawdź cenę. System nie pokazuje alergenów. Informację o alergenach
+   podaje szkoła poza systemem (tablica przy wydawaniu lub zapytaj
+   obsługę).
 3. Przy pozycjach limitowanych widzisz **„Zostało N szt.”**;
    **„Wyprzedane na dziś”** oznacza, że nie można jej już zamówić.
 4. Wybierz płatność: **gotówka** albo **karta**.

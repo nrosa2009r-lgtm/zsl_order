@@ -126,7 +126,6 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "Klasyczna zupa z makaronem",
             550i64,
             "Zupy",
-            "gluten, seler",
             10i64,
         ),
         (
@@ -134,7 +133,6 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "Panierowany kotlet, ziemniaki, surówka",
             1400,
             "Dania główne",
-            "gluten, jaja, mleko",
             20,
         ),
         (
@@ -142,7 +140,6 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "Z cebulką i śmietaną",
             1100,
             "Dania główne",
-            "gluten, mleko",
             30,
         ),
         (
@@ -150,7 +147,6 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "Z sosem owocowym",
             900,
             "Dania główne",
-            "gluten, jaja, mleko",
             40,
         ),
         (
@@ -158,24 +154,22 @@ async fn seed_menu(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "Świeże warzywa z oliwą",
             800,
             "Dodatki",
-            "",
             50,
         ),
-        ("Kompot owocowy", "Szklanka 250 ml", 300, "Napoje", "", 60),
-        ("Woda mineralna", "Butelka 0,5 l", 250, "Napoje", "", 70),
+        ("Kompot owocowy", "Szklanka 250 ml", 300, "Napoje", 60),
+        ("Woda mineralna", "Butelka 0,5 l", 250, "Napoje", 70),
     ];
 
-    for (name, description, price, category, allergens, sort_order) in items {
+    for (name, description, price, category, sort_order) in items {
         sqlx::query(
             "INSERT INTO menu_items
-             (name, description, price_cents, category, allergens, available, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+             (name, description, price_cents, category, available, sort_order, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
         )
         .bind(name)
         .bind(description)
         .bind(price)
         .bind(category)
-        .bind(allergens)
         .bind(sort_order)
         .bind(now)
         .bind(now)
@@ -474,7 +468,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("wpisy migracji");
-        assert_eq!(applied, 8);
+        assert_eq!(applied, 9);
 
         let columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info('users')")
@@ -505,6 +499,21 @@ mod tests {
             assert!(
                 columns.iter().any(|name| name == expected),
                 "brak kolumny {table}.{expected}"
+            );
+        }
+
+        // Migracja 0009 usuwa alergeny całkowicie: żadna z kolumn
+        // (`allergens` z 0001 ani `allergen_codes` z wcześniejszej wersji
+        // 0009) nie może przeżyć — niezależnie od tego, która istniała.
+        let menu_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('menu_items')")
+                .fetch_all(&pool)
+                .await
+                .expect("kolumny menu_items");
+        for allergen_column in ["allergens", "allergen_codes"] {
+            assert!(
+                !menu_columns.iter().any(|name| name == allergen_column),
+                "kolumna menu_items.{allergen_column} nadal istnieje"
             );
         }
 

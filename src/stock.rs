@@ -168,9 +168,9 @@ mod tests {
     ) -> i64 {
         sqlx::query_scalar(
             "INSERT INTO menu_items
-             (name, description, price_cents, category, allergens, available, sort_order,
+             (name, description, price_cents, category, available, sort_order,
               created_at, updated_at, stock_remaining, stock_default, stock_date)
-             VALUES (?, '', 500, 'Dania', '', 1, 0, 1, 1, ?, ?, ?)
+             VALUES (?, '', 500, 'Dania', 1, 0, 1, 1, ?, ?, ?)
              RETURNING id",
         )
         .bind(name)

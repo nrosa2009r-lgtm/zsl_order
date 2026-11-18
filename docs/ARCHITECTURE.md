@@ -363,6 +363,12 @@ Kluczowe decyzje:
 
 - **Snapshot pozycji** — `order_items.name` i `price_cents` są kopiowane
   w momencie zakupu. Edycja lub ukrycie menu nie zmienia historii.
+- **Alergeny jako kody** — `menu_items.allergen_codes` (lista po
+  przecinkach, 14 kodów UE, baza `migrations/0009_menu_allergen_codes.sql`);
+  backend waliduje przez whitelistę (`ALLERGEN_CODES`,
+  `normalize_allergens`) i odrzuca nieznane kody (`400`), API zwraca
+  tablicę, a etykiety po polsku są w `common.js`. Stare pole tekstowe
+  `allergens` usunięte przez `DROP COLUMN`.
 - **Miękkie ukrywanie menu** — `available = 0` zamiast `DELETE`, aby nie
   tracić referencji.
 - **Historia zamówień przeżywa konto** — `orders.user_id` ma

@@ -319,11 +319,13 @@ W panelu admina przejdź do zakładki **Menu**. Jedna pozycja ma pola:
 | `description` | opis | opcjonalny |
 | `price_cents` | cena w groszach | `1250` = 12,50 zł |
 | `category` | kategoria | domyślnie `Dania`; grupuje menu ucznia |
-| `allergens` | alergeny | tekst, np. `gluten, mleko` |
 | `available` | dostępność | `false` ukrywa pozycję przed uczniami |
 | `sort_order` | kolejność | mniejsza liczba = wyżej |
 | `stock_remaining` | stan na dziś | puste = bez limitu; `0` = wyprzedane |
 | `stock_default` | domyślny stan dzienny | puste = brak automatycznego resetu |
+
+System nie pokazuje alergenów. Informację o alergenach podaje szkoła
+poza systemem (tablica przy wydawaniu lub zapytaj obsługę).
 
 Pozycje można edytować i ukrywać. Ukrycie nie usuwa historii zamówień.
 Ceny zawsze liczy serwer z bazy — uczeń nie może ich zmienić.
@@ -604,7 +606,9 @@ zamówieniami i historią płatności.
 
 1. W zakładce **Menu** wybierz pozycje i ilości (maksymalnie 10 szt.
    jednej pozycji, do `max_order_items` pozycji).
-2. Sprawdź alergeny i dostępność. Przy pozycjach limitowanych widnieje
+2. System nie pokazuje alergenów. Informację o alergenach podaje szkoła
+   poza systemem (tablica przy wydawaniu lub zapytaj obsługę).
+   Sprawdź też dostępność: przy pozycjach limitowanych widnieje
    „Zostało N szt.”; „Wyprzedane na dziś” oznacza, że nie można już jej
    zamówić. Stan dotyczy tylko dzisiejszego dnia.
 3. Wybierz sposób płatności przy odbiorze: **gotówka** albo **karta**.

@@ -84,6 +84,11 @@ liczbę dostępnych porcji i dzień jej obowiązywania. Nie wiążą się z
 konkretnym uczniem ani jego zamówieniem — to dane operacyjne stołówki,
 takie jak liczba przygotowanych posiłków.
 
+`allergen_codes` (14 kodów UE) opisuje skład potrawy, nie osobę —
+alergeny są cechą produktu i nie są danymi osobowymi. W szczególności
+system nie zapisuje, który uczzeń ma alergię; taka informacja nie jest
+zbierana ani przechowywana.
+
 ### `settings`
 
 Konfiguracja stołówki: nazwa, informacja o płatności, limity. Brak danych

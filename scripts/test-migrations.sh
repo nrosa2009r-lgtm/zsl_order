@@ -44,7 +44,7 @@ VALUES ('s-1a-abcdefghij','hash','student','UCZ-1A-AAAAA',1,1,100),
        ('s-zzzzzzzzzz','hash','student','UCZ-CCCCC',1,0,102),
        ('k-kuchnia1234','hash','kitchen','KUCH-DDDDD',1,0,103);
 INSERT INTO menu_items (name,description,price_cents,category,allergens,available,sort_order,created_at,updated_at)
-VALUES ('Zupa','Test',500,'Zupy','',1,1,100,100);
+VALUES ('Zupa','Test',500,'Zupy','gluten, mleko, do uzgodnienia',1,1,100,100);
 INSERT INTO orders (user_id,code,qr_token,status,payment_method,payment_status,total_cents,pickup_time,created_at,updated_at)
 VALUES (1,'ABC123','tok123','completed','cash','paid',500,'12:00',100,100),
        (1,'NEW001','toknew001','new','cash','unpaid',500,'12:01',unixepoch(),unixepoch()),
@@ -73,8 +73,8 @@ run_instance "$BASE/legacy" 38202
 empty_db="$BASE/empty/baza.db"
 legacy_db="$BASE/legacy/baza.db"
 
-[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "8" ] \
-  && pass "pusta baza: 8 migracji zastosowanych" \
+[ "$(sqlite3 "$empty_db" 'SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1;')" = "9" ] \
+  && pass "pusta baza: 9 migracji zastosowanych" \
   || fail "pusta baza: brak migracji"
 
 for index in orders_created_idx orders_idempotency_created_idx orders_pickup_idx; do
@@ -102,6 +102,42 @@ done
 [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('order_items') WHERE name='stock_reserved';")" = "1" ] \
   && pass "legacy: kolumna order_items.stock_reserved" \
   || fail "legacy: brak kolumny order_items.stock_reserved"
+
+# Migracja 0009: alergeny usunięte całkowicie z systemu — obie kolumny
+# (`allergens` z 0001 i `allergen_codes`, gdyby baza zdążyła zastosować
+# wcześniejszą wersję 0009) muszą zniknąć bez zgadywania wartości.
+for db in "$empty_db" "$legacy_db"; do
+  [ "$(sqlite3 "$db" "SELECT COUNT(*) FROM pragma_table_info('menu_items') WHERE name IN ('allergens','allergen_codes');")" = "0" ] \
+    && pass "0009: kolumny alergenów usunięte ($(basename "$(dirname "$db")"))" \
+    || fail "0009: kolumny alergenów nadal istnieją w $db"
+done
+
+# Przebudowa obu tabel nie uszkadza danych ani powiązań zamówień.
+[ "$(sqlite3 "$legacy_db" "SELECT name || '|' || price_cents FROM menu_items WHERE id=1;")" = "Zupa|500" ] \
+  && pass "0009: pozycja menu zachowana (nazwa i cena)" \
+  || fail "0009: pozycja menu uszkodzona"
+
+[ "$(sqlite3 "$legacy_db" "SELECT menu_item_id FROM order_items WHERE id=1;")" = "1" ] \
+  && pass "0009: order_items.menu_item_id zachowane" \
+  || fail "0009: order_items.menu_item_id utracone"
+
+# Indeksy skasowane razem z tabelami są odtwarzane na końcu migracji.
+for index in menu_available_idx menu_items_stock_date_idx order_items_order_idx order_items_menu_idx; do
+  [ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='$index';")" = "1" ] \
+    && pass "0009: indeks $index odtworzony" \
+    || fail "0009: brak indeksu $index"
+done
+
+[ -n "$(sqlite3 "$empty_db" "SELECT name FROM menu_items WHERE name='Zupa pomidorowa';")" ] \
+  && pass "0009: seed menu istnieje bez kolumn alergenów" \
+  || fail "0009: brak seed menu"
+
+# Ponowne uruchomienie 0009 na żywej bazie jest bezpieczne (wzór z 0007).
+sqlite3 "$legacy_db" < "$ROOT/migrations/0009_menu_remove_allergens.sql"
+[ "$(sqlite3 "$legacy_db" "SELECT COUNT(*) FROM pragma_table_info('menu_items') WHERE name LIKE 'allergen%';")" = "0" ] \
+  && [ "$(sqlite3 "$legacy_db" 'PRAGMA foreign_key_check;' | wc -l)" = "0" ] \
+  && pass "0009: ponowne uruchomienie bez błędów" \
+  || fail "0009: ponowne uruchomienie zepsuło schemat"
 
 [ -z "$(sqlite3 "$legacy_db" "SELECT stock_remaining FROM menu_items WHERE name='Zupa';")" ] \
   && pass "legacy: istniejąca pozycja bez limitu (NULL)" \

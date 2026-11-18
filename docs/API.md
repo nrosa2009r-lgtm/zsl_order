@@ -381,7 +381,6 @@ Zwraca wyłącznie dostępne pozycje menu, posortowane po `sort_order`, nazwie.
       "description": "Panierowany kotlet, ziemniaki, surówka",
       "price_cents": 1400,
       "category": "Dania główne",
-      "allergens": "gluten, jaja, mleko",
       "available": true,
       "sort_order": 20,
       "stock_remaining": 12,
@@ -565,7 +564,6 @@ najpierw dostępne, potem `sort_order`, nazwa.
   "description": "Klasyczna zupa z makaronem",
   "price_cents": 550,
   "category": "Zupy",
-  "allergens": "gluten, seler",
   "available": true,
   "sort_order": 10,
   "stock_remaining": 30,
@@ -577,7 +575,6 @@ najpierw dostępne, potem `sort_order`, nazwa.
 - `description`: ≤ 240 znaków (domyślnie `""`),
 - `price_cents`: 0–100 000 (0–1000 zł),
 - `category`: 1–40 znaków (domyślnie `"Dania"`),
-- `allergens`: ≤ 160 znaków,
 - `available`: bool (domyślnie `true`),
 - `sort_order`: −10 000…10 000,
 - `stock_remaining`: `null`/brak = bez limitu; 0–100 000 = stan na dziś,
@@ -1384,7 +1381,6 @@ Wpisy starsze niż 90 dni są usuwane przy starcie aplikacji.
   "description": "Panierowany kotlet, ziemniaki, surówka",
   "price_cents": 1400,
   "category": "Dania główne",
-  "allergens": "gluten, jaja, mleko",
   "available": true,
   "sort_order": 20
 }
@@ -1509,7 +1505,7 @@ szczegółów SQL, ścieżek ani stack trace.
 | opis menu | ≤ 240 znaków |
 | cena menu | 0–100 000 gr |
 | kategoria | 1–40 znaków |
-| alergeny | ≤ 160 znaków |
+| alergeny | tablica kodów UE (14 dozwolonych); nieznany kod → 400 |
 | `sort_order` | −10 000…10 000 |
 | stan pozycji | `null` (bez limitu) lub 0–100 000 |
 | `delta` stanu | −1000…1000; wynik 0–100 000 |

@@ -239,7 +239,7 @@ request PUT /api/admin/settings "$ADMIN_JAR" "$ADMIN_CSRF" '{"max_open_orders":3
 
 # ---------------------------------------------------------------- stan magazynu
 request POST /api/staff/menu "$ADMIN_JAR" "$ADMIN_CSRF" \
-  '{"name":"Smoke stan","description":"","price_cents":500,"category":"Dania","allergens":"","available":true,"sort_order":99,"stock_remaining":1,"stock_default":1}'
+  '{"name":"Smoke stan","description":"","price_cents":500,"category":"Dania","available":true,"sort_order":99,"stock_remaining":1,"stock_default":1}'
 STOCK_ITEM=$(printf '%s' "$BODY" | jq -r '.id // empty')
 STOCK_VALUE=$(printf '%s' "$BODY" | jq -r '.stock_remaining // empty')
 [ "$STATUS" = "201" ] && [ -n "$STOCK_ITEM" ] && [ "$STOCK_VALUE" = "1" ] \

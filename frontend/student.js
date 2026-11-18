@@ -163,15 +163,6 @@
                 })
             );
 
-            if (item.allergens) {
-                card.append(
-                    App.h("p", {
-                        class: "allergens",
-                        text: "Alergeny: " + item.allergens,
-                    })
-                );
-            }
-
             const inCart = cart.get(item.id) || 0;
             const remaining = stockRemaining(item);
             const todayRemaining = rawStockRemaining(item);

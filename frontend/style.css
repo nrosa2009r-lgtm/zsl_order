@@ -669,14 +669,6 @@ textarea {
     margin-top: auto;
 }
 
-.allergens {
-    font-size: 0.76rem;
-    color: #8a5a00;
-    background: #fff8e1;
-    border-radius: 8px;
-    padding: 5px 8px;
-}
-
 .stock-note {
     font-size: 0.76rem;
     font-weight: 600;

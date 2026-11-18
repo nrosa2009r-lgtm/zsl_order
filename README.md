@@ -251,7 +251,8 @@ zaufanie certyfikatowi Caddy — w [docs/DOCKER.md](docs/DOCKER.md).
 
 ### Panel ucznia — `/student`
 
-- menu pogrupowane według kategorii, ceny w PLN, alergeny, dostępność,
+- menu pogrupowane według kategorii, ceny w PLN, alergeny (14 kodów UE
+  z polskimi etykietami), dostępność,
 - licznik „Zostało N szt.” i blokada zamówienia wyprzedanej pozycji,
 - koszyk z ilościami (1–10 szt. na pozycję),
 - wybór płatności przy odbiorze: gotówka lub karta,

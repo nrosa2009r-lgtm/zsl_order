@@ -17,7 +17,6 @@
             App.$("#menuDescription").value = "";
             App.$("#menuPrice").value = "";
             App.$("#menuCategory").value = "Dania";
-            App.$("#menuAllergens").value = "";
             App.$("#menuSortOrder").value = "0";
             App.$("#menuStockRemaining").value = "";
             App.$("#menuStockDefault").value = "";
@@ -33,7 +32,6 @@
             App.$("#menuDescription").value = item.description || "";
             App.$("#menuPrice").value = (item.price_cents / 100).toFixed(2);
             App.$("#menuCategory").value = item.category || "Dania";
-            App.$("#menuAllergens").value = item.allergens || "";
             App.$("#menuSortOrder").value = String(item.sort_order || 0);
             App.$("#menuStockRemaining").value = item.stock_remaining === null ? "" : String(item.stock_remaining);
             App.$("#menuStockDefault").value = item.stock_default === null ? "" : String(item.stock_default);
@@ -80,9 +78,6 @@
                     ]),
                     App.h("p", { class: "muted small", text: item.description || "Brak opisu." })
                 );
-                if (item.allergens) {
-                    main.append(App.h("p", { class: "allergens", text: "Alergeny: " + item.allergens }));
-                }
 
                 const meta = App.h("div", { class: "manage-meta" });
                 meta.append(
@@ -232,7 +227,6 @@
                 description: App.$("#menuDescription").value.trim(),
                 price_cents: Math.round(priceValue * 100),
                 category: App.$("#menuCategory").value.trim(),
-                allergens: App.$("#menuAllergens").value.trim(),
                 available: App.$("#menuAvailable").checked,
                 sort_order: Number.parseInt(App.$("#menuSortOrder").value, 10) || 0,
                 stock_remaining: stockRemaining,

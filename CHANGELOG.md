@@ -6,6 +6,11 @@ Autorem projektu jest **natan-rosa**.
 
 ## [Unreleased]
 
+### Zmienione
+
+- Usunięto alergeny z menu (migracja 0009); informację o alergenach
+  podaje szkoła poza systemem.
+
 ### Dodane
 
 - Masowe usuwanie i dezaktywacja kont w panelu admina: dwuetapowy

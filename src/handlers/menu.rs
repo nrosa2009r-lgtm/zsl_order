@@ -20,7 +20,6 @@ pub struct MenuItemView {
     pub description: String,
     pub price_cents: i64,
     pub category: String,
-    pub allergens: String,
     pub available: bool,
     pub sort_order: i64,
     /// NULL = bez limitu; 0 = wyprzedane.
@@ -60,8 +59,6 @@ pub struct MenuItemInput {
     pub price_cents: i64,
     #[serde(default = "default_category")]
     pub category: String,
-    #[serde(default)]
-    pub allergens: String,
     #[serde(default = "default_true")]
     pub available: bool,
     #[serde(default)]
@@ -91,7 +88,7 @@ pub async fn student_menu(
     crate::stock::reset_daily_stock(&state.db, today).await?;
 
     let items = sqlx::query_as::<_, MenuItemView>(
-        "SELECT id, name, description, price_cents, category, allergens, available,
+        "SELECT id, name, description, price_cents, category, available,
                 sort_order, stock_remaining, stock_default, stock_date
          FROM menu_items
          WHERE available = 1
@@ -136,7 +133,7 @@ pub async fn staff_menu(
     crate::stock::reset_daily_stock(&state.db, today).await?;
 
     let items = sqlx::query_as::<_, MenuItemView>(
-        "SELECT id, name, description, price_cents, category, allergens, available,
+        "SELECT id, name, description, price_cents, category, available,
                 sort_order, stock_remaining, stock_default, stock_date
          FROM menu_items
          ORDER BY available DESC, sort_order ASC, name ASC",
@@ -158,15 +155,14 @@ pub async fn create_menu_item(
 
     let result = sqlx::query(
         "INSERT INTO menu_items
-         (name, description, price_cents, category, allergens, available, sort_order,
+         (name, description, price_cents, category, available, sort_order,
           created_at, updated_at, stock_remaining, stock_default, stock_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&input.name)
     .bind(&input.description)
     .bind(input.price_cents)
     .bind(&input.category)
-    .bind(&input.allergens)
     .bind(input.available)
     .bind(input.sort_order)
     .bind(now)
@@ -202,7 +198,7 @@ pub async fn update_menu_item(
 
     let result = sqlx::query(
         "UPDATE menu_items
-         SET name = ?, description = ?, price_cents = ?, category = ?, allergens = ?,
+         SET name = ?, description = ?, price_cents = ?, category = ?,
              available = ?, sort_order = ?, updated_at = ?,
              stock_remaining = ?, stock_default = ?, stock_date = ?
          WHERE id = ?",
@@ -211,7 +207,6 @@ pub async fn update_menu_item(
     .bind(&input.description)
     .bind(input.price_cents)
     .bind(&input.category)
-    .bind(&input.allergens)
     .bind(input.available)
     .bind(input.sort_order)
     .bind(now)
@@ -394,7 +389,7 @@ pub async fn hide_menu_item(
 
 async fn get_item(state: &Arc<AppState>, id: i64) -> Result<MenuItemView, AppError> {
     sqlx::query_as::<_, MenuItemView>(
-        "SELECT id, name, description, price_cents, category, allergens, available,
+        "SELECT id, name, description, price_cents, category, available,
                 sort_order, stock_remaining, stock_default, stock_date
          FROM menu_items WHERE id = ?",
     )
@@ -416,7 +411,6 @@ struct ValidatedMenuInput {
     description: String,
     price_cents: i64,
     category: String,
-    allergens: String,
     available: bool,
     sort_order: i64,
     stock_remaining: Option<i64>,
@@ -449,12 +443,6 @@ fn validate_input(body: MenuItemInput) -> Result<ValidatedMenuInput, AppError> {
     if category.is_empty() || category.chars().count() > 40 {
         return Err(AppError::bad("Kategoria musi mieć od 1 do 40 znaków."));
     }
-    let allergens = body.allergens.trim().to_string();
-    if allergens.chars().count() > 160 {
-        return Err(AppError::bad(
-            "Informacja o alergenach może mieć maksymalnie 160 znaków.",
-        ));
-    }
     if !(-10_000..=10_000).contains(&body.sort_order) {
         return Err(AppError::bad("Nieprawidłowa kolejność sortowania."));
     }
@@ -476,7 +464,6 @@ fn validate_input(body: MenuItemInput) -> Result<ValidatedMenuInput, AppError> {
         description,
         price_cents: body.price_cents,
         category,
-        allergens,
         available: body.available,
         sort_order: body.sort_order,
         stock_remaining: body.stock_remaining,
@@ -494,7 +481,6 @@ mod tests {
             description: String::new(),
             price_cents: 500,
             category: "Dania".into(),
-            allergens: String::new(),
             available: true,
             sort_order: 0,
             stock_remaining: remaining,

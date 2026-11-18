@@ -119,6 +119,17 @@ dlaczego).
       zamówień widoczna po usunięciu konta (jeśli testowane), a kolumna
       `orders.pickup_date` istnieje i indeks `orders_pickup_idx` jest
       widoczny w `PRAGMA index_list('orders')`.
+- [ ] **Migracja 0009 (alergeny)**: backup przed startem; po migracji
+      kolumna `menu_items.allergen_codes` istnieje, a stare pole
+      `allergens` jest usunięte (`DROP COLUMN`); wartości to wyłącznie
+      kody z listy 14 alergenów UE, w kolejności katalogowej i bez
+      duplikatów; nierozpoznane resztki starego pola zostały porzucone
+      (świadome, opisane w `DATABASE.md`). W panelu menu zaznaczasz
+      alergeny checkboxami, uczeń widzi polskie etykiety, a wpisanie
+      nieznanego kodu przez API daje `400` (test w
+      `scripts/smoke-orders.sh`). Gdyby `DROP COLUMN` nie przeszedł,
+      sprawdź wersję SQLite (≥ 3.35) i procedurę fallbacku z
+      `DATABASE.md`.
 - [ ] **Test masowego usuwania/dezaktywacji kont** (lub
       `scripts/smoke-bulk-users.sh`): podgląd zwraca rozstrzygniętą listę
       ID i konta chronione, krok 2 wymaga hasła admina; zmiana liczby

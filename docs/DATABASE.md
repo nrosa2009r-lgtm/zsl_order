@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS menu_items (
     description TEXT NOT NULL DEFAULT '',
     price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
     category TEXT NOT NULL DEFAULT 'Dania',
-    allergens TEXT NOT NULL DEFAULT '',
+    allergen_codes TEXT NOT NULL DEFAULT '',
     available INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
@@ -130,6 +130,10 @@ CREATE INDEX IF NOT EXISTS menu_items_stock_date_idx ON menu_items(stock_date);
 ```
 
 - `available = 0` to miękkie ukrycie; pozycja pozostaje w historii.
+- `allergen_codes` — lista kodów 14 alergenów UE po przecinkach, zawsze
+  w kolejności katalogowej i bez duplikatów (`gluten,celery`); pusty
+  string = brak alergenów. W API pole jest tablicą. Stare pole tekstowe
+  `allergens` zostało usunięte przez migrację 0009 (patrz sekcja 8).
 - `sort_order` steruje kolejnością; mniejsza wartość = wyżej.
 - Pozycje są snapshotowane do `order_items` w momencie zamówienia.
 - `stock_remaining` to stan na dzień `stock_date` (`RRRR-MM-DD`,
@@ -486,7 +490,7 @@ usunąć bez utraty raportów; szczegóły akcji administracyjnych opisuje
 ## 7. Backup i integralność
 
 Procedura przed każdą aktualizacją, która zawiera migrację (0006, 0007,
-0008, kolejne):
+0008, 0009, kolejne):
 
 ```bash
 # 1. Zatrzymaj aplikację, żeby nikt nie pisał do bazy.
@@ -624,6 +628,34 @@ ważność kodu QR oraz limity „na przerwę”. Przed migracją wykonaj backup
 i po starcie sprawdź `PRAGMA foreign_key_check;` oraz `PRAGMA
 integrity_check;`. Migracja nie zmienia istniejących wierszy poza dodaniem
 kolumny, więc liczby `orders` i `order_items` muszą pozostać identyczne.
+
+`0009_menu_allergen_codes.sql` wprowadza ustrukturyzowane alergeny:
+
+1. dodaje `menu_items.allergen_codes` (`TEXT NOT NULL DEFAULT ''`),
+2. wypełnia ją z dawnego pola tekstowego `allergens`, mapując polskie
+   i angielskie synonimy 14 alergenów UE (m.in. `mleko`/`milk`,
+   `jaja`/`eggs`, `pszenica`/`wheat`, `orzech ziemne`/`peanuts`);
+   nierozpoznane resztki (np. „do uzgodnienia”, literówki) są **porzucone**
+   — świadoma decyzja, stare pole było wolnym tekstem testowym,
+3. usuwa kolumnę `allergens` przez `DROP COLUMN`.
+
+Uwagi i wynik testu:
+
+- `lower()` w SQLite zmienia tylko znaki ASCII, więc backfill zawiera
+  także warianty wielkich liter dla wyrażeń nie-ASCII (np. „Łosoś”,
+  „Śmietana”).
+- `DROP COLUMN` wymaga SQLite ≥ 3.35; kolumna nie jest częścią
+  indeksu, widoku ani triggera. Test na izolowanej bazie (CLI 3.54)
+  przechodzi: kolumna `allergens` znika, a `allergen_codes` zawiera
+  poprawne kody (`Łosoś wędzony, mleko` → `fish,milk`).
+- **Fallback**, gdyby `DROP COLUMN` zawiodł (starszy SQLite, kolumna
+  wpisana w schemat): sqlx wycofuje całą migrację w transakcji, więc
+  baza zostaje na `allergen_codes` bez usuniętej starej kolumny —
+  aplikacja nadal działa (kod czyta wyłącznie `allergen_codes`).
+  Naprawa ręczna: podnieść SQLite i wykonać migrację od nowa albo
+  przebudować tabelę ręcznie (nowa tabela, kopiowanie, podmiana).
+- Zmiana jest zgodna z zasadą, że migracje to wyłącznie nowe pliki;
+  `0001`–`0008` pozostały nietknięte.
 
 ## 9. Ograniczenia SQLite w tym projekcie
 
