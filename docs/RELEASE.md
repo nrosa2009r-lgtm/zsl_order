@@ -33,6 +33,7 @@ scripts/smoke-hardening.sh
 scripts/smoke-orders.sh
 scripts/smoke-backup.sh
 scripts/smoke-logs.sh
+scripts/smoke-bulk-users.sh
 ```
 
 Dodatkowo:

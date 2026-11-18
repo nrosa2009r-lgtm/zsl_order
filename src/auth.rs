@@ -614,6 +614,52 @@ impl PickupLimiter {
     }
 }
 
+/// Limiter potwierdzeń akcji masowych (np. usuwania kont): błędne hasło
+/// re-autoryzacji jest liczone jak nieudana próba. Limit per konto
+/// administratora, wysoki limit per IP; wpisy tylko w pamięci.
+pub struct BulkActionLimiter {
+    limiter: AttemptLimiter,
+}
+
+impl BulkActionLimiter {
+    /// 5 błędów hasła na konto w 15 minut, blokada 15 minut;
+    /// 50 błędów na adres IP (sieć szkolna współdzieli jeden publiczny).
+    pub fn new() -> Self {
+        Self {
+            limiter: AttemptLimiter::new(5, 50, 15, 15),
+        }
+    }
+
+    fn user_key(user_id: i64) -> String {
+        format!("bulk-user:{user_id}")
+    }
+
+    fn ip_key(ip: IpAddr) -> String {
+        format!("bulk-ip:{ip}")
+    }
+
+    pub fn check(&self, user_id: i64, ip: IpAddr) -> Result<(), u64> {
+        self.limiter
+            .check(&Self::user_key(user_id), &Self::ip_key(ip))
+    }
+
+    pub fn failure(&self, user_id: i64, ip: IpAddr) {
+        self.limiter
+            .failure(&Self::user_key(user_id), &Self::ip_key(ip));
+    }
+
+    pub fn success(&self, user_id: i64, ip: IpAddr) {
+        self.limiter
+            .success(&Self::user_key(user_id), &Self::ip_key(ip));
+    }
+}
+
+impl Default for BulkActionLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,6 +755,25 @@ mod tests {
         assert!(limiter.check(attacker, "a-admin").is_err());
         // Prawdziwy administrator z innej sieci nadal może się zalogować.
         assert!(limiter.check(victim, "a-admin").is_ok());
+    }
+
+    #[test]
+    fn bulk_action_limiter_locks_after_repeated_wrong_passwords() {
+        let limiter = BulkActionLimiter::new();
+        let ip: IpAddr = "198.51.100.77".parse().unwrap();
+
+        for _ in 0..4 {
+            limiter.failure(9, ip);
+            assert!(limiter.check(9, ip).is_ok());
+        }
+        // Piąty błąd blokuje konto administratora na 15 minut.
+        limiter.failure(9, ip);
+        assert!(limiter.check(9, ip).is_err());
+        // Inny administrator na tym samym adresie nadal może działać.
+        assert!(limiter.check(10, ip).is_ok());
+        // Sukces czyści licznik.
+        limiter.success(9, ip);
+        assert!(limiter.check(9, ip).is_ok());
     }
 
     #[test]

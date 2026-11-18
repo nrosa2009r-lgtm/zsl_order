@@ -195,10 +195,12 @@ procedury:
   wyeksportować je z bazy),
 - **sprostowanie** — korekta danych poza systemem; w systemie można
   zmienić hasło, kod, aktywność,
-- **usunięcie** — dezaktywacja i usunięcie konta; historia zamówień
-  zostaje, a `orders.user_id` przechodzi na `NULL` (`ON DELETE SET NULL`),
+- **usunięcie** — dezaktywacja i usunięcie konta; konto traci login,
+  hash hasła i wszystkie sesje, a historia zamówień zostaje —
+  `orders.user_id` przechodzi na `NULL` (`ON DELETE SET NULL`),
   więc raporty nie tracą danych, ale nie da się już przypisać ich do
-  osoby,
+  osoby (zamówienie pokazuje się jako „konto usunięte"); wpis audytu
+  przetrwa, bo `actor_id` nie ma twardego FK,
 - **ograniczenie** — dezaktywacja konta,
 - **sprzeciw** — do rozpatrzenia przez szkołę,
 - **przenoszenie** — eksport techniczny z bazy (CSV/JSON) po stronie

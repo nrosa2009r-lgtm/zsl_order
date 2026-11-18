@@ -10,6 +10,13 @@ ignore = [
     # baza nie przyjmuje plików SQLite od użytkowników. Szczegóły i plan
     # aktualizacji: .cargo/audit.toml oraz śledzenie wydań sqlx.
     "RUSTSEC-2026-0459",
+    # chrono i chrono-tz są oznaczone jako nieutrzymywane (RUSTSEC-2026-0543,
+    # RUSTSEC-2026-0555) — to nie jest podatność, tylko brak dalszego
+    # rozwoju. Zależności są bezpośrednie i używane (strefa szkoły
+    # Europe/Warsaw w `util`/`stock`). Alternatywy (jiff, time) wymagają
+    # zmian API; migracja jest w backlogu. Szczegóły: .cargo/audit.toml.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 [licenses]

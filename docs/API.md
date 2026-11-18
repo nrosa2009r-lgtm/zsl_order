@@ -162,6 +162,9 @@ HTTP/1.1 403 Forbidden
 | `POST` | `/api/admin/users/import` | `admin` | tak |
 | `PATCH` | `/api/admin/users/:id` | `admin` | tak |
 | `DELETE` | `/api/admin/users/:id` | `admin` | tak |
+| `POST` | `/api/admin/users/bulk-preview` | `admin` | tak |
+| `POST` | `/api/admin/users/bulk-delete` | `admin` | tak |
+| `POST` | `/api/admin/users/bulk-deactivate` | `admin` | tak |
 | `POST` | `/api/admin/users/:id/reset-password` | `admin` | tak |
 | `DELETE` | `/api/admin/users/:id/sessions` | `admin` | tak |
 | `GET` | `/api/admin/breaks` | `admin` | nie |
@@ -1054,20 +1057,20 @@ Administrator nie może dezaktywować ani zmienić roli własnego konta
 
 ### `DELETE /api/admin/users/:id`
 
-Trwale usuwa konto wraz z:
+Trwale usuwa konto (login, hash hasła, dane osobowe, sesje). **Historia
+zamówień zostaje zachowana** — `orders.user_id` ustawiane jest na `NULL`
+(tryb opcji B), a w interfejsie zamówienie pokazuje się jako
+„konto usunięte". Usuwane są wszystkie sesje konta.
 
-- wszystkimi zamówieniami tego konta,
-- pozycjami tych zamówień,
-- wszystkimi sesjami konta.
-
-Operacja jest **nieodwracalna**. Zabezpieczenia:
+Operacja jest **nieodwracalna** dla konta. Zabezpieczenia:
 
 - nie można usunąć własnego konta (`400`),
 - nie można usunąć ostatniego aktywnego administratora (`409`),
 - brak konta → `404`.
 
 Wszystko wykonuje się w jednej transakcji; przy błędzie nie pozostają
-osierocone wiersze. Zdarzenie trafia do audytu jako `user_deleted`.
+zmiany częściowe. Zdarzenie trafia do audytu jako `user_deleted`
+(z liczbą zachowanych zamówień).
 
 **Odpowiedź 200**
 
@@ -1075,9 +1078,111 @@ osierocone wiersze. Zdarzenie trafia do audytu jako `user_deleted`.
 {
   "ok": true,
   "login": "s-a7k2m9p4qx",
-  "deleted_orders": 4
+  "kept_orders": 4
 }
 ```
+
+### `POST /api/admin/users/bulk-preview` (krok 1)
+
+Podgląd masowej akcji. Ciało to **jedno** kryterium wyboru:
+
+```json
+{"role": "student", "active": true, "q": "9A"}
+```
+
+lub jawna lista ID (pierwszeństwo nad filtrem):
+
+```json
+{"ids": [4, 5, 6]}
+```
+
+Wymagane jest min. jedno kryterium albo niepusta lista ID (`400`).
+Maksymalnie `500` ID w liście.
+
+**Odpowiedź 200**
+
+```json
+{
+  "mode": "ids",
+  "ids": [4, 5],
+  "count": 2,
+  "accounts": [
+    {"id": 4, "login": "s-a7k2m9p4qx", "display_code": "UCZ-8K2M",
+     "role": "student", "active": true, "orders": 6, "open_orders": 1}
+  ],
+  "accounts_truncated": false,
+  "protected": [
+    {"id": 1, "login": "admin-4djqpedbdf",
+     "reason": "własne konto wykonującego"}
+  ],
+  "total_orders": 12,
+  "open_orders": 2
+}
+```
+
+- `ids` — **rozstrzygnięta** lista ID kont do akcji (chronione już
+  wykluczone); krok 2 powinien wysłać dokładnie tę listę,
+- `protected` — konta pasujące do wyboru, ale wykluczone z akcji
+  (własne konto administratora i aktywni administratorzy; maks. 10),
+- `accounts` — do 50 szczegółów (reszta tylko jako liczba w `count`),
+- tryb ID bez wyników daje `count: 0` (krok 2 z taką listą → `409`).
+
+### `POST /api/admin/users/bulk-delete` (krok 2) — usuwanie
+
+### `POST /api/admin/users/bulk-deactivate` (krok 2) — dezaktywacja
+
+Oba endpointy mają identyczne ciało i wymagają **re-autoryzacji hasłem
+administratora**:
+
+```json
+{"ids": [4, 5], "expected_count": 2, "password": "TwojeHasloAdmina"}
+```
+
+lub ten sam filtr co w podglądzie:
+
+```json
+{"role": "student", "active": true, "expected_count": 2,
+ "password": "TwojeHasloAdmina"}
+```
+
+Zasady:
+
+- `password` jest wymagane — brak pola lub pusta wartość → `400`
+  (z komunikatem wskazującym na hasło),
+- błędne hasło → `401`; **5 błędnych haseł w 15 minut** na konto
+  blokuje akcje masowe na 15 minut (także dla poprawnego hasła → `429`),
+  a po wyczerpaniu limitu na adres IP (50/okno) → `429`,
+- `expected_count` musi zgadzać się z liczbą kont z podglądu; rozbieżność
+  (także ID spoza rozstrzygniętej listy, konta chronione, nieistniejące
+  ID) → `409` i **zero zmian**,
+- akcja wykonuje się w jednej transakcji `BEGIN IMMEDIATE`; przy błędzie
+  nie pozostaje „połowa" usuniętych kont,
+- limit `500` kont na operację, maks. `50` ID w wpisie audytu.
+
+Różnice endpointów:
+
+| Endpoint | Efekt | Historia zamówień | Audyt |
+|---|---|---|---|
+| `bulk-delete` | `DELETE FROM users` | zostaje (`user_id = NULL`) | `bulk_users_deleted` |
+| `bulk-deactivate` | `active = 0` + usunięcie sesji | zostaje (konta nie ma) | `bulk_users_deactivated` |
+
+Chronione konta (własne + aktywni administratorzy) **nigdy** nie są
+objęte akcją — jeśli trafią do listy ID, serwer odpowiada `409`
+z komunikatem „chronione". Nieaktywni administratorzy nie są chronieni
+jako aktywni (chroniony jest wyłącznie ostatni aktywny admin).
+
+**Odpowiedź 200 (oba endpointy)**
+
+```json
+{
+  "action": "delete",
+  "count": 2,
+  "orders_orphaned": 2,
+  "ids": [4, 5]
+}
+```
+
+`orders_orphaned` dla `bulk-deactivate` to zawsze `0` (konta istnieją).
 
 ### `POST /api/admin/users/:id/reset-password`
 
@@ -1436,6 +1541,10 @@ budowane przez `QueryBuilder` z bindowaniem wartości.
   domyślnie 20).
 - Listy: zamówienia personelu maks. 300, zamówienia ucznia maks. 200,
   konta maks. 500, audyt maks. 500.
+- Akcje masowe na kontach: 5 błędnych haseł na konto w oknie 15 minut →
+  blokada 15 minut (także dla poprawnego hasła), dodatkowo 50 prób na
+  adres IP; maks. 500 kont na operację, 50 szczegółów w podglądzie,
+  50 ID w wpisie audytu.
 - Sesja: domyślnie 12 h (`session_hours`, 1–720).
 - Konta: maks. 20 000 w systemie.
 

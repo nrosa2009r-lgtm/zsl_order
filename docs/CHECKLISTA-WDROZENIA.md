@@ -119,6 +119,14 @@ dlaczego).
       zamówień widoczna po usunięciu konta (jeśli testowane), a kolumna
       `orders.pickup_date` istnieje i indeks `orders_pickup_idx` jest
       widoczny w `PRAGMA index_list('orders')`.
+- [ ] **Test masowego usuwania/dezaktywacji kont** (lub
+      `scripts/smoke-bulk-users.sh`): podgląd zwraca rozstrzygniętą listę
+      ID i konta chronione, krok 2 wymaga hasła admina; zmiana liczby
+      kont między krokami daje `409` bez zmian; 5 błędnych haseł blokuje
+      akcję na 15 min (`429`); własne konto i aktywni administratorzy
+      nie dają się objąć akcją; po usunięciu kont historia zamówień
+      zostaje („konto usunięte”), sesje znikają, a wpis `bulk_users_*`
+      jest w audycie.
 - [ ] **Skonfiguruj przerwy**: co najmniej jedna aktywna przerwa dodana
       w panelu **Przerwy** przed pierwszym dniem pracy. Uczeń widzi wybór
       przerwy, a zamówienie z godziną poza oknem jest odrzucane (`400`).

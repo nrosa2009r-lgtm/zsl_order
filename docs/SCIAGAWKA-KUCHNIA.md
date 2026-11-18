@@ -21,6 +21,10 @@ ordered → issued
 - `issued` — wydane (automatycznie opłacone, jeśli było nieopłacone),
 - `cancelled` / `uncollected` — zamknięte, kuchnia ich nie zmienia.
 
+Karta zamówienia pokazuje kod ucznia. Po usunięciu konta ucznia widnieje
+tam **„konto usunięte”** — to normalne; zamówienie pozostało w historii
+i dalej trafia do raportu.
+
 Kuchnia zmienia tylko **dzisiejsze** zamówienia. Zamówienie na przyszły
 dzień ma na karcie datę odbioru i informację „wydanie będzie możliwe
 w dniu odbioru” — nie wydawaj go wcześniej i nie oznaczaj jako

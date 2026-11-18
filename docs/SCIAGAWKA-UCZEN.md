@@ -76,6 +76,7 @@ menu. Jeśli przycisk jest nieaktywny, poproś kuchnię o pomoc.
 | --- | --- |
 | Nie pamiętam hasła | Poproś administratora/stołówkę o reset hasła. |
 | Konto zablokowane | Odczekaj 15 minut albo poproś administratora. |
+| Konto usunięte | Logowanie przestaje działać — poproś szkołę o nowe konto. |
 | Nie widzę zamówienia | Sprawdź, czy jesteś zalogowany na swoje konto. |
 | QR nie działa | Sprawdź, czy zamówienie jest `ordered` i z dzisiaj; po wydaniu kod jest zużyty. |
 | Pozycja jest wyprzedana | Wybierz inną pozycję albo poproś kuchnię o uzupełnienie stanu. |

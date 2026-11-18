@@ -269,29 +269,47 @@ Dni są grupowane według **Europe/Warsaw** (niezależnie od strefy serwera),
 a znaczniki czasu w bazie pozostają w UTC. Statystyki nie zawierają danych
 osobowych.
 
-### 5.8. Twarde usuwanie konta
+### 5.8. Usuwanie i dezaktywacja kont (pojedynczo i masowo)
 
 `DELETE /api/admin/users/:id`:
 
 ```text
-→ odrzuć usunięcie własnego konta
+→ odrzuć usunięcie własnego konta (400)
 → odczytaj login i rolę celu
-→ jeśli admin: sprawdź, czy istnieje inny aktywny administrator
+→ jeśli admin: sprawdź, czy istnieje inny aktywny administrator (409)
 → BEGIN
-    → DELETE order_items dla zamówień użytkownika
-    → DELETE orders użytkownika
-    → DELETE sessions użytkownika
+    → policz zamówienia konta (kept_orders)
+    → DELETE sessions użytkownika (plus kaskada FK)
     → DELETE users (0 wierszy → rollback)
+    → orders.user_id → NULL (zapisany wcześniej przez FK ON DELETE SET NULL)
   COMMIT
 → audit(user_deleted) + tracing::warn
 ```
 
-Operacja jest nieodwracalna i celowo usuwa także historię zamówień oraz
-sesje, aby nie pozostawiać osieroconych danych powiązanych z kontem.
-Schemat (`0007`) dopuszcza już `orders.user_id = NULL` z
-`ON DELETE SET NULL`; API pokazuje wtedy `konto usunięte`. Zmiana samej
-akcji panelu na zachowanie historii jest osobnym krokiem zarządzania
-kontami.
+Konto znika (login, hash, sesje), ale **historia zamówień zostaje** —
+w interfejsie zamówienie pokazuje się jako „konto usunięte". Schemat
+(`0007`) ma `orders.user_id = NULL` z `ON DELETE SET NULL`.
+
+Akcje masowe (krok 1 `bulk-preview`, krok 2 `bulk-delete` /
+`bulk-deactivate`):
+
+```text
+→ krok 1: rozstrzygnij wybór (lista ID albo filtr) i zwróć
+    rozstrzygnięte ids + konta chronione (własne konto, aktywni admini)
+→ krok 2: BulkActionLimiter (5 błędnych haseł/konto/15 min → 429)
+    → weryfikacja hasła admina (re-autoryzacja, 401 przy błędzie)
+    → BEGIN IMMEDIATE
+        → rozstrzygnij ten sam wybór; niezgodna liczba/zbiór → 409 + rollback
+        → lista ID zawiera konto chronione → 409 + rollback
+        → bulk_execute: DELETE/UPDATE users + DELETE sessions
+          (dla delete: orders.user_id → NULL przez FK)
+      COMMIT
+    → audit(bulk_users_deleted | bulk_users_deactivated) + tracing::warn
+```
+
+Masowa dezaktywacja ustawia `active = 0` i usuwa sesje (konta zostają,
+wymagają `must_change_password` przy ponownym logowaniu). Limity:
+`500` kont na operację, `50` szczegółów w podglądzie, `50` ID w audycie.
 
 ### 5.9. Eksport CSV metadanych
 

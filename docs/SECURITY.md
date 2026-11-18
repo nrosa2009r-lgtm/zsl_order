@@ -62,6 +62,11 @@ denial-of-service na warstwie sieci.
     300), bo sieć szkolna może współdzielić jeden publiczny adres,
   - kod odbioru: limit **per konto personelu** (`pickup_max_failures`,
     domyślnie 8) oraz wysoki limit per IP (`pickup_ip_max_failures`),
+  - akcje masowe na kontach (`bulk-delete` / `bulk-deactivate`): własny
+    limiter `BulkActionLimiter` — 5 błędnych haseł na konto w 15 min →
+    blokada 15 min (także dla poprawnego hasła) oraz limit 50/IP;
+    sukces (poprawne hasło) czyści licznik konta przed wykonaniem
+    akcji. Blokada jednego administratora nie blokuje drugiego,
   - sukces czyści liczniki danej pary konto+IP oraz adresu IP.
 - **Dlaczego konto + IP, a nie samo konto:** blokada per konto pozwalałaby
   obcej osobie z dowolnego miejsca zablokować administratora lub kuchnię,
@@ -229,6 +234,15 @@ mechanizmem — to warstwa dodatkowa.
   może więcej, ale nadal w ramach dozwolonych wartości.
 - Administrator nie może odebrać uprawnień własnemu kontu (dezaktywacja
   lub zmiana roli) — ochrona przed samozablokowaniem.
+- Akcje masowe na kontach wymagają **re-autoryzacji hasłem admina**
+  w kroku potwierdzenia; podgląd (`bulk-preview`) rozstrzyga listę ID,
+  a krok 2 musi wskazać ten sam wybór i zgodną liczbę kont (`409`
+  przy zmianie — zero zmian). Chronione są własne konto i aktywni
+  administratorzy; lista ID je zawierająca jest odrzucana (`409`).
+  Operacja jest atomowa (`BEGIN IMMEDIATE`).
+- Usunięcie konta zachowuje historię zamówień (`user_id = NULL`),
+  więc „usunięcie" nie służy do zacierania śladów w raportach —
+  audyt i zamówienia pozostają.
 - Reset hasła nie jest dostępny dla własnego konta (własne hasło zmienia
   się przez `change-password`).
 
@@ -350,7 +364,9 @@ CSP nie dopuszcza skryptów inline, `eval`, obcych domen ani ramek.
   `users_exported`, `user_updated`, `user_deleted`, `order_created`,
   `order_cancelled_by_student`, `order_updated`, `pickup_lookup`,
   `menu_item_created`, `menu_item_updated`, `menu_item_hidden`,
-  `settings_updated`, `admin_seeded`.
+  `settings_updated`, `admin_seeded`, `bulk_users_deleted`,
+  `bulk_users_deactivated` (zbiorcze: liczba kont, liczba zamówień
+  bez konta, do 50 ID w `details`).
 - `details` zawierają identyfikatory techniczne i statusy, nie imiona ani
   dane kontaktowe.
 - Jednorazowy plik CSV z hasłami startowymi powstaje w przeglądarce

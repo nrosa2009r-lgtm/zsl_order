@@ -537,18 +537,47 @@ musi zalogować się ponownie.
   unieważnia wszystkie sesje oraz tokeny JWT.
 - **Zmiana roli** również unieważnia sesje — użytkownik musi zalogować
   się ponownie z nowymi uprawnieniami.
-- **Twarde usunięcie** konta usuwa konto, sesje i historię zamówień.
-  Stosuj ostrożnie; nie da się tego cofnąć.
+- **Twarde usunięcie** konta usuwa konto, jego sesje i dane osobowe
+  (login, hash hasła), ale **historia zamówień zostaje** — zamówienie
+  pokazuje się jako „konto usunięte" i dalej trafia do raportów.
+  Operacja jest nieodwracalna dla konta; wymaga wpisania loginu
+  w oknie potwierdzenia.
 - Administrator nie może odebrać uprawnień własnemu kontu — system
   chroni przed przypadkowym zablokowaniem się.
 
-### 4.6. Unieważnianie sesji
+### 4.6. Akcje masowe na kontach
+
+Przycisk **Masowe akcje** (obok filtrów w zakładce Konta) pozwala
+usunąć lub zdezaktywować wiele kont naraz:
+
+1. **Ustaw filtr** (rola, status, wyszukiwanie) — bez kryterium akcja
+   masowa nie wystartuje. Kliknij **Masowe akcje**.
+2. **Podgląd** pokazuje: liczbę kont do akcji, liczbę ich zamówień,
+   listę kont oraz konta **chronione** (Twoje własne konto i aktywni
+   administratorzy — nigdy nie zostaną objęte akcją).
+3. Wybierz działanie: **Usuń konta** (nieodwracalne; historia zamówień
+   zostaje) albo **Dezaktywuj konta** (można przywrócić).
+4. **Wpisz swoje hasło administratora** (re-autoryzacja) i potwierdź.
+
+Zasady bezpieczeństwa:
+
+- między podglądem a potwierdzeniem liczba kont musi się zgadzać —
+  przy zmianie system odpowiada „Lista kont zmieniła się…" i nic
+  nie zmienia (odśwież podgląd),
+- **5 błędnych haseł w 15 minut** blokuje akcje masowe na 15 minut
+  (także dla poprawnego hasła); blokada jednego administratora nie
+  blokuje drugiego,
+- w jednej operacji maksymalnie 500 kont,
+- każde potwierdzenie trafia do audytu (zbiorczy wpis z liczbą kont
+  i listą ID).
+
+### 4.7. Unieważnianie sesji
 
 W panelu kont wybierz **Unieważnij sesje**. To wylogowuje użytkownika ze
 wszystkich urządzeń i unieważnia tokeny JWT. Użyj, gdy podejrzewasz
 wyciek hasła lub zgubiono telefon/tablet.
 
-### 4.7. Zdejmowanie blokady nieodebranych
+### 4.8. Zdejmowanie blokady nieodebranych
 
 Blokada `max_uncollected` dotyczy ucznia, nie całej klasy. Administrator
 zdejmuje ją na karcie konta (**Zdejmij blokadę nieodebranych**). Historia

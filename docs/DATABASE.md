@@ -414,27 +414,32 @@ użytkownika:
 DELETE FROM sessions WHERE user_id = ?;
 ```
 
-Twarde usunięcie konta (to samo, co robi `DELETE /api/admin/users/:id`)
-wykonuje się w jednej transakcji, w kolejności od dzieci do rodzica:
+Twarde usunięcie konta (to samo, co robi `DELETE /api/admin/users/:id`
+oraz `POST /api/admin/users/bulk-delete`) wykonuje się w jednej
+transakcji `BEGIN IMMEDIATE`:
 
 ```sql
 BEGIN;
-DELETE FROM order_items WHERE order_id IN
-  (SELECT id FROM orders WHERE user_id = ?);
-DELETE FROM orders  WHERE user_id = ?;
-DELETE FROM sessions WHERE user_id = ?;
+UPDATE orders SET user_id = NULL WHERE user_id = ?;  -- historia zostaje
+DELETE FROM sessions WHERE user_id = ?;              -- plus kaskada FK
 DELETE FROM users   WHERE id = ?;
 COMMIT;
 ```
 
-`orders.user_id` ma `ON DELETE SET NULL`, więc schemat pozwala zachować
-historię po usunięciu konta (API pokaże `konto usunięte`). Obecna akcja
-administracyjna usuwa jednak zamówienia konta przed kontem — to świadoma
-decyzja o pełnym usunięciu danych użytkownika. Wiersze `sessions` (cookie
-i JWT) giną automatycznie dzięki `ON DELETE CASCADE`, ale jawne usunięcie
-w transakcji jest czytelniejsze. Zabronione jest usunięcie własnego konta
-i ostatniego aktywnego administratora. Zdarzenie trafia do audytu jako
-`user_deleted` (już po commicie).
+`orders.user_id` ma `ON DELETE SET NULL`, więc usunięcie konta zachowuje
+historię zamówień — API pokazuje je jako „konto usunięte"
+(`COALESCE(u.display_code, 'konto usunięte')`). Konto usunięte traci
+login, hash hasła i sesje; raporty i audyt pozostają kompletne
+(`audit_log` bez FK na `actor_id`, w widoku z `LEFT JOIN` na `users`).
+Zabronione jest usunięcie własnego konta i ostatniego aktywnego
+administratora; przy akcjach masowych dodatkowo chronione są wszystkie
+aktywnych administratorzy (własne konto i aktywni admini nie wchodzą
+do wyboru, a lista ID je zawierająca → `409`). Zdarzenie trafia do
+audytu jako `user_deleted` (pojedyncze) lub zbiorczo
+`bulk_users_deleted` / `bulk_users_deactivated`.
+
+Dezaktywacja (`active = 0`) nie rusza historii ani danych konta — usuwa
+tylko sesje i blokuje logowanie (tak samo w trybie masowym).
 
 ## 6. Retencja i porządki
 

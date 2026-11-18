@@ -11,6 +11,7 @@
     let importedAccounts = [];
     let importedAt = 0;
     let activityData = null;
+    let bulkPreview = null;
     let resizeTimer = null;
     let breaks = [];
 
@@ -67,6 +68,8 @@
             loadAudit().then(function () { App.toast("Dziennik odświeżony.", "success"); })
                 .catch(function (error) { App.toast(error.message, "error"); });
         });
+        App.$("#bulkActionButton").addEventListener("click", openBulkDialog);
+        App.$("#bulkForm").addEventListener("submit", confirmBulkAction);
         App.$("#filterUsersButton").addEventListener("click", function () {
             loadUsers().catch(function (error) { App.toast(error.message, "error"); });
         });
@@ -385,7 +388,7 @@
                         click: async function () {
                             const answer = window.prompt(
                                 "Usunięcie konta " + user.login + " jest nieodwracalne. " +
-                                "Usunięta zostanie także historia zamówień tego konta. " +
+                                "Historia zamówień zostanie zachowana (pokazywana jako „konto usunięte”). " +
                                 "Wpisz login, aby potwierdzić:",
                                 ""
                             );
@@ -397,8 +400,8 @@
                             try {
                                 const result = await App.api.del("/api/admin/users/" + user.id);
                                 App.toast(
-                                    "Konto usunięte. Usunięto zamówienia: " +
-                                    (result.deleted_orders || 0) + ".",
+                                    "Konto usunięte. Zachowano zamówień bez konta: " +
+                                    (result.kept_orders || 0) + ".",
                                     "success"
                                 );
                                 await loadUsers();
@@ -443,6 +446,130 @@
             row.append(loginCell, codeCell, roleCell, statusCell, createdCell, actions);
             tbody.append(row);
         });
+    }
+
+    // ---------------- masowe akcje na kontach ----------------
+
+    function currentBulkFilters() {
+        const active = App.$("#userActiveFilter").value;
+        return {
+            role: App.$("#userRoleFilter").value || null,
+            active: active === "" ? null : active === "true",
+            q: App.$("#userSearch").value.trim() || null,
+        };
+    }
+
+    async function openBulkDialog() {
+        const filters = currentBulkFilters();
+        if (!filters.role && filters.active === null && !filters.q) {
+            App.toast(
+                "Ustaw filtr (rolę, status lub wyszukiwanie), aby wybrać konta do akcji masowej.",
+                "error"
+            );
+            return;
+        }
+        try {
+            bulkPreview = await App.api.post("/api/admin/users/bulk-preview", filters);
+        } catch (error) {
+            App.toast(error.message, "error");
+            return;
+        }
+
+        App.$("#bulkSummary").textContent =
+            "Kont do akcji: " + bulkPreview.count +
+            " · zamówienia powiązane: " + (bulkPreview.total_orders || 0) +
+            " (otwarte: " + (bulkPreview.open_orders || 0) + ").";
+
+        const protectedBox = App.$("#bulkProtectedBox");
+        const protectedList = App.$("#bulkProtectedList");
+        App.clear(protectedList);
+        const protectedAccounts = bulkPreview.protected || [];
+        protectedBox.hidden = protectedAccounts.length === 0;
+        protectedAccounts.forEach(function (account) {
+            protectedList.append(
+                App.h("li", { text: account.login + " — " + account.reason })
+            );
+        });
+
+        const accountsList = App.$("#bulkAccountsList");
+        App.clear(accountsList);
+        (bulkPreview.accounts || []).forEach(function (account) {
+            accountsList.append(
+                App.h("li", {
+                    text: account.login +
+                        " (" + (App.roleLabels[account.role] || account.role) + ")" +
+                        (account.active ? "" : " · nieaktywne") +
+                        " · zamówień: " + account.orders,
+                })
+            );
+        });
+        App.$("#bulkTruncatedNote").hidden = !bulkPreview.accounts_truncated;
+
+        if (!bulkPreview.count) {
+            App.toast("Filtr nie pasuje do żadnego konta spośród chronionych.", "error");
+            return;
+        }
+
+        App.$("#bulkPassword").value = "";
+        const errorBox = App.$("#bulkFormError");
+        errorBox.hidden = true;
+        errorBox.textContent = "";
+        const dialog = App.$("#bulkDialog");
+        if (typeof dialog.showModal === "function") {
+            if (!dialog.open) dialog.showModal();
+        } else {
+            App.toast("Twoja przeglądarka nie obsługuje okien dialogowych.", "error");
+        }
+    }
+
+    async function confirmBulkAction(event) {
+        event.preventDefault();
+        if (!bulkPreview) return;
+
+        const action = document.querySelector('input[name="bulkAction"]:checked').value;
+        const password = App.$("#bulkPassword").value;
+        const errorBox = App.$("#bulkFormError");
+        if (!password) {
+            errorBox.textContent = "Wpisz hasło administratora.";
+            errorBox.hidden = false;
+            return;
+        }
+
+        const endpoint = action === "delete"
+            ? "/api/admin/users/bulk-delete"
+            : "/api/admin/users/bulk-deactivate";
+        const button = App.$("#bulkConfirmButton");
+        App.setBusy(button, true, "Wykonywanie…");
+        try {
+            // Ten sam, rozstrzygnięty wybór co w podglądzie — zmiana liczby
+            // kont między krokami jest odrzucana przez serwer (409).
+            const result = await App.api.post(endpoint, {
+                ids: bulkPreview.ids,
+                expected_count: bulkPreview.count,
+                password: password,
+            });
+            App.$("#bulkDialog").close();
+            if (action === "delete") {
+                App.toast(
+                    "Usunięto kont: " + result.count +
+                    ". Zachowano zamówień bez konta: " + (result.orders_orphaned || 0) + ".",
+                    "success"
+                );
+            } else {
+                App.toast("Dezaktywowano kont: " + result.count + ".", "success");
+            }
+            bulkPreview = null;
+            await loadUsers();
+            await loadStats();
+            await loadActivity();
+            await loadAudit();
+        } catch (error) {
+            errorBox.textContent = error.message;
+            errorBox.hidden = false;
+            App.toast(error.message, "error");
+        } finally {
+            App.setBusy(button, false, "Potwierdź akcję");
+        }
     }
 
     async function generateAccounts(event) {

@@ -8,6 +8,17 @@ Autorem projektu jest **natan-rosa**.
 
 ### Dodane
 
+- Masowe usuwanie i dezaktywacja kont w panelu admina: dwuetapowy
+  przepływ (`POST /api/admin/users/bulk-preview` → `bulk-delete` /
+  `bulk-deactivate`), rozstrzygnięta lista ID w podglądzie, wymóg
+  zgadzającej się liczby kont (`409` przy zmianie), re-autoryzacja
+  hasłem administratora w kroku potwierdzenia, własny limiter
+  `BulkActionLimiter` (5 błędnych haseł/konto/15 min → `429`,
+  50/IP), ochrona własnego konta i aktywnych administratorów,
+  atomowość `BEGIN IMMEDIATE` oraz zbiorczy audyt
+  (`bulk_users_deleted`, `bulk_users_deactivated`). Dialog „Masowe
+  akcje” w zakładce Konta; skrypt `scripts/smoke-bulk-users.sh`.
+
 - Uruchomienie w kontenerze: dwuetapowy `Dockerfile`, `docker-compose.yml`
   i nakładka `docker-compose.https.yml` z Caddy (TLS z wewnętrznym CA dla
   sieci lokalnej). Porty hosta: **11000 → HTTP**, **10000 → HTTPS**
@@ -61,6 +72,10 @@ Autorem projektu jest **natan-rosa**.
 
 ### Zmienione
 
+- `DELETE /api/admin/users/:id` (i nowe `bulk-delete`) **zachowują
+  historię zamówień**: konto traci login, hash i sesje, a
+  `orders.user_id` przechodzi na `NULL` („konto usunięte” w UI).
+  Odpowiedź zwraca `kept_orders` zamiast `deleted_orders`.
 - Deklarowane MSRV podniesione do Rusta 1.88 (wymóg `time 0.3.55`).
 - Polityka haseł ma jedno źródło w `src/password_policy.rs`: uczeń 10,
   kuchnia i admin 12 znaków, limit 128. `/api/auth/me` zwraca

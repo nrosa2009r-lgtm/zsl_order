@@ -185,6 +185,7 @@
                             </select>
                         </div>
                         <button id="filterUsersButton" class="btn btn-secondary btn-small" type="button">Filtruj</button>
+                        <button id="bulkActionButton" class="btn btn-danger btn-small" type="button">Masowe akcje</button>
                     </div>
                 </div>
                 <div class="table-wrap">
@@ -526,6 +527,52 @@
             <div class="dialog-actions">
                 <button class="btn btn-ghost" type="button" data-close-dialog>Anuluj</button>
                 <button id="breakSaveButton" class="btn btn-primary" type="submit">Zapisz</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="bulkDialog" class="dialog">
+        <form id="bulkForm" class="stack" method="dialog">
+            <h2>Masowe akcje na kontach</h2>
+            <p id="bulkSummary" class="muted small"></p>
+            <div id="bulkProtectedBox" hidden>
+                <p class="muted small">
+                    Te konta są <strong>chronione</strong> i nie zostaną objęte akcją:
+                </p>
+                <ul id="bulkProtectedList" class="muted small"></ul>
+            </div>
+            <div>
+                <p class="muted small">Konta objęte akcją:</p>
+                <ul id="bulkAccountsList" class="muted small"></ul>
+                <p id="bulkTruncatedNote" class="muted small" hidden>
+                    Wyświetlono tylko część kont — pełna lista jest brana pod uwagę.
+                </p>
+            </div>
+            <div class="field">
+                <label>Działanie</label>
+                <label class="checkbox-row">
+                    <input type="radio" name="bulkAction" value="delete" checked>
+                    <span>Usuń konta (nieodwracalne; historia zamówień zostaje)</span>
+                </label>
+                <label class="checkbox-row">
+                    <input type="radio" name="bulkAction" value="deactivate">
+                    <span>Dezaktywuj konta (można później przywrócić)</span>
+                </label>
+            </div>
+            <div class="field">
+                <label for="bulkPassword">Hasło administratora (re-autoryzacja)</label>
+                <input id="bulkPassword" type="password" required
+                       autocomplete="current-password"
+                       placeholder="Wpisz swoje hasło, aby potwierdzić">
+                <small class="muted">
+                    Potwierdzenie tym samym hasłem, którego używasz do logowania.
+                    Błędne hasła są liczone — po 5 próbach akcja zostanie zablokowana na 15 minut.
+                </small>
+            </div>
+            <p id="bulkFormError" class="form-error" role="alert" hidden></p>
+            <div class="dialog-actions">
+                <button class="btn btn-ghost" type="button" data-close-dialog>Anuluj</button>
+                <button id="bulkConfirmButton" class="btn btn-danger" type="submit">Potwierdź akcję</button>
             </div>
         </form>
     </dialog>

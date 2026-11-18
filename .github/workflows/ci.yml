@@ -52,6 +52,7 @@ jobs:
           scripts/smoke-orders.sh
           scripts/smoke-backup.sh
           scripts/smoke-logs.sh
+          scripts/smoke-bulk-users.sh
 
   security:
     name: Audyt zależności i licencji

@@ -13,4 +13,11 @@ ignore = [
     # której nie kompilujemy (używamy wyłącznie SQLite). Nie ma jej
     # w grafie binarki; wpis wycisza fałszywy alarm lockfile'a.
     "RUSTSEC-2023-0071",
+    # chrono i chrono-tz nie są utrzymywane (RUSTSEC-2026-0543,
+    # RUSTSEC-2026-0555) — ostrzeżenie „unmaintained”, brak podatności.
+    # Bezpośrednie zależności używane do strefy czasowej szkoły
+    # (Europe/Warsaw). Migracja na jiff/time jest w backlogu; do tego
+    # czasu wyjątki są w obu plikach konfiguracji (tu i w deny.toml).
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]

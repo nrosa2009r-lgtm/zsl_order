@@ -79,12 +79,16 @@ pseudonimowym kodem (`display_code`). Płatność odbywa się przy ladzie
 - **Statystyki i wykresy aktywności**: zamówienia dziennie, utarg, rozkład
   godzinowy, statusy i najczęściej zamawiane pozycje — rysowane na canvasie
   bez zewnętrznych bibliotek.
-- **Eksport CSV metadanych kont** (bez haseł) i **twarde usuwanie kont**
-  wraz z historią zamówień i sesjami.
+- **Eksport CSV metadanych kont** (bez haseł), **twarde usuwanie kont**
+  z zachowaniem historii zamówień („konto usunięte”, `user_id = NULL`)
+  oraz **akcje masowe** (usuwanie/dezaktywacja do 500 kont) z
+  re-autoryzacją hasłem admina, podglądem dwuetapowym i ochroną
+  własnego konta/aktywnych administratorów.
 - **Import uczniów z CSV** w formacie `klasa;liczba` (np. `1A;30`) bez
   imion i nazwisk; hasła startowe pokazywane wyłącznie raz.
 - **Limity per konto i per IP** (konfigurowalne), limiter prób kodu
-  odbioru, unieważnianie sesji i `/api/healthz` dla monitoringu.
+  odbioru, limiter błędnych haseł przy akcjach masowych, unieważnianie
+  sesji i `/api/healthz` dla monitoringu.
 - **Frontend bez build-stepu i bez CDN**: czysty HTML/CSS/JS, wszystko
   serwowane z tej samej domeny.
 - **SQLite + WAL**: prosta, szybka i łatwa w backupie baza dla jednej
@@ -463,6 +467,7 @@ scripts/test-migrations.sh   # pusta baza + baza legacy, class_group
 scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, QR, raport/CSV
 scripts/smoke-backup.sh      # kopia, integralność, retencja
 scripts/smoke-logs.sh        # logi JSON, brak sekretów i danych wrażliwych
+scripts/smoke-bulk-users.sh  # masowe usuwanie/dezaktywacja, re-autoryzacja, 409
 ```
 
 Ten sam zestaw uruchamia GitHub Actions (`.github/workflows/ci.yml`):

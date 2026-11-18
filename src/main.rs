@@ -129,6 +129,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         dummy_hash,
         login_limiter: auth::LoginLimiter::from_config(&config),
         pickup_limiter: auth::PickupLimiter::from_config(&config),
+        bulk_limiter: auth::BulkActionLimiter::new(),
         jwt_secret,
         client_ip_warning: std::sync::Mutex::new(None),
     });
@@ -282,6 +283,18 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/users/export.csv", get(handlers::admin::export_users_csv))
         .route("/users/import", post(handlers::admin::import_users_csv))
         .route("/users/generate", post(handlers::admin::generate_users))
+        .route(
+            "/users/bulk-preview",
+            post(handlers::admin::bulk_users_preview),
+        )
+        .route(
+            "/users/bulk-delete",
+            post(handlers::admin::bulk_users_delete),
+        )
+        .route(
+            "/users/bulk-deactivate",
+            post(handlers::admin::bulk_users_deactivate),
+        )
         .route(
             "/users/:id",
             patch(handlers::admin::update_user).delete(handlers::admin::delete_user),

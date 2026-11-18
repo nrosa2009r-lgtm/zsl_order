@@ -999,6 +999,7 @@ scripts/smoke-hardening.sh   # hasła, import CSV, RBAC, limity, sesje
 scripts/test-migrations.sh   # pusta baza + baza legacy
 scripts/smoke-orders.sh      # idempotencja, wyścigi, płatności, raport/CSV
 scripts/smoke-backup.sh      # kopia WAL, integralność, retencja min. 7, --verify
+scripts/smoke-bulk-users.sh  # masowe usuwanie/dezaktywacja, re-autoryzacja, 409
 ```
 
 Test dymny na izolowanej kopii (nie na produkcji):
